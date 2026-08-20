@@ -1,0 +1,29 @@
+# Gradle / build
+.gradle/
+build/
+out/
+
+# IDE
+.idea/
+*.iml
+
+# Kotlin compiler daemon sessions
+.kotlin/
+
+# Claude Code local state
+.claude/sessions/
+.claude/settings.local.json
+.claude/skills/
+
+# Lavish artifacts
+.lavish/
+
+# Local config (keep .example and .test.conf)
+vigilant.conf
+
+# macOS
+.DS_Store
+
+
+# SonarQube local secrets
+.claude/sonar.env

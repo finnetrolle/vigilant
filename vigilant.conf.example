@@ -1,0 +1,7 @@
+# Пример конфигурации Vigilant (HOCON).
+# Поиск файла: $VIGILANT_CONFIG, затем ./vigilant.conf, затем /etc/vigilant/vigilant.conf.
+# Переменные окружения VIGILANT_UPSTREAM_URL и VIGILANT_PORT переопределяют значения файла.
+vigilant {
+  upstream-url = "http://127.0.0.1:18081"
+  port = 8080
+}

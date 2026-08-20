@@ -1,0 +1,12 @@
+[versions]
+armeria = "1.41.0"
+hoplite = "2.9.0"
+slf4j = "2.0.18"
+logback = "1.6.3"
+
+[libraries]
+armeria = { module = "com.linecorp.armeria:armeria", version.ref = "armeria" }
+hoplite-core = { module = "com.sksamuel.hoplite:hoplite-core", version.ref = "hoplite" }
+hoplite-hocon = { module = "com.sksamuel.hoplite:hoplite-hocon", version.ref = "hoplite" }
+slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
+logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }

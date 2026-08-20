@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <shutdownHook/>
+
+    <property name="LOG_LEVEL" value="${VIGILANT_LOG_LEVEL:-INFO}"/>
+
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <target>System.out</target>
+        <encoder class="ch.qos.logback.classic.encoder.JsonEncoder">
+            <withSequenceNumber>false</withSequenceNumber>
+            <withNanoseconds>false</withNanoseconds>
+            <withContext>false</withContext>
+            <withMarkers>false</withMarkers>
+            <withArguments>false</withArguments>
+            <withFormattedMessage>true</withFormattedMessage>
+            <withMessage>false</withMessage>
+        </encoder>
+    </appender>
+
+    <appender name="ASYNC_STDOUT" class="ch.qos.logback.classic.AsyncAppender">
+        <queueSize>8192</queueSize>
+        <discardingThreshold>2048</discardingThreshold>
+        <neverBlock>true</neverBlock>
+        <includeCallerData>false</includeCallerData>
+        <maxFlushTime>2000</maxFlushTime>
+        <appender-ref ref="STDOUT"/>
+    </appender>
+
+    <root level="${LOG_LEVEL}">
+        <appender-ref ref="ASYNC_STDOUT"/>
+    </root>
+</configuration>
