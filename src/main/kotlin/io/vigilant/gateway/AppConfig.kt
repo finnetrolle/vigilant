@@ -8,6 +8,7 @@ import com.sksamuel.hoplite.fp.Validated
 import com.sksamuel.hoplite.sources.EnvironmentVariablesPropertySource
 import java.net.URI
 import java.nio.file.Path
+import java.time.Duration
 import kotlin.io.path.exists
 
 private const val DEFAULT_PORT = 8080
@@ -18,6 +19,44 @@ private const val ENV_DOUBLE_PREFIX = "VIGILANT__"
 private const val CONFIG_FILE_ENV = "VIGILANT_CONFIG"
 private const val UPSTREAM_URL_ENV = "VIGILANT_UPSTREAM_URL"
 private const val PORT_ENV = "VIGILANT_PORT"
+private const val UPSTREAM_CONNECT_TIMEOUT_ENV = "VIGILANT_UPSTREAM_CONNECT_TIMEOUT"
+private const val UPSTREAM_WRITE_TIMEOUT_ENV = "VIGILANT_UPSTREAM_WRITE_TIMEOUT"
+private const val UPSTREAM_RESPONSE_TIMEOUT_ENV = "VIGILANT_UPSTREAM_RESPONSE_TIMEOUT"
+private const val UPSTREAM_CONNECTION_IDLE_TIMEOUT_ENV = "VIGILANT_UPSTREAM_CONNECTION_IDLE_TIMEOUT"
+private const val DEFAULT_CONNECT_TIMEOUT_SECONDS = 10L
+private const val DEFAULT_WRITE_TIMEOUT_SECONDS = 30L
+private const val DEFAULT_RESPONSE_TIMEOUT_SECONDS = 300L
+private const val DEFAULT_CONNECTION_IDLE_TIMEOUT_SECONDS = 10L
+
+/**
+ * Default time an idle upstream connection may stay pooled; matches Armeria's
+ * library default. A connection with a response in flight is not idle, so this
+ * never cuts a stream that is merely slow to produce its next byte.
+ */
+internal val DEFAULT_UPSTREAM_CONNECTION_IDLE_TIMEOUT: Duration =
+    Duration.ofSeconds(DEFAULT_CONNECTION_IDLE_TIMEOUT_SECONDS)
+
+/**
+ * Default time to establish a connection to the upstream, raised from Armeria's
+ * library default so that distant or loaded LLM endpoints still connect.
+ */
+internal val DEFAULT_UPSTREAM_CONNECT_TIMEOUT: Duration =
+    Duration.ofSeconds(DEFAULT_CONNECT_TIMEOUT_SECONDS)
+
+/**
+ * Default time to write a request to the upstream, raised well above Armeria's
+ * library default so that large request bodies on slow links still go through.
+ */
+internal val DEFAULT_UPSTREAM_WRITE_TIMEOUT: Duration =
+    Duration.ofSeconds(DEFAULT_WRITE_TIMEOUT_SECONDS)
+
+/**
+ * Default time the upstream client waits for the first byte of a response and,
+ * under the streaming model, the maximum gap between two received chunks -
+ * generous enough for long LLM generations whose tokens keep arriving.
+ */
+internal val DEFAULT_UPSTREAM_RESPONSE_TIMEOUT: Duration =
+    Duration.ofSeconds(DEFAULT_RESPONSE_TIMEOUT_SECONDS)
 
 /**
  * Default locations searched for the configuration file when `VIGILANT_CONFIG` is not set.
@@ -32,10 +71,31 @@ private val DEFAULT_CONFIG_PATHS: List<Path> = listOf(
  *
  * @param upstreamUri validated absolute HTTP(S) URL of the upstream service.
  * @param port HTTP port the gateway listens on.
+ * @param upstream validated timeouts and pooling settings of the upstream client.
  */
 data class AppConfig(
     val upstreamUri: URI,
     val port: Int,
+    val upstream: UpstreamClientSettings,
+)
+
+/**
+ * Validated settings of the upstream `WebClient` (spec v0: explicit timeouts and
+ * pooling, configurable with defaults safe for long LLM streams).
+ *
+ * @param connectTimeout maximum time to establish a connection to the upstream.
+ * @param writeTimeout maximum time to write a request to the upstream.
+ * @param responseTimeout maximum time to the first received response object and,
+ * under the streaming model, the maximum idle gap between two received objects;
+ * the total duration of a stream is not bounded by it.
+ * @param connectionIdleTimeout maximum time an idle upstream connection stays in
+ * the pool; a connection waiting for a response is not idle.
+ */
+data class UpstreamClientSettings(
+    val connectTimeout: Duration,
+    val writeTimeout: Duration,
+    val responseTimeout: Duration,
+    val connectionIdleTimeout: Duration,
 )
 
 /**
@@ -49,6 +109,10 @@ data class AppConfig(
 internal data class VigilantSettings(
     val upstreamUrl: String? = null,
     val port: Int = DEFAULT_PORT,
+    val upstreamConnectTimeout: Duration = DEFAULT_UPSTREAM_CONNECT_TIMEOUT,
+    val upstreamWriteTimeout: Duration = DEFAULT_UPSTREAM_WRITE_TIMEOUT,
+    val upstreamResponseTimeout: Duration = DEFAULT_UPSTREAM_RESPONSE_TIMEOUT,
+    val upstreamConnectionIdleTimeout: Duration = DEFAULT_UPSTREAM_CONNECTION_IDLE_TIMEOUT,
 )
 
 /**
@@ -96,6 +160,24 @@ internal fun loadAppConfig(
     return AppConfig(
         upstreamUri = validatedUpstreamUri(root.vigilant.upstreamUrl.orEmpty()),
         port = validatedPort(root.vigilant.port),
+        upstream = UpstreamClientSettings(
+            connectTimeout = validatedPositiveDuration(
+                UPSTREAM_CONNECT_TIMEOUT_ENV,
+                root.vigilant.upstreamConnectTimeout,
+            ),
+            writeTimeout = validatedPositiveDuration(
+                UPSTREAM_WRITE_TIMEOUT_ENV,
+                root.vigilant.upstreamWriteTimeout,
+            ),
+            connectionIdleTimeout = validatedPositiveDuration(
+                UPSTREAM_CONNECTION_IDLE_TIMEOUT_ENV,
+                root.vigilant.upstreamConnectionIdleTimeout,
+            ),
+            responseTimeout = validatedPositiveDuration(
+                UPSTREAM_RESPONSE_TIMEOUT_ENV,
+                root.vigilant.upstreamResponseTimeout,
+            ),
+        ),
     )
 }
 
@@ -167,6 +249,19 @@ internal fun validatedPort(port: Int): Int {
         "$PORT_ENV must be an integer between $MIN_PORT and $MAX_PORT"
     }
     return port
+}
+
+/**
+ * Validates that a configured duration is strictly positive.
+ *
+ * @param envName name of the environment variable the value may come from, used in the error message.
+ * @param value decoded value of the setting, from the environment or the file.
+ * @return [value] when it is strictly positive.
+ * @throws IllegalArgumentException if [value] is zero or negative.
+ */
+internal fun validatedPositiveDuration(envName: String, value: Duration): Duration {
+    require(value > Duration.ZERO) { "$envName must be a positive duration, was: $value" }
+    return value
 }
 
 /**

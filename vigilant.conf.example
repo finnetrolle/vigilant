@@ -1,7 +1,14 @@
 # Пример конфигурации Vigilant (HOCON).
 # Поиск файла: $VIGILANT_CONFIG, затем ./vigilant.conf, затем /etc/vigilant/vigilant.conf.
-# Переменные окружения VIGILANT_UPSTREAM_URL и VIGILANT_PORT переопределяют значения файла.
+# Переменные окружения VIGILANT_UPSTREAM_URL, VIGILANT_PORT и VIGILANT_UPSTREAM_*_TIMEOUT
+# переопределяют значения файла.
 vigilant {
   upstream-url = "http://127.0.0.1:18081"
   port = 8080
+
+  # Таймауты upstream-клиента (модель - в README, раздел «Таймауты upstream-клиента»).
+  upstream-connect-timeout = 10s         # установка соединения с upstream
+  upstream-write-timeout = 30s           # запись запроса в upstream
+  upstream-response-timeout = 5m         # первый объект ответа + пауза между чанками
+  upstream-connection-idle-timeout = 10s # жизнь простаивающего соединения в пуле
 }

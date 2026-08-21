@@ -3,6 +3,7 @@ package io.vigilant.gateway
 import java.net.URI
 import java.nio.file.Files
 import java.nio.file.Path
+import java.time.Duration
 import kotlin.io.path.writeText
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -169,6 +170,182 @@ class AppConfigLoadingTest {
 
         assertEquals(URI("http://discovered:18081"), config.upstreamUri)
         assertEquals(18083, config.port)
+    }
+
+    @Test
+    fun `zero upstream response timeout in file fails`() {
+        val file = writeConfig(
+            """
+            vigilant {
+              upstream-url = "http://127.0.0.1:18081"
+              upstream-response-timeout = "0s"
+            }
+            """.trimIndent(),
+        )
+
+        val exception = assertFailsWith<IllegalArgumentException> {
+            loadAppConfig(
+                env = mapOf("VIGILANT_CONFIG" to file.toString()),
+                defaultConfigPaths = emptyList(),
+            )
+        }
+        assertEquals("VIGILANT_UPSTREAM_RESPONSE_TIMEOUT must be a positive duration, was: PT0S", exception.message)
+    }
+
+    @Test
+    fun `negative upstream connect timeout in file fails`() {
+        val file = writeConfig(
+            """
+            vigilant {
+              upstream-url = "http://127.0.0.1:18081"
+              upstream-connect-timeout = "-1s"
+            }
+            """.trimIndent(),
+        )
+
+        val exception = assertFailsWith<IllegalArgumentException> {
+            loadAppConfig(
+                env = mapOf("VIGILANT_CONFIG" to file.toString()),
+                defaultConfigPaths = emptyList(),
+            )
+        }
+        assertEquals("VIGILANT_UPSTREAM_CONNECT_TIMEOUT must be a positive duration, was: PT-1S", exception.message)
+    }
+
+    @Test
+    fun `zero upstream write timeout in file fails`() {
+        val file = writeConfig(
+            """
+            vigilant {
+              upstream-url = "http://127.0.0.1:18081"
+              upstream-write-timeout = "0s"
+            }
+            """.trimIndent(),
+        )
+
+        val exception = assertFailsWith<IllegalArgumentException> {
+            loadAppConfig(
+                env = mapOf("VIGILANT_CONFIG" to file.toString()),
+                defaultConfigPaths = emptyList(),
+            )
+        }
+        assertEquals("VIGILANT_UPSTREAM_WRITE_TIMEOUT must be a positive duration, was: PT0S", exception.message)
+    }
+
+    @Test
+    fun `negative upstream connection idle timeout in file fails`() {
+        val file = writeConfig(
+            """
+            vigilant {
+              upstream-url = "http://127.0.0.1:18081"
+              upstream-connection-idle-timeout = "-1s"
+            }
+            """.trimIndent(),
+        )
+
+        val exception = assertFailsWith<IllegalArgumentException> {
+            loadAppConfig(
+                env = mapOf("VIGILANT_CONFIG" to file.toString()),
+                defaultConfigPaths = emptyList(),
+            )
+        }
+        assertEquals(
+            "VIGILANT_UPSTREAM_CONNECTION_IDLE_TIMEOUT must be a positive duration, was: PT-1S",
+            exception.message,
+        )
+    }
+
+    @Test
+    fun `upstream client timeout defaults are applied when absent`() {
+        val config = loadAppConfig(
+            env = mapOf("VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081"),
+            defaultConfigPaths = emptyList(),
+        )
+
+        assertEquals(
+            UpstreamClientSettings(
+                connectTimeout = Duration.ofSeconds(10),
+                writeTimeout = Duration.ofSeconds(30),
+                responseTimeout = Duration.ofMinutes(5),
+                connectionIdleTimeout = Duration.ofSeconds(10),
+            ),
+            config.upstream,
+        )
+    }
+
+    @Test
+    fun `loads upstream client timeouts from hocon file`() {
+        val file = writeConfig(
+            """
+            vigilant {
+              upstream-url = "http://127.0.0.1:18081"
+              upstream-connect-timeout = "15s"
+              upstream-write-timeout = "45s"
+              upstream-response-timeout = "2m"
+              upstream-connection-idle-timeout = "30s"
+            }
+            """.trimIndent(),
+        )
+
+        val config = loadAppConfig(
+            env = mapOf("VIGILANT_CONFIG" to file.toString()),
+            defaultConfigPaths = emptyList(),
+        )
+
+        assertEquals(
+            UpstreamClientSettings(
+                connectTimeout = Duration.ofSeconds(15),
+                writeTimeout = Duration.ofSeconds(45),
+                responseTimeout = Duration.ofMinutes(2),
+                connectionIdleTimeout = Duration.ofSeconds(30),
+            ),
+            config.upstream,
+        )
+    }
+
+    @Test
+    fun `environment overrides file for upstream response timeout`() {
+        val file = writeConfig(
+            """
+            vigilant {
+              upstream-url = "http://127.0.0.1:18081"
+              upstream-response-timeout = "2m"
+            }
+            """.trimIndent(),
+        )
+
+        val config = loadAppConfig(
+            env = mapOf(
+                "VIGILANT_CONFIG" to file.toString(),
+                "VIGILANT_UPSTREAM_RESPONSE_TIMEOUT" to "300ms",
+            ),
+            defaultConfigPaths = emptyList(),
+        )
+
+        assertEquals(Duration.ofMillis(300), config.upstream.responseTimeout)
+    }
+
+    @Test
+    fun `undecodable upstream duration in file fails`() {
+        val file = writeConfig(
+            """
+            vigilant {
+              upstream-url = "http://127.0.0.1:18081"
+              upstream-connect-timeout = "not-a-duration"
+            }
+            """.trimIndent(),
+        )
+
+        val exception = assertFailsWith<IllegalArgumentException> {
+            loadAppConfig(
+                env = mapOf("VIGILANT_CONFIG" to file.toString()),
+                defaultConfigPaths = emptyList(),
+            )
+        }
+        assertTrue(
+            exception.message!!.contains("upstreamConnectTimeout"),
+            "error must name the offending field, was: ${exception.message}",
+        )
     }
 
     private fun writeConfig(content: String): Path =

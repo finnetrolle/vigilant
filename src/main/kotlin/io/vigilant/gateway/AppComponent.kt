@@ -29,7 +29,7 @@ interface AppComponent {
 
         @Provides
         @SingleIn(AppScope::class)
-        fun upstreamWebClient(): WebClient = WebClient.of()
+        fun upstreamWebClient(appConfig: AppConfig): WebClient = buildUpstreamWebClient(appConfig.upstream)
 
         @Provides
         @SingleIn(AppScope::class)

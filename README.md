@@ -42,6 +42,12 @@ Vigilant настраивается HOCON-файлом и/или перемен�
 vigilant {
   upstream-url = "http://127.0.0.1:18081"
   port = 8080
+
+  # Таймауты upstream-клиента; значения ниже - значения по умолчанию.
+  upstream-connect-timeout = 10s
+  upstream-write-timeout = 30s
+  upstream-response-timeout = 5m
+  upstream-connection-idle-timeout = 10s
 }
 ```
 
@@ -49,9 +55,15 @@ vigilant {
 
 - `VIGILANT_UPSTREAM_URL` - абсолютный HTTP(S) URL апстрима; обязателен, если не задан в файле;
 - `VIGILANT_PORT` - порт шлюза, по умолчанию 8080;
+- `VIGILANT_UPSTREAM_CONNECT_TIMEOUT` - таймаут установки соединения с upstream, по умолчанию `10s`;
+- `VIGILANT_UPSTREAM_WRITE_TIMEOUT` - таймаут записи запроса в upstream, по умолчанию `30s`;
+- `VIGILANT_UPSTREAM_RESPONSE_TIMEOUT` - таймаут ответа upstream (модель - в разделе «Таймауты upstream-клиента»), по умолчанию `5m`;
+- `VIGILANT_UPSTREAM_CONNECTION_IDLE_TIMEOUT` - сколько простаивающее соединение к upstream живёт в пуле, по умолчанию `10s`;
 - `VIGILANT_CONFIG` - путь к файлу конфигурации.
 
 Правило переопределения: любой ключ `vigilant.some-setting` из файла переопределяется переменной `VIGILANT_SOME_SETTING`.
+
+Формат значений длительностей - строки вида `300ms`, `10s`, `5m` (или ISO-8601 `PT5M`); нулевые и отрицательные значения отклоняются при старте.
 
 Недопустимая или неполная конфигурация: сообщение об ошибке в stderr и код завершения 2.
 
@@ -65,6 +77,18 @@ vigilant {
 | upstream не ответил за response timeout | `504 Gateway Timeout` | `{"error":"upstream_timeout"}` |
 
 Каждая proxy-ошибка логируется одним структурным WARN-событием (`event.name=upstream_request_failed`, `upstream.error`, `upstream.cause`) без тел запросов/ответов, query string и auth-заголовков.
+
+## Таймауты upstream-клиента
+
+Upstream-клиент создаётся с явными таймаутами и настройками пула вместо библиотечных дефолтов Armeria: дефолтный response timeout Armeria (15 секунд) покрывает ответ целиком и оборвал бы легитимный длинный LLM-стрим.
+
+Принятая модель `upstream-response-timeout`:
+
+- это максимальное время до первого полученного объекта ответа (заголовков) и одновременно максимальная пауза между двумя подряд идущими объектами ответа;
+- общая длительность стрима этим таймаутом не ограничена: каждый полученный от upstream объект сбрасывает дедлайн на `now + response-timeout`;
+- зависший upstream (нет ни первого объекта, ни следующего чанка дольше таймаута) прерывается, и клиент получает стабильную proxy-ошибку `504 {"error":"upstream_timeout"}`.
+
+Соединение с незавершённым ответом не считается простаивающим: `upstream-connection-idle-timeout` не обрывает запрос, ждущий первый байт или следующий чанк (подтверждено E2E-тестом с задержкой первого байта дольше таймаута простоя). Поведение закреплено E2E-тестами: медленный чанковый стрим переживает response timeout меньшего размера, а зависший upstream прерывается по значению, заданному через переменную окружения.
 
 ## Health и readiness endpoints
 
