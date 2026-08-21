@@ -38,6 +38,46 @@ VIGILANT_CONFIG=./vigilant.conf.example ./build/install/vigilant/bin/vigilant
 
 Invalid or missing config prints a message to stderr and exits with code 2.
 
+## Agent papercuts
+
+`.papercuts.jsonl` is the tracked, append-only journal of recurring friction in
+this repository. It keeps both problem reports and resolution notes so future
+agents can reuse a verified approach instead of rediscovering it.
+
+Before diagnosing unexpected build, test, tooling, configuration, or
+documentation friction, search both open and resolved entries:
+
+```bash
+./scripts/papercuts --pretty list --status all
+```
+
+When new actionable friction appears, record it before continuing the primary
+task:
+
+```bash
+./scripts/papercuts add \
+  "<what happened; context; what would have prevented it>" \
+  --tag <area> --severity <minor|major|blocker>
+```
+
+When the problem is solved, preserve the reusable approach in the resolution:
+
+```bash
+./scripts/papercuts resolve <id> \
+  --note "<root cause; durable fix or workaround; verification command>"
+```
+
+- Keep working after filing unless the papercut is a real blocker.
+- Use papercuts for repository, tooling, and documentation friction. Product
+  defects and planned work still belong in `spec/issues/`.
+- Prefer fixing the underlying script, configuration, or documentation. A
+  resolution note records the approach; it does not replace the durable fix.
+- Reuse a resolved approach only after confirming its context still applies.
+- Never record secrets, request or response bodies, authentication headers, raw
+  environment dumps, or unredacted stderr that may contain them.
+- Run `./scripts/papercuts doctor` after manual conflict resolution or when the
+  journal looks malformed.
+
 ## Tech debt registry: sonar_problems.md
 
 `sonar_problems.md` (project root) is the registry of technical debt found by static analysis (SonarQube via the `analyze-via-sonar` skill). For each problem it records: what it is, where it lives (file:line), why it is a problem, and the recommended fix. Treat every entry as debt to be repaid as soon as possible: when a task touches an area listed there, proactively fix the corresponding findings in the same change rather than leaving them for later. After fixing, remove the resolved entries from the file (or regenerate it by re-running the analysis).

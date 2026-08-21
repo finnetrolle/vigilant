@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+readonly required_papercuts_version="0.2.0"
+readonly cargo_bin_dir="${CARGO_HOME:-${HOME}/.cargo}/bin"
+readonly wrapper_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly wrapper_path="${wrapper_dir}/$(basename -- "${BASH_SOURCE[0]}")"
+
+papercuts_candidate="$(command -v papercuts 2>/dev/null || true)"
+papercuts_candidate_path=""
+if [[ -n "${papercuts_candidate}" ]]; then
+    papercuts_candidate_dir="$(cd -- "$(dirname -- "${papercuts_candidate}")" && pwd -P)"
+    papercuts_candidate_path="${papercuts_candidate_dir}/$(basename -- "${papercuts_candidate}")"
+fi
+readonly papercuts_candidate papercuts_candidate_path
+
+if [[ -x "${cargo_bin_dir}/papercuts" ]]; then
+    papercuts_bin="${cargo_bin_dir}/papercuts"
+elif [[ -n "${papercuts_candidate_path}" ]] &&
+    [[ "${papercuts_candidate_path}" != "${wrapper_path}" ]]; then
+    papercuts_bin="${papercuts_candidate_path}"
+else
+    printf '%s\n' \
+        "papercuts ${required_papercuts_version} is required." \
+        "Install it with:" \
+        "  cargo install papercuts --version ${required_papercuts_version} --locked" >&2
+    exit 127
+fi
+
+readonly papercuts_bin
+readonly installed_version="$("${papercuts_bin}" --version)"
+
+if [[ "${installed_version}" != "papercuts ${required_papercuts_version}" ]]; then
+    printf '%s\n' \
+        "Expected papercuts ${required_papercuts_version}, found: ${installed_version}" \
+        "Install the pinned version with:" \
+        "  cargo install papercuts --version ${required_papercuts_version} --locked --force" >&2
+    exit 78
+fi
+
+exec "${papercuts_bin}" "$@"
