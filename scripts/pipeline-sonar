@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+
+# Post-issue pipeline, SonarQube gate mechanics. Zero LLM involvement:
+# ensures the local SonarQube container is up, manages the analysis token,
+# runs the scan, fetches issues/hotspots/rules/measures via the SonarQube API,
+# and filters findings down to files touched by the current work tree.
+#
+# Outputs into build/pipeline/sonar/:
+#   verdict.json  - machine verdict: blocking findings (touched files),
+#                   touched file list, quality gate status, counters
+#   issues.json   - raw unresolved issues (all files)
+#   hotspots.json - raw security hotspots (all files)
+#   rules.json    - rule metadata for every distinct rule found
+#   measures.json - project measures
+#   qualitygate.json
+#
+# Exit codes: 0 - no blocking findings, the issue may close (out-of-scope
+# findings stay in the raw output as registry debt). 1 - blocking findings in
+# touched files. 2 - environment failure (missing tool, dead server, token).
+
+set -euo pipefail
+
+cd "$(dirname -- "${BASH_SOURCE[0]}")/.."
+
+readonly sonar_url="http://localhost:9000"
+readonly project_key_enc="io.vigilant%3Avigilant"
+readonly container_name="vigilant-sonar"
+readonly out_dir="build/pipeline/sonar"
+readonly env_file=".claude/sonar.env"
+
+for tool in jq curl docker git; do
+    command -v "$tool" >/dev/null 2>&1 || { echo "missing required tool: $tool" >&2; exit 2; }
+done
+
+step() { printf '\n== %s ==\n' "$1"; }
+
+# ---------------------------------------------------------------------------
+# 1. Container
+# ---------------------------------------------------------------------------
+step "1/6 SonarQube container"
+if [[ -z "$(docker ps --filter "name=^/${container_name}$" --format '{{.Names}}')" ]]; then
+    echo "container not running, starting ${container_name}"
+    docker run -d --name "$container_name" -p 9000:9000 \
+        sonarqube:26.8.0.126808-community >/dev/null
+    echo "WARNING: fresh container has default admin/admin - local one-off only"
+fi
+
+deadline=$((SECONDS + 180))
+while :; do
+    status="$(curl -s "${sonar_url}/api/system/status" | jq -r '.status // empty' || true)"
+    [[ "$status" == "UP" ]] && break
+    if (( SECONDS >= deadline )); then
+        echo "SonarQube did not reach UP within 180s (last status: '${status}')" >&2
+        exit 2
+    fi
+    sleep 5
+done
+echo "SonarQube is UP"
+
+# ---------------------------------------------------------------------------
+# 2. Token
+# ---------------------------------------------------------------------------
+step "2/6 analysis token"
+[[ -f "$env_file" ]] || { echo "${env_file} not found (needs SONAR_ADMIN_PASSWORD)" >&2; exit 2; }
+# shellcheck disable=SC1090
+source "$env_file"
+
+token=""
+if [[ -n "${SONAR_TOKEN:-}" ]]; then
+    code="$(curl -s -o /dev/null -w '%{http_code}' -u "$SONAR_TOKEN:" "${sonar_url}/api/system/status")"
+    if [[ "$code" == "200" ]]; then
+        token="$SONAR_TOKEN"
+    else
+        echo "stored SONAR_TOKEN invalid (HTTP ${code}), regenerating"
+        sed -i '' '/^SONAR_TOKEN=/d' "$env_file"
+    fi
+fi
+
+if [[ -z "$token" ]]; then
+    curl -s -o /dev/null -u "admin:${SONAR_ADMIN_PASSWORD}" -X POST \
+        "${sonar_url}/api/user_tokens/revoke?name=vigilant-local-analysis" || true
+    generated="$(curl -s -u "admin:${SONAR_ADMIN_PASSWORD}" -X POST \
+        "${sonar_url}/api/user_tokens/generate?name=vigilant-local-analysis")"
+    token="$(printf '%s' "$generated" | jq -r '.token //empty')"
+    if [[ -z "$token" ]]; then
+        echo "token generation failed (admin password stale?): ${generated}" >&2
+        echo "do NOT recreate the container; update SONAR_ADMIN_PASSWORD in ${env_file}" >&2
+        exit 2
+    fi
+    printf "SONAR_TOKEN='%s'\n" "$token" >> "$env_file"
+fi
+echo "token OK"
+
+# ---------------------------------------------------------------------------
+# 3. Analysis run
+# ---------------------------------------------------------------------------
+step "3/6 gradle sonar analysis"
+SONAR_TOKEN="$token" ./gradlew test jacocoTestReport sonar -Dsonar.host.url="$sonar_url"
+
+# ---------------------------------------------------------------------------
+# 4. API fetch
+# ---------------------------------------------------------------------------
+step "4/6 fetch results via API"
+mkdir -p "$out_dir"
+
+# fetches all pages of a paginated endpoint into one JSON file; merge_key is
+# the array field the endpoint fills ("issues" or "hotspots")
+fetch_pages() { # endpoint, extra query, merge key, out file
+    local endpoint="$1" extra="$2" merge_key="$3" out="$4"
+    local page=1 pages=1
+    : > "$out"
+    while (( page <= pages )); do
+        local body
+        body="$(curl -s -u "$token:" "${sonar_url}${endpoint}?${extra}&ps=500&p=${page}")"
+        if (( page == 1 )); then
+            printf '%s' "$body" > "$out"
+        else
+            jq -s --arg key "$merge_key" \
+                '.[0][$key] = (.[0][$key] + (.[1][$key] // [])) | .[0]' \
+                "$out" <(printf '%s' "$body") > "${out}.tmp"
+            mv "${out}.tmp" "$out"
+        fi
+        local total
+        total="$(jq -r '.total // .paging.total // 1' "$out")"
+        pages=$(( (total + 499) / 500 ))
+        (( page++ ))
+    done
+}
+
+curl -s -u "$token:" \
+    "${sonar_url}/api/qualitygates/project_status?projectKey=${project_key_enc}" \
+    > "${out_dir}/qualitygate.json"
+curl -s -u "$token:" \
+    "${sonar_url}/api/measures/component?component=${project_key_enc}&metricKeys=bugs,vulnerabilities,security_hotspots,code_smells,coverage,duplicated_lines_density,ncloc,sqale_rating,reliability_rating,security_rating" \
+    > "${out_dir}/measures.json"
+fetch_pages "/api/issues/search" "componentKeys=${project_key_enc}&resolved=false" issues "${out_dir}/issues.json"
+fetch_pages "/api/hotspots/search" "projectKey=${project_key_enc}" hotspots "${out_dir}/hotspots.json"
+
+jq -s '[.[0].issues[].rule] + [.[1].hotspots[].ruleKey] | unique' \
+    "${out_dir}/issues.json" "${out_dir}/hotspots.json" > "${out_dir}/.rule_keys.json"
+
+rules_json="[]"
+while IFS= read -r rule_key; do
+    [[ -z "$rule_key" ]] && continue
+    enc_key="$(printf '%s' "$rule_key" | sed 's/:/%3A/g')"
+    curl -s -u "$token:" "${sonar_url}/api/rules/show?key=${enc_key}" \
+        | jq '{key: .rule.key, name: .rule.name, severity: .rule.severity,
+               type: .rule.type, descriptionSections: .rule.descriptionSections}' \
+        > "${out_dir}/.rule.json"
+    rules_json="$(jq -s '.[0] + [.[1]]' <(printf '%s' "$rules_json") "${out_dir}/.rule.json")"
+done < <(jq -r '.[]' "${out_dir}/.rule_keys.json")
+printf '%s' "$rules_json" > "${out_dir}/rules.json"
+rm -f "${out_dir}/.rule_keys.json" "${out_dir}/.rule.json"
+
+# ---------------------------------------------------------------------------
+# 5. Filter findings to touched files
+# ---------------------------------------------------------------------------
+step "5/6 filter findings to touched files"
+{
+    git diff --name-only HEAD
+    git ls-files --others --exclude-standard
+} > "${out_dir}/.touched"
+
+touched_json="$(jq -R . "${out_dir}/.touched" | jq -s 'map(select(length > 0))')"
+
+jq -n --argjson touched "$touched_json" \
+    --slurpfile issues "${out_dir}/issues.json" \
+    --slurpfile hotspots "${out_dir}/hotspots.json" \
+    --slurpfile gate "${out_dir}/qualitygate.json" \
+    '{
+        quality_gate: ($gate[0].projectStatus.status // "UNKNOWN"),
+        touched_files: $touched,
+        blocking_issues: [
+            $issues[0].issues[]
+            | select((.component | sub("^[^:]+:[^:]+:"; "")) as $c | ($touched | index($c)))
+            | {type, severity, file: (.component | sub("^[^:]+:[^:]+:"; "")), line, rule, message}
+        ],
+        blocking_hotspots: [
+            $hotspots[0].hotspots[]
+            | select((.component | sub("^[^:]+:[^:]+:"; "")) as $c | ($touched | index($c)))
+            | {ruleKey, vulnerabilityProbability, file: (.component | sub("^[^:]+:[^:]+:"; "")), line, message}
+        ],
+        total_issues: ($issues[0].issues | length),
+        total_hotspots: ($hotspots[0].hotspots | length)
+    }' > "${out_dir}/verdict.json"
+rm -f "${out_dir}/.touched"
+
+# ---------------------------------------------------------------------------
+# 6. Verdict
+# ---------------------------------------------------------------------------
+step "6/6 verdict"
+jq '{quality_gate, touched_files, blocking_issues, blocking_hotspots, total_issues, total_hotspots}' "${out_dir}/verdict.json"
+
+blocking="$(jq '(.blocking_issues | length) + (.blocking_hotspots | length)' "${out_dir}/verdict.json")"
+if (( blocking > 0 )); then
+    echo "BLOCKING: ${blocking} finding(s) in touched files - fix before closing the issue"
+    exit 1
+fi
+echo "no blocking findings in touched files; out-of-scope findings remain as registry debt"

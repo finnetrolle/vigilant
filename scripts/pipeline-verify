@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+
+# Post-issue pipeline, verify gates: full build (compile, tests, detekt) and
+# full verification (pitest + OWASP dependency check). Zero LLM involvement.
+# Exits non-zero on the first failing gate; on success prints artifact paths.
+
+set -euo pipefail
+
+cd "$(dirname -- "${BASH_SOURCE[0]}")/.."
+
+step() { printf '\n== %s ==\n' "$1"; }
+
+step "gate 1/2: ./gradlew build"
+./gradlew build
+
+step "gate 2/2: ./gradlew verifyAll"
+./gradlew verifyAll
+
+step "verify gates passed"
+printf 'artifacts:\n'
+printf '  tests:  build/reports/tests/test/index.html\n'
+printf '  pitest: build/reports/pitest/index.html\n'
+printf '  deps:   build/reports/dependency-check/dependency-check-report.html\n'
