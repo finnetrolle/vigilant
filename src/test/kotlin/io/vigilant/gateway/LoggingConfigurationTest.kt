@@ -155,7 +155,11 @@ class LoggingConfigurationTest {
 
         logger.info("first")
         assertTrue(sink.received.await(5, TimeUnit.SECONDS), "worker never reached the stalled sink")
-        assertEquals(listOf<String>(), sink.threads.filter { it == producerThread }, "sink must not run on the producer thread")
+        assertEquals(
+            listOf<String>(),
+            sink.threads.filter { it == producerThread },
+            "sink must not run on the producer thread",
+        )
 
         val floodStart = System.nanoTime()
         repeat(20_000) { i -> logger.info("flood $i") }

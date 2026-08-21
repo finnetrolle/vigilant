@@ -144,7 +144,10 @@ class AppConfigLoadingTest {
                 defaultConfigPaths = emptyList(),
             )
         }
-        assertTrue(exception.message!!.contains("port"), "error must name the offending field, was: ${exception.message}")
+        assertTrue(
+            exception.message!!.contains("port"),
+            "error must name the offending field, was: ${exception.message}",
+        )
     }
 
     @Test

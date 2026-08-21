@@ -1,0 +1,8 @@
+# Project-specific adjustments on top of the detekt default ruleset.
+#
+# Four-component destructuring of the async logging fixture (context, appender,
+# sink, logger name) is more readable at every call site than property access
+# through an intermediate variable, so the default threshold of 3 is raised.
+style:
+  DestructuringDeclarationWithTooManyEntries:
+    maxDestructuringEntries: 4

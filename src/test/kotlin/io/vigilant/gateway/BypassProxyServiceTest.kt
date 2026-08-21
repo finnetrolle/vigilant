@@ -95,7 +95,10 @@ class BypassProxyServiceTest {
         assertEquals("value", response.headers().get("x-keep"))
         listOf(HttpHeaderNames.PROXY_AUTHENTICATE, HttpHeaderNames.TRAILER, HttpHeaderNames.KEEP_ALIVE)
             .forEach { hopByHop ->
-                assertFalse(response.headers().contains(hopByHop), "hop-by-hop header $hopByHop must not reach the client")
+                assertFalse(
+                    response.headers().contains(hopByHop),
+                    "hop-by-hop header $hopByHop must not reach the client",
+                )
             }
     }
 
@@ -126,7 +129,7 @@ class BypassProxyServiceTest {
 
         assertTrue(run.stdout.isNotBlank(), "gateway produced no stdout output")
         assertEveryLineIsJson(run.stdout)
-        ALL_SENTINELS.forEach { sentinel ->
+        allSentinels.forEach { sentinel ->
             assertFalse(run.stdout.contains(sentinel), "sentinel $sentinel leaked into gateway stdout at INFO")
         }
     }
@@ -136,7 +139,7 @@ class BypassProxyServiceTest {
         val run = runGatewaySession(logLevel = "DEBUG")
 
         assertEveryLineIsJson(run.stdout)
-        ALL_SENTINELS.forEach { sentinel ->
+        allSentinels.forEach { sentinel ->
             assertFalse(run.stdout.contains(sentinel), "sentinel $sentinel leaked into gateway stdout at DEBUG")
         }
     }
@@ -145,7 +148,7 @@ class BypassProxyServiceTest {
      * Sentinel values that must never appear in logs, at any level: header values,
      * cookies, query string content, and request/response body content.
      */
-    private val ALL_SENTINELS = listOf(
+    private val allSentinels = listOf(
         "auth-secret-5F1C",
         "proxy-secret-9A2E",
         "cookie-secret-7B4D",
@@ -185,31 +188,11 @@ class BypassProxyServiceTest {
             }
         }
         val gatewayPort = freePort()
-        val process = ProcessBuilder(
-            "${System.getProperty("java.home")}/bin/java",
-            "-cp",
-            System.getProperty("java.class.path"),
-            "io.vigilant.gateway.MainKt",
-        ).apply {
-            environment().apply {
-                put("VIGILANT_UPSTREAM_URL", serverUri(upstream).toString())
-                put("VIGILANT_PORT", gatewayPort.toString())
-                logLevel?.let { put("VIGILANT_LOG_LEVEL", it) }
-            }
-        }.start()
+        val process = launchGateway(serverUri(upstream), gatewayPort, logLevel)
 
         val stdout = StringBuilder()
         val stderr = StringBuilder()
-        val stdoutReader = thread {
-            process.inputStream.bufferedReader().forEachLine { line ->
-                synchronized(stdout) { stdout.append(line).append('\n') }
-            }
-        }
-        val stderrReader = thread {
-            process.errorStream.bufferedReader().forEachLine { line ->
-                synchronized(stderr) { stderr.append(line).append('\n') }
-            }
-        }
+        val readers = pumpProcessOutput(process, stdout, stderr)
 
         try {
             val client = awaitGateway(process, gatewayPort, stderr)
@@ -234,8 +217,7 @@ class BypassProxyServiceTest {
             if (!process.waitFor(10, TimeUnit.SECONDS)) {
                 process.destroyForcibly()
             }
-            stdoutReader.join(5_000)
-            stderrReader.join(5_000)
+            readers.forEach { it.join(5_000) }
         }
 
         return GatewayRun(
@@ -243,6 +225,40 @@ class BypassProxyServiceTest {
             stderr = synchronized(stderr) { stderr.toString() },
         )
     }
+
+    /**
+     * Launches the gateway application as a subprocess configured through environment
+     * variables.
+     */
+    private fun launchGateway(upstream: URI, port: Int, logLevel: String?): Process =
+        ProcessBuilder(
+            "${System.getProperty("java.home")}/bin/java",
+            "-cp",
+            System.getProperty("java.class.path"),
+            "io.vigilant.gateway.MainKt",
+        ).apply {
+            environment().apply {
+                put("VIGILANT_UPSTREAM_URL", upstream.toString())
+                put("VIGILANT_PORT", port.toString())
+                logLevel?.let { put("VIGILANT_LOG_LEVEL", it) }
+            }
+        }.start()
+
+    /**
+     * Spawns threads that continuously drain the process stdout and stderr into the
+     * builders, so the subprocess never blocks on full OS pipe buffers.
+     */
+    private fun pumpProcessOutput(process: Process, stdout: StringBuilder, stderr: StringBuilder): List<Thread> =
+        listOf(
+            process.inputStream to stdout,
+            process.errorStream to stderr,
+        ).map { (stream, builder) ->
+            thread {
+                stream.bufferedReader().forEachLine { line ->
+                    synchronized(builder) { builder.append(line).append('\n') }
+                }
+            }
+        }
 
     /**
      * Asserts that every non-blank stdout line parses as an independent JSON object.

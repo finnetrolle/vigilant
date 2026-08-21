@@ -1,0 +1,9 @@
+#!/bin/sh
+# Pre-push gate: compile with warnings-as-errors, run tests and detekt.
+# Full verification (mutation testing, CVE scan) is available via ./gradlew verifyAll.
+echo "Running pre-push verification (./gradlew build)..."
+./gradlew build
+if [ $? -ne 0 ]; then
+    echo "Pre-push verification failed. Push aborted."
+    exit 1
+fi

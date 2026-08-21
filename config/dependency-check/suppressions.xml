@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<suppressions xmlns="https://jeremylong.github.io/DependencyCheck/dependency-suppression.1.3.xsd">
+    <!-- NVD maps CVE-2020-29582 (insecure temp file usage, fixed in Kotlin 1.4.21)
+         onto all kotlin-stdlib versions below 2.4.20. The shipped stdlib 2.4.10
+         contains the fix; the CPE range in NVD is wrong. -->
+    <suppress>
+        <notes><![CDATA[
+        False positive: CVE fixed in Kotlin 1.4.21, NVD CPE range is incorrect.
+        ]]></notes>
+        <cve>CVE-2020-29582</cve>
+    </suppress>
+    <!-- CVE-2026-53914 (unsafe deserialization in the Kotlin build cache metadata,
+         CRITICAL 9.8) affects the Kotlin build tools (kotlin-build-tools-api), which
+         are a buildscript-only dependency here. The shipped runtimeClasspath contains
+         only kotlin-stdlib/kotlin-reflect, which carry no build cache code; the NVD
+         CPE `jetbrains:kotlin` matches them too broadly. Remove this suppression and
+         bump Kotlin past 2.4.20 once that stable version is released. -->
+    <suppress>
+        <notes><![CDATA[
+        Build-time-only component (Kotlin build tools); not present in runtimeClasspath.
+        ]]></notes>
+        <cve>CVE-2026-53914</cve>
+    </suppress>
+</suppressions>

@@ -11,6 +11,8 @@ import java.nio.file.Path
 import kotlin.io.path.exists
 
 private const val DEFAULT_PORT = 8080
+private const val MIN_PORT = 1
+private const val MAX_PORT = 65535
 private const val ENV_PREFIX = "VIGILANT_"
 private const val ENV_DOUBLE_PREFIX = "VIGILANT__"
 private const val CONFIG_FILE_ENV = "VIGILANT_CONFIG"
@@ -161,8 +163,8 @@ internal fun validatedUpstreamUri(rawUrl: String): URI {
  * @throws IllegalArgumentException if [port] is not between 1 and 65535.
  */
 internal fun validatedPort(port: Int): Int {
-    require(port in 1..65535) {
-        "$PORT_ENV must be an integer between 1 and 65535"
+    require(port in MIN_PORT..MAX_PORT) {
+        "$PORT_ENV must be an integer between $MIN_PORT and $MAX_PORT"
     }
     return port
 }
