@@ -6,6 +6,7 @@ out/
 # IDE
 .idea/
 *.iml
+.vscode/
 
 # Kotlin compiler daemon sessions
 .kotlin/
