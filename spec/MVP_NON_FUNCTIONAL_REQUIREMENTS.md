@@ -115,6 +115,13 @@ Gateway не буферизует целиком request или response без 
 и streaming-ответы передаются с backpressure; time-to-first-byte не должен
 ожидать завершения всего ответа upstream.
 
+Исключение для guardrail-enabled OpenAI MVP: SSE response, для которого policy
+decision должен быть принят до раскрытия любого output клиенту, обрабатывается
+атомарно через bounded spool. В этом режиме TTFB ожидает terminal event и
+итоговый policy decision; при `ALLOW` исходный SSE replay-ится с backpressure,
+при `BLOCK` ни один upstream SSE byte не отправляется клиенту. Исключение не
+меняет потоковое поведение bypass v0 и не разрешает unbounded buffering в heap.
+
 ### PROXY-02. Прозрачность
 
 В bypass-режиме gateway сохраняет HTTP method, path, query, тело, статус ответа

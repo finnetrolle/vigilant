@@ -27,6 +27,13 @@ VIGILANT_UPSTREAM_URL=http://127.0.0.1:18081 VIGILANT_PORT=18080 ./build/install
 
 # Run with a HOCON config file (see vigilant.conf.example); env vars still override file values
 VIGILANT_CONFIG=./vigilant.conf.example ./build/install/vigilant/bin/vigilant
+
+# Quality tools (beyond SonarQube + JaCoCo)
+./gradlew detekt                 # Kotlin static analysis, wired into build/check; project tweaks in config/detekt/detekt.yml
+./gradlew pitest                 # mutation testing against io.vigilant.* classes
+./gradlew dependencyCheckAnalyze # OWASP CVE scan of the dependency tree
+./gradlew verifyAll              # full local verification: build + pitest + dependency check
+./gradlew installGitHooks        # one-time after clone: installs pre-push hook from config/git/hooks/
 ```
 
 Invalid or missing config prints a message to stderr and exits with code 2.
@@ -79,7 +86,7 @@ For guardrail-enabled stages after v0, the OpenAI-compatible protocol layer must
 - Preserve the original request body and derive a separate normalized view containing only the data needed by guardrails.
 - If a request is allowed without modification, forward its original body rather than rebuilding it from typed DTOs.
 - Preserve and forward unknown fields. When a guardrail must modify content, patch only the targeted fields and retain everything else.
-- Do not silently allow a request whose LLM-visible content cannot be reliably extracted and inspected. Treat an unknown additional field as forward-compatible, but fail closed with a stable proxy error when the content-bearing structure is ambiguous or unsupported.
+- Do not silently allow a request whose LLM-visible content cannot be reliably extracted and inspected. Treat an unknown additional field as forward-compatible, but fail closed with a stable proxy error when the content-bearing structure is ambiguous or unsupported. During the current text-only stage, a schema-recognized non-text content block or provider-opaque continuation block may be forwarded unchanged only when the normalized result explicitly records an inspection gap. This narrow exception does not apply to malformed content, an unknown content discriminator, or an ambiguous content-bearing structure; those cases remain fail-closed.
 - Do not silently coerce non-conformant request shapes. Use an explicit, versioned compatibility adapter when Vigilant intentionally accepts a format that the selected upstream does not accept directly.
 - Forward only end-to-end headers. Vigilant remains responsible for upstream authentication and for rewriting `Host`, `Content-Length`, and hop-by-hop headers.
 

@@ -46,7 +46,7 @@ EPIC-04 Policy engine
 
 Policy engine получает готовый нормализованный контекст и один текстовый payload, выбирает все применимые политики, разрешает явные `overrides`, дедуплицирует detectors, запускает независимые detectors параллельно и возвращает итоговый `ReactionPlan`.
 
-Policy engine не разбирает HTTP-запросы и ответы. Извлечение URL, модели, фазы, пользователя, групп и payload описано отдельным [EPIC-03](epic_03_policy_context_extraction.md).
+Policy engine не разбирает HTTP-запросы и ответы. [EPIC-03](epic_03_policy_context_extraction.md) собирает готовый `PolicyContext`, а [EPIC-06](epic_06_llm_message_parsing.md) извлекает из protocol body и events schema-derived attributes и payload fragments.
 
 Detector получает только payload. Detector не знает URL, модель, фазу, пользователя или группы, не выбирает политику и не применяет reaction.
 

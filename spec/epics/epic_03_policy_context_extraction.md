@@ -16,8 +16,8 @@ EPIC-03 Policy context extraction
 ├── Identity
 │   ├── configurable extraction
 │   └── secret-safe upstream stripping
-├── LLM protocol
-│   └── model extraction with lossless forwarding
+├── Context assembly
+│   └── HTTP-derived + protocol-derived attributes
 └── Lifecycle
     ├── request-to-response handoff
     └── end-to-end security behavior
@@ -33,7 +33,7 @@ Epic остаётся `Draft`, потому что перечисленные н
 - [ ] [VIG-03-01: Контракт и trust boundary](../issues/epic_03/issue_03_01_context_contract.md) - `Draft`
 - [ ] [VIG-03-02: Нормализация URL](../issues/epic_03/issue_03_02_url_normalization.md) - `Draft`
 - [ ] [VIG-03-03: Настраиваемое identity extraction](../issues/epic_03/issue_03_03_identity_extraction.md) - `Draft`
-- [ ] [VIG-03-04: Извлечение модели без потери исходного body](../issues/epic_03/issue_03_04_model_extraction.md) - `Draft`
+- [ ] [VIG-03-04: Сборка PolicyContext из нормализованных данных](../issues/epic_03/issue_03_04_model_extraction.md) - `Draft`
 - [ ] [VIG-03-05: Перенос контекста в response phase](../issues/epic_03/issue_03_05_response_handoff.md) - `Draft`
 - [ ] [VIG-03-06: E2E security и upstream stripping](../issues/epic_03/issue_03_06_security_e2e.md) - `Draft`
 
@@ -46,13 +46,23 @@ Policy engine должен выбирать политики по четырём
 - фазе обработки: запрос к модели или ответ модели;
 - субъекту запроса: отдельному пользователю или группе.
 
-Эти значения приходят из разных частей HTTP-обмена и могут быть представлены по-разному в разных интеграциях. Например, пользователь может определяться через Basic Authentication или специальный HTTP-заголовок. Названия служебных заголовков не могут быть жёстко заданы в коде и должны настраиваться.
+Эти значения приходят из разных частей HTTP-обмена. URL, phase и identity
+принадлежат HTTP context extraction. Значения внутри LLM protocol body или
+events, включая model, извлекает отдельный
+[EPIC-06](epic_06_llm_message_parsing.md). EPIC-03 получает их в готовом
+нормализованном виде и не разбирает raw body повторно.
+
+Пользователь может определяться через Basic Authentication или специальный
+HTTP-заголовок. Названия служебных заголовков не могут быть жёстко заданы в
+коде и должны настраиваться.
 
 Извлечение и нормализация этих значений отделяются от механизма выбора политик. Policy engine должен получать готовый контекст и не должен самостоятельно разбирать HTTP-запрос, авторизацию или тело сообщения.
 
 ## Цель
 
-Определить и реализовать слой, который строит нормализованный контекст применения политик из запроса к модели и сохраняет необходимые значения для последующей проверки ответа.
+Определить и реализовать слой, который получает нормализованные HTTP-derived
+и protocol-derived данные, строит `PolicyContext` и сохраняет необходимые
+значения для последующей проверки ответа.
 
 Предварительный состав контекста:
 
@@ -72,19 +82,24 @@ REQUEST
 RESPONSE
 ```
 
-Для ответа должны использоваться URL, модель и субъект, установленные при обработке соответствующего запроса. Policy engine не должен повторно восстанавливать их только по телу ответа.
+Для ответа должны использоваться URL, модель и субъект, установленные при
+обработке соответствующего запроса. Reported model из upstream response не
+переопределяет request model. Policy engine и EPIC-03 не восстанавливают эти
+значения по телу ответа.
 
 ## Предварительные требования
 
 - URL назначения приводится к согласованному нормализованному виду.
-- Модель извлекается из поддерживаемого формата запроса к LLM API.
+- Модель и любые другие body-derived attributes принимаются из результата
+  EPIC-06 и не извлекаются в EPIC-03.
 - Фаза определяется точкой вызова policy engine, а не содержимым payload.
 - Пользователь и группы извлекаются настраиваемым способом.
 - Названия HTTP-заголовков с identity-данными задаются через конфигурацию.
 - Должна быть предусмотрена возможность извлечения пользователя из Basic Authentication.
 - Служебные identity-заголовки не должны передаваться upstream, если они предназначены только для Vigilant.
 - Пароли, токены и исходные значения credentials не должны попадать в контекст политики, ошибки или логи.
-- Результат извлечения не зависит от конкретной реализации `PolicyProvider`.
+- Результат сборки context не зависит от конкретной реализации
+  `PolicyProvider`.
 
 ## Не входит в задачу
 
@@ -94,15 +109,18 @@ RESPONSE
 - Выбор итоговой реакции.
 - Хранение политик в файле или БД.
 - Проверка существования пользователя или группы во внешнем каталоге.
+- Разбор JSON, SSE, Realtime events или Batch JSONL.
+- Извлечение payload fragments или любых attributes из protocol message.
 
 ## Открытые решения
 
 - Какой URL участвует в сопоставлении: полный URL, origin, path или их комбинация.
 - Правила нормализации URL.
-- Поддерживаемые форматы LLM API и расположение поля модели.
+- Точный provider-neutral input contract для attributes из EPIC-06.
 - Допустимые источники пользователя: произвольный header, Basic Authentication или оба варианта.
 - Формат списка групп и правила экранирования значений.
-- Поведение при отсутствии пользователя, группы или модели.
+- Поведение при отсутствии пользователя, группы или обязательного
+  protocol-derived attribute.
 - Может ли один запрос одновременно сопоставляться с пользователем и несколькими группами.
 - Модель доверия к identity-заголовкам и защита от их подмены клиентом.
 - Точная структура конфигурации источников identity.
@@ -111,6 +129,8 @@ RESPONSE
 ## Предварительные критерии приёмки
 
 - Policy engine получает единый нормализованный контекст без доступа к HTTP headers или сырому request body.
+- EPIC-03 не получает raw body, protocol events или protocol-specific document
+  model и не извлекает из них attributes.
 - Одинаковые логические значения из поддерживаемых источников дают одинаковый контекст.
 - Контекст ответа содержит URL, модель, пользователя и группы исходного запроса.
 - Названия служебных identity-заголовков не зашиты в коде.
@@ -122,12 +142,12 @@ RESPONSE
 ```text
 Ambiguity Report:
   Goals:        0.25  ✓ общий результат понятен
-  Acceptance:   0.5   ⚠ зависит от незакрытых protocol decisions
+  Acceptance:   0.45  ⚠ зависит от input contract и identity decisions
   Boundaries:   0.25  ✓ основные non-goals перечислены
-  Alternatives: 0.5   ⚠ варианты extraction и handoff не выбраны
-  Assumptions:  0.5   ⚠ API shapes и trust boundary не подтверждены
+  Alternatives: 0.4   ⚠ варианты identity extraction и handoff не выбраны
+  Assumptions:  0.4   ⚠ input contract и trust boundary не подтверждены
   ──────────────────────────────
-  Aggregate:    0.40  ⚠ above threshold (0.2 spec)
+  Aggregate:    0.35  ⚠ above threshold (0.2 spec)
 
 Keep as Draft. Push on: VIG-03-01 contract and trust-boundary decisions.
 ```

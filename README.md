@@ -9,6 +9,23 @@ Vigilant — проект системы guardrails для платформы И
 - [Функции Stage 1](spec/STAGE_1_FUNCTIONS.md)
 - [Функции вне границ продукта](spec/OUT_OF_SCOPE_FUNCTIONS.md)
 
+## Сборка и запуск
+
+Требуется JDK 25.
+
+```bash
+./gradlew build                 # компиляция + тесты + detekt
+./gradlew installDist           # дистрибутив в build/install/vigilant/
+
+# Запуск только на переменных окружения
+VIGILANT_UPSTREAM_URL=http://127.0.0.1:18081 VIGILANT_PORT=18080 ./build/install/vigilant/bin/vigilant
+
+# Запуск с HOCON-файлом (см. vigilant.conf.example; переменные окружения переопределяют файл)
+VIGILANT_CONFIG=./vigilant.conf.example ./build/install/vigilant/bin/vigilant
+```
+
+Недопустимая или неполная конфигурация: сообщение в stderr, код завершения 2.
+
 ## Конфигурация
 
 Vigilant настраивается HOCON-файлом и/или переменными окружения. Приоритет: переменные окружения > файл > значения по умолчанию.
@@ -71,6 +88,32 @@ services:
 ```
 
 Для OpenTelemetry требуется отдельный Collector (например, daemonset с presets `logsCollection` и `kubernetesAttributes`), который читает stdout контейнеров, парсит внутренний JSONL (уровень - в severity, `formattedMessage` - в body, KVP/MDC - в attributes, ресурсный атрибут `service.name=vigilant`) и экспортирует по OTLP, исключая собственные логи. Конфигурация Collector не входит в приложение.
+
+## Проверки качества
+
+Что входит в `./gradlew build`:
+
+- компиляция в режиме warnings-as-errors - любое предупреждение Kotlin ломает сборку;
+- E2E-тесты (реальные Armeria-серверы на эфемерных портах);
+- статический анализ detekt (правила проекта: `config/detekt/detekt.yml`).
+
+Отдельные проверки:
+
+```bash
+./gradlew pitest                  # мутационное тестирование, отчёт build/reports/pitest/
+./gradlew dependencyCheckAnalyze  # CVE-скан зависимостей (только runtimeClasspath)
+./gradlew verifyAll               # полный локальный прогон: build + pitest + dependency-check
+```
+
+CVE-скан требует NVD API-ключ (бесплатный: https://nvd.nist.gov/developers/request-an-api-key). Ключ читается из gradle-свойства `nvdApiKey` (например, в `~/.gradle/gradle.properties`) или переменной окружения `NVD_API_KEY`. Первый запуск синхронизирует базу NVD (десятки минут), последующие - секунды. Отчёт: `build/reports/dependency-check/`. Ложные срабатывания подавляются в `config/dependency-check/suppressions.xml` с обоснованием.
+
+Git-хуки и CI:
+
+```bash
+./gradlew installGitHooks        # один раз после клона: pre-push хук (./gradlew build перед пушем)
+```
+
+CI (`.github/workflows/ci.yml`) на каждый push в `main` и PR запускает build, мутационное тестирование и CVE-скан (для CVE-job нужен секрет `NVD_API_KEY`; без него job пропускается).
 
 ## Определение guardrails
 

@@ -10,8 +10,8 @@
 ## Результат
 
 Один immutable request context безопасно переиспользуется для соответствующей
-`RESPONSE` phase без повторного извлечения URL, model или identity из response
-body и без нарушения streaming/cancellation semantics.
+`RESPONSE` phase без повторного извлечения URL, model, identity или других
+attributes из response body и без нарушения streaming/cancellation semantics.
 
 ## Требует решения VIG-03-01
 
@@ -23,6 +23,7 @@ body и без нарушения streaming/cancellation semantics.
 
 - [ ] Response context отличается только `phase=RESPONSE`.
 - [ ] URL, model, user и groups точно совпадают с request phase.
+- [ ] Reported model из upstream response не переопределяет request model.
 - [ ] Concurrent requests не смешивают contexts.
 - [ ] Streaming TTFB не ждёт полного upstream response.
 - [ ] Cancellation/error освобождают request-scoped references.
