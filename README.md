@@ -66,6 +66,17 @@ vigilant {
 
 Каждая proxy-ошибка логируется одним структурным WARN-событием (`event.name=upstream_request_failed`, `upstream.error`, `upstream.cause`) без тел запросов/ответов, query string и auth-заголовков.
 
+## Health и readiness endpoints
+
+Gateway сам отвечает на пробы оркестратора; пути проб никогда не проксируются upstream:
+
+- `GET /healthz` - liveness: `200`, пока сервер принимает соединения.
+- `GET /readyz` - readiness: `200`, когда gateway готов обрабатывать трафик; `503` после начала graceful shutdown, до фактического закрытия. Доступность upstream не проверяется.
+
+Пути `/healthz` и `/readyz` выбраны по конвенции Kubernetes и не конфликтуют с пространством путей LLM API: OpenAI/Anthropic-совместимые API живут под `/v1/`, пробы зарезервированы вне его.
+
+Graceful shutdown: по SIGTERM (или иному завершению JVM) readiness переключается на `503` до остановки сервера; сервер ждёт до 5 секунд отсутствия активных запросов (quiet period) и закрывается не позднее 30 секунд (force timeout), прерывая застрявшие запросы.
+
 ## Логирование
 
 У приложения ровно один logging sink: `stdout`. Файлы логов не создаются и не ротируются, по сети логи не отправляются - хранение, ротация и доставка в OpenTelemetry являются ответственностью Docker/container runtime и внешнего Collector.

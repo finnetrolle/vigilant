@@ -50,7 +50,7 @@ EPIC-05 v0 hardening
 ## Дочерние issues
 
 - [x] [VIG-05-01: Стабильная proxy-ошибка при сбое upstream](../issues/epic_05/issue_05_01_upstream_error_mapping.md) - `Done`
-- [ ] [VIG-05-02: Health и readiness endpoints](../issues/epic_05/issue_05_02_health_endpoints.md) - `Ready for implementation`
+- [x] [VIG-05-02: Health и readiness endpoints](../issues/epic_05/issue_05_02_health_endpoints.md) - `Done`
 - [ ] [VIG-05-03: E2E-тест стриминга без буферизации](../issues/epic_05/issue_05_03_streaming_e2e.md) - `Ready for implementation`
 - [ ] [VIG-05-04: E2E-тест отмены клиента](../issues/epic_05/issue_05_04_cancellation_e2e.md) - `Ready for implementation`
 - [ ] [VIG-05-05: Явные таймауты upstream-клиента](../issues/epic_05/issue_05_05_upstream_timeouts.md) - `Ready for implementation`

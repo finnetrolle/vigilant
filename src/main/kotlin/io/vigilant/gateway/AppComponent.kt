@@ -7,6 +7,7 @@ import dev.zacsweers.metro.DependencyGraph
 import dev.zacsweers.metro.Provides
 import dev.zacsweers.metro.SingleIn
 import java.net.URI
+import java.time.Duration
 
 /**
  * Application-wide dependency graph: configuration, the upstream [WebClient],
@@ -15,6 +16,7 @@ import java.net.URI
 @DependencyGraph(AppScope::class)
 interface AppComponent {
     val server: Server
+    val readinessService: ReadinessService
 
     companion object {
         @Provides
@@ -33,11 +35,30 @@ interface AppComponent {
         @SingleIn(AppScope::class)
         fun server(
             appConfig: AppConfig,
+            livenessService: LivenessService,
+            readinessService: ReadinessService,
             bypassProxyService: BypassProxyService,
         ): Server =
             Server.builder()
                 .http(appConfig.port)
+                .gracefulShutdownTimeout(GRACEFUL_SHUTDOWN_QUIET_PERIOD, GRACEFUL_SHUTDOWN_TIMEOUT)
+                .service("/healthz", livenessService)
+                .service("/readyz", readinessService)
                 .serviceUnder("/", bypassProxyService)
                 .build()
+
+        /**
+         * How long the graceful shutdown waits for a gap with no active requests
+         * before closing, keeping readiness observable as `503` in the meantime.
+         * Internal so tests can derive their waiting bounds from the real values.
+         */
+        internal val GRACEFUL_SHUTDOWN_QUIET_PERIOD = Duration.ofSeconds(5)
+
+        /**
+         * The upper bound of the graceful shutdown: the server closes after this
+         * even if some requests are still stuck. Internal so tests can derive
+         * their waiting bounds from the real values.
+         */
+        internal val GRACEFUL_SHUTDOWN_TIMEOUT = Duration.ofSeconds(30)
     }
 }

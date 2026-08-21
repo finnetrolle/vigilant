@@ -1,6 +1,6 @@
 # VIG-05-02: Health и readiness endpoints
 
-**Статус:** Ready for implementation
+**Статус:** Done
 **Epic:** [EPIC-05](../../epics/epic_05_v0_hardening.md)
 **Ветка:** Эксплуатация > health/readiness endpoints
 **Зависит от:** нет
@@ -20,17 +20,17 @@ Gateway сам отвечает на liveness и readiness пробы; Kubernete
 
 ## Критерии готовности
 
-- [ ] Liveness endpoint (рекомендованный baseline: `GET /healthz`) отвечает
+- [x] Liveness endpoint (рекомендованный baseline: `GET /healthz`) отвечает
   `200`, пока сервер принимает соединения.
-- [ ] Readiness endpoint (рекомендованный baseline: `GET /readyz`) отвечает
+- [x] Readiness endpoint (рекомендованный baseline: `GET /readyz`) отвечает
   `200`, когда gateway готов обрабатывать трафик, и `503` после начала
   graceful shutdown, до фактического закрытия.
-- [ ] Оба пути обслуживаются gateway и никогда не проксируются upstream.
-- [ ] Выбранные пути не конфликтуют с пространством путей LLM API; выбор
+- [x] Оба пути обслуживаются gateway и никогда не проксируются upstream.
+- [x] Выбранные пути не конфликтуют с пространством путей LLM API; выбор
   зафиксирован в README.
-- [ ] E2E-тест: ответы endpoint'ов через запущенный gateway; пути отсутствуют
+- [x] E2E-тест: ответы endpoint'ов через запущенный gateway; пути отсутствуют
   в логах upstream-запросов тестового upstream.
-- [ ] `./gradlew build` проходит.
+- [x] `./gradlew build` проходит.
 
 ## Не входит
 
