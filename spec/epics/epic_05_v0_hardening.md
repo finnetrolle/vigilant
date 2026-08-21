@@ -2,7 +2,7 @@
 
 **ID:** `EPIC-05`
 **Тип:** Epic
-**Статус:** Ready for implementation
+**Статус:** In progress
 **Приоритет:** High
 **Предварительная оценка:** 20-33 инженерных дня
 **Связанные требования:** `PROXY-01`, `PROXY-03`, `CONC-04`, `PERF-01`, `PERF-06`, Наблюдаемость, Поставка, критерии готовности v0 №2, №3, №4, №6
@@ -49,7 +49,7 @@ EPIC-05 v0 hardening
 
 ## Дочерние issues
 
-- [ ] [VIG-05-01: Стабильная proxy-ошибка при сбое upstream](../issues/epic_05/issue_05_01_upstream_error_mapping.md) - `Ready for implementation`
+- [x] [VIG-05-01: Стабильная proxy-ошибка при сбое upstream](../issues/epic_05/issue_05_01_upstream_error_mapping.md) - `Done`
 - [ ] [VIG-05-02: Health и readiness endpoints](../issues/epic_05/issue_05_02_health_endpoints.md) - `Ready for implementation`
 - [ ] [VIG-05-03: E2E-тест стриминга без буферизации](../issues/epic_05/issue_05_03_streaming_e2e.md) - `Ready for implementation`
 - [ ] [VIG-05-04: E2E-тест отмены клиента](../issues/epic_05/issue_05_04_cancellation_e2e.md) - `Ready for implementation`

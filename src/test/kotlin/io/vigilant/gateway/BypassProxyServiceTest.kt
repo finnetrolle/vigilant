@@ -10,11 +10,19 @@ import com.linecorp.armeria.common.HttpStatus
 import com.linecorp.armeria.common.MediaType
 import com.linecorp.armeria.common.RequestHeaders
 import com.linecorp.armeria.common.ResponseHeaders
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.AppenderBase
 import com.linecorp.armeria.server.Server
 import com.fasterxml.jackson.databind.ObjectMapper
 import java.net.URI
 import java.net.ServerSocket
+import java.time.Duration
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
+import org.slf4j.LoggerFactory
+import org.slf4j.event.KeyValuePair
 import kotlin.concurrent.thread
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -69,6 +77,192 @@ class BypassProxyServiceTest {
         assertEquals(
             "POST|/v1/messages?stream=false|request-1|payload",
             response.contentUtf8(),
+        )
+    }
+
+    @Test
+    fun `connection failure upstream is answered with stable 502 proxy error`() {
+        val gateway = startGateway(deadUpstreamUri(), WebClient.of())
+        val client = WebClient.of(serverUri(gateway).toString())
+
+        val response = client.get("/v1/models").aggregate().join()
+
+        assertEquals(HttpStatus.BAD_GATEWAY, response.status())
+        assertEquals("""{"error":"upstream_unavailable"}""", response.contentUtf8())
+    }
+
+    @Test
+    fun `upstream that never responds is answered with stable 504 proxy error`() {
+        val hungUpstream = startServer { HttpResponse.streaming() }
+        val gateway = startGateway(
+            serverUri(hungUpstream),
+            WebClient.builder().responseTimeout(Duration.ofMillis(300)).build(),
+        )
+        val client = WebClient.builder(serverUri(gateway).toString())
+            .responseTimeout(Duration.ofSeconds(10))
+            .build()
+
+        val response = client.get("/v1/models").aggregate().join()
+
+        assertEquals(HttpStatus.GATEWAY_TIMEOUT, response.status())
+        assertEquals("""{"error":"upstream_timeout"}""", response.contentUtf8())
+    }
+
+    @Test
+    fun `upstream failure mid response aborts the exchange without an internal framework error`() {
+        val armeriaEvents = CopyOnWriteArrayList<ILoggingEvent>()
+        val appender = object : AppenderBase<ILoggingEvent>() {
+            override fun append(event: ILoggingEvent) {
+                armeriaEvents += event
+            }
+        }.apply { start() }
+        val armeriaLogger = LoggerFactory.getLogger("com.linecorp.armeria") as Logger
+        armeriaLogger.addAppender(appender)
+        try {
+            val stalledUpstream = startServer {
+                val streaming = HttpResponse.streaming()
+                streaming.write(ResponseHeaders.of(HttpStatus.OK))
+                streaming.write(HttpData.ofUtf8("partial "))
+                streaming
+            }
+            val gateway = startGateway(
+                serverUri(stalledUpstream),
+                WebClient.builder().responseTimeout(Duration.ofMillis(300)).build(),
+            )
+            val client = WebClient.builder(serverUri(gateway).toString())
+                .responseTimeout(Duration.ofSeconds(10))
+                .build()
+
+            val exchange = runCatching { client.get("/v1/models").aggregate().join() }
+
+            assertTrue(
+                exchange.isFailure,
+                "a response that already started must fail the exchange instead of delivering a " +
+                    "hybrid body: ${exchange.getOrNull()?.contentUtf8()}",
+            )
+            val internalErrors = armeriaEvents.filter {
+                it.formattedMessage.contains("Unexpected exception from a service or a response publisher")
+            }
+            assertTrue(
+                internalErrors.isEmpty(),
+                "a mid-response upstream failure must be handled by the proxy, not surface as an " +
+                    "internal framework error: ${internalErrors.map { it.formattedMessage }}",
+            )
+        } finally {
+            armeriaLogger.detachAppender(appender)
+            appender.stop()
+        }
+    }
+
+    @Test
+    fun `unresolvable upstream host is answered with the same 502 proxy error`() {
+        val gateway = startGateway(
+            URI.create("http://vigilant-unreachable.invalid:8081"),
+            WebClient.builder().responseTimeout(Duration.ofSeconds(10)).build(),
+        )
+        val client = WebClient.builder(serverUri(gateway).toString())
+            .responseTimeout(Duration.ofSeconds(10))
+            .build()
+
+        val response = client.get("/v1/models").aggregate().join()
+
+        assertEquals(HttpStatus.BAD_GATEWAY, response.status())
+        assertEquals("""{"error":"upstream_unavailable"}""", response.contentUtf8())
+    }
+
+    @Test
+    fun `upstream failure is logged structurally without bodies or auth headers`() {
+        val events = CopyOnWriteArrayList<ILoggingEvent>()
+        val appender = object : AppenderBase<ILoggingEvent>() {
+            override fun append(event: ILoggingEvent) {
+                events += event
+            }
+        }.apply { start() }
+        val logger = LoggerFactory.getLogger(BypassProxyService::class.java) as Logger
+        logger.addAppender(appender)
+
+        val gateway = startGateway(deadUpstreamUri(), WebClient.of())
+        val client = WebClient.builder(serverUri(gateway).toString())
+            .responseTimeout(Duration.ofSeconds(10))
+            .build()
+        try {
+            val response = client.execute(
+                HttpRequest.of(
+                    RequestHeaders.builder(HttpMethod.POST, "/v1/chat?token=query-secret-1C6A")
+                        .add(HttpHeaderNames.AUTHORIZATION, "Bearer auth-secret-5F1C")
+                        .build(),
+                    HttpData.ofUtf8("request body-secret-8D07"),
+                ),
+            ).aggregate().join()
+
+            assertEquals(HttpStatus.BAD_GATEWAY, response.status())
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (events.isEmpty() && System.nanoTime() < deadline) Thread.sleep(50)
+            assertFalse(events.isEmpty(), "upstream failure was not logged")
+        } finally {
+            logger.detachAppender(appender)
+            appender.stop()
+        }
+
+        val event = events.single()
+        assertEquals(Level.WARN, event.level)
+        assertEquals("upstream_request_failed", event.keyValuePairs.valueOf("event.name"))
+        assertEquals("upstream_unavailable", event.keyValuePairs.valueOf("upstream.error"))
+        assertFalse(
+            event.keyValuePairs.valueOf("upstream.cause").isNullOrEmpty(),
+            "the cause class must be recorded for transport-vs-timeout metrics",
+        )
+        val logged = buildString {
+            append(event.formattedMessage)
+            event.keyValuePairs.forEach { pair -> append(' ').append(pair.key).append('=').append(pair.value) }
+        }
+        allSentinels.forEach { sentinel ->
+            assertFalse(logged.contains(sentinel), "sentinel $sentinel leaked into the upstream failure log")
+        }
+    }
+
+    @Test
+    fun `upstream failure mid response is logged structurally`() {
+        val events = CopyOnWriteArrayList<ILoggingEvent>()
+        val appender = object : AppenderBase<ILoggingEvent>() {
+            override fun append(event: ILoggingEvent) {
+                events += event
+            }
+        }.apply { start() }
+        val logger = LoggerFactory.getLogger(BypassProxyService::class.java) as Logger
+        logger.addAppender(appender)
+        try {
+            val stalledUpstream = startServer {
+                val streaming = HttpResponse.streaming()
+                streaming.write(ResponseHeaders.of(HttpStatus.OK))
+                streaming.write(HttpData.ofUtf8("partial "))
+                streaming
+            }
+            val gateway = startGateway(
+                serverUri(stalledUpstream),
+                WebClient.builder().responseTimeout(Duration.ofMillis(300)).build(),
+            )
+            val client = WebClient.builder(serverUri(gateway).toString())
+                .responseTimeout(Duration.ofSeconds(10))
+                .build()
+
+            runCatching { client.get("/v1/models").aggregate().join() }
+
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (events.isEmpty() && System.nanoTime() < deadline) Thread.sleep(50)
+            assertFalse(events.isEmpty(), "a mid-response upstream failure was not logged")
+        } finally {
+            logger.detachAppender(appender)
+            appender.stop()
+        }
+
+        val event = events.single()
+        assertEquals(Level.WARN, event.level)
+        assertEquals("upstream_request_failed", event.keyValuePairs.valueOf("event.name"))
+        assertEquals("upstream_timeout", event.keyValuePairs.valueOf("upstream.error"))
+        assertFalse(
+            event.keyValuePairs.valueOf("upstream.cause").isNullOrEmpty(),
+            "the cause class must be recorded for transport-vs-timeout metrics",
         )
     }
 
@@ -297,12 +491,27 @@ class BypassProxyServiceTest {
 
     private fun freePort(): Int = ServerSocket(0).use { it.localPort }
 
-    private fun startGateway(upstream: Server): Server =
+    /**
+     * Returns the value of the structured key-value pair with the given key.
+     */
+    private fun List<KeyValuePair>.valueOf(key: String): String? =
+        firstOrNull { it.key == key }?.value?.toString()
+
+    private fun startGateway(upstream: Server): Server = startGateway(serverUri(upstream), WebClient.of())
+
+    private fun startGateway(upstream: URI, client: WebClient): Server =
         Server.builder()
             .http(0)
-            .serviceUnder("/", BypassProxyService(serverUri(upstream), WebClient.of()))
+            .serviceUnder("/", BypassProxyService(upstream, client))
             .build()
             .startAndTrack()
+
+    /**
+     * Reserves a local port and releases it again, so the returned URI points at a
+     * port with no listener and any connection attempt to it is refused.
+     */
+    private fun deadUpstreamUri(): URI =
+        URI.create("http://127.0.0.1:${ServerSocket(0).use { it.localPort }}")
 
     private fun startServer(service: (HttpRequest) -> HttpResponse): Server =
         Server.builder()

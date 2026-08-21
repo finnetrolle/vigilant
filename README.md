@@ -55,6 +55,17 @@ vigilant {
 
 Недопустимая или неполная конфигурация: сообщение об ошибке в stderr и код завершения 2.
 
+## Стабильные proxy-ошибки upstream
+
+Когда upstream недоступен (отказ соединения, unknown host) или не отвечает за отведённый timeout, клиент получает стабильную proxy-ошибку без внутренних деталей Armeria: без имён классов, сообщений исключений и stack trace. Корректные HTTP-ответы upstream (включая 4xx/5xx) передаются без изменений.
+
+| Ситуация | Статус | Тело (`application/json`) |
+|---|---|---|
+| transport-сбой (отказ соединения, unknown host, некорректный HTTP upstream) | `502 Bad Gateway` | `{"error":"upstream_unavailable"}` |
+| upstream не ответил за response timeout | `504 Gateway Timeout` | `{"error":"upstream_timeout"}` |
+
+Каждая proxy-ошибка логируется одним структурным WARN-событием (`event.name=upstream_request_failed`, `upstream.error`, `upstream.cause`) без тел запросов/ответов, query string и auth-заголовков.
+
 ## Логирование
 
 У приложения ровно один logging sink: `stdout`. Файлы логов не создаются и не ротируются, по сети логи не отправляются - хранение, ротация и доставка в OpenTelemetry являются ответственностью Docker/container runtime и внешнего Collector.
