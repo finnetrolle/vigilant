@@ -26,6 +26,59 @@ VIGILANT_CONFIG=./vigilant.conf.example ./build/install/vigilant/bin/vigilant
 
 Недопустимая или неполная конфигурация: сообщение в stderr, код завершения 2.
 
+## OCI-образ
+
+Формат versioned артефакта зафиксирован как Gradle application distribution:
+один `build/distributions/vigilant-<version>.tar` с versioned JAR приложения,
+runtime-зависимостями и стартовым скриптом. Архив собирается одним target:
+
+```bash
+./gradlew ociArtifact
+```
+
+Multi-stage `Dockerfile` собирает тот же артефакт в чистом JDK 25 builder и
+переносит его в финальный JRE 25 образ. Оба базовых образа закреплены по digest.
+Локальная сборка образа выполняется одной командой:
+
+```bash
+docker build --tag vigilant:0.1.0-SNAPSHOT .
+```
+
+Запуск с конфигурацией через environment variables:
+
+```bash
+docker run --rm --name vigilant \
+  --publish 8080:8080 \
+  --stop-timeout 35 \
+  --env VIGILANT_UPSTREAM_URL=https://api.openai.com \
+  vigilant:0.1.0-SNAPSHOT
+```
+
+Запуск с HOCON-файлом, смонтированным read-only в стандартный путь поиска:
+
+```bash
+docker run --rm --name vigilant \
+  --publish 8080:8080 \
+  --stop-timeout 35 \
+  --mount type=bind,src="$(pwd)/vigilant.conf",dst=/etc/vigilant/vigilant.conf,readonly \
+  vigilant:0.1.0-SNAPSHOT
+```
+
+Контейнер работает от non-root UID/GID `10001`. `STOPSIGNAL SIGTERM` передаёт
+остановку JVM shutdown hook; timeout 35 секунд оставляет приложению его полный
+30-секундный graceful shutdown budget без последующего `SIGKILL`.
+
+Полный локальный smoke-тест требует Docker, `curl` и `python3`. Он собирает
+образ и проверяет env/file configuration, read-only mount, `/healthz`, реальное
+проксирование, non-root user, exit code 2 для невалидной конфигурации и
+остановку по SIGTERM:
+
+```bash
+./scripts/oci-smoke-test
+```
+
+Smoke-тест запускается явно и не входит в `./gradlew build` или CI.
+
 ## Конфигурация
 
 Vigilant настраивается HOCON-файлом и/или переменными окружения. Приоритет: переменные окружения > файл > значения по умолчанию.

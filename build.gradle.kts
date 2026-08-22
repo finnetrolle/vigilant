@@ -101,6 +101,17 @@ application {
     mainClass = "io.vigilant.gateway.MainKt"
 }
 
+tasks.named<Tar>("distTar") {
+    isPreserveFileTimestamps = false
+    isReproducibleFileOrder = true
+}
+
+tasks.register("ociArtifact") {
+    dependsOn("distTar")
+    group = "distribution"
+    description = "Builds the reproducible versioned distribution consumed by the OCI image."
+}
+
 tasks.test {
     useJUnitPlatform()
 }

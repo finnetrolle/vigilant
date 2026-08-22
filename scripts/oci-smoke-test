@@ -1,0 +1,175 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/vigilant-oci-smoke.XXXXXX")"
+IMAGE_TAG="vigilant:smoke-$$"
+CONTAINER_NAME="vigilant-smoke-$$"
+CONFIG_CONTAINER_NAME="${CONTAINER_NAME}-config"
+INVALID_CONTAINER_NAME="${CONTAINER_NAME}-invalid"
+UPSTREAM_PID=""
+CONTAINER_ID=""
+CONFIG_CONTAINER_ID=""
+
+cleanup() {
+    if [[ -n "$CONTAINER_ID" ]]; then
+        docker rm --force "$CONTAINER_ID" >/dev/null 2>&1 || true
+    fi
+    if [[ -n "$CONFIG_CONTAINER_ID" ]]; then
+        docker rm --force "$CONFIG_CONTAINER_ID" >/dev/null 2>&1 || true
+    fi
+    docker rm --force "$INVALID_CONTAINER_NAME" >/dev/null 2>&1 || true
+    if [[ -n "$UPSTREAM_PID" ]]; then
+        kill "$UPSTREAM_PID" >/dev/null 2>&1 || true
+        wait "$UPSTREAM_PID" >/dev/null 2>&1 || true
+    fi
+    docker image rm --force "$IMAGE_TAG" >/dev/null 2>&1 || true
+    rm -rf "$TMP_DIR"
+}
+
+trap cleanup EXIT
+
+for COMMAND in curl docker python3; do
+    if ! command -v "$COMMAND" >/dev/null 2>&1; then
+        echo "$COMMAND is required for the OCI smoke test" >&2
+        exit 1
+    fi
+done
+
+cd "$PROJECT_DIR"
+./gradlew --no-daemon ociArtifact
+
+ARTIFACT="$(find build/distributions -maxdepth 1 -type f -name 'vigilant-*.tar' -print -quit)"
+if [[ -z "$ARTIFACT" ]]; then
+    echo "ociArtifact did not produce build/distributions/vigilant-<version>.tar" >&2
+    exit 1
+fi
+
+mkdir -p "$TMP_DIR/upstream"
+printf 'proxied-by-vigilant\n' > "$TMP_DIR/upstream/proxy-smoke"
+python3 -u -c '
+import functools
+import http.server
+import sys
+
+handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=sys.argv[1])
+with http.server.ThreadingHTTPServer(("0.0.0.0", 0), handler) as server:
+    print(server.server_port, flush=True)
+    server.serve_forever()
+' "$TMP_DIR/upstream" >"$TMP_DIR/upstream.port" 2>"$TMP_DIR/upstream.log" &
+UPSTREAM_PID="$!"
+
+for _ in {1..40}; do
+    if [[ -s "$TMP_DIR/upstream.port" ]]; then
+        break
+    fi
+    sleep 0.25
+done
+UPSTREAM_PORT="$(head -n 1 "$TMP_DIR/upstream.port")"
+for _ in {1..40}; do
+    if curl --fail --silent "http://127.0.0.1:$UPSTREAM_PORT/proxy-smoke" >/dev/null; then
+        break
+    fi
+    sleep 0.25
+done
+curl --fail --silent "http://127.0.0.1:$UPSTREAM_PORT/proxy-smoke" >/dev/null
+
+docker build --tag "$IMAGE_TAG" .
+
+CONTAINER_UID="$(docker run --rm --entrypoint /usr/bin/id "$IMAGE_TAG" -u)"
+if [[ "$CONTAINER_UID" == "0" ]]; then
+    echo "OCI image must not run as root" >&2
+    exit 1
+fi
+
+CONTAINER_ID="$(
+    docker run --detach \
+        --name "$CONTAINER_NAME" \
+        --add-host host.docker.internal:host-gateway \
+        --env "VIGILANT_UPSTREAM_URL=http://host.docker.internal:$UPSTREAM_PORT" \
+        --publish 127.0.0.1::8080 \
+        "$IMAGE_TAG"
+)"
+GATEWAY_PORT="$(docker port "$CONTAINER_ID" 8080/tcp | sed -E 's/.*:([0-9]+)$/\1/' | head -n 1)"
+
+for _ in {1..120}; do
+    if curl --fail --silent "http://127.0.0.1:$GATEWAY_PORT/healthz" >/dev/null; then
+        break
+    fi
+    sleep 0.25
+done
+curl --fail --silent "http://127.0.0.1:$GATEWAY_PORT/healthz" >/dev/null
+
+PROXIED_BODY="$(curl --fail --silent "http://127.0.0.1:$GATEWAY_PORT/proxy-smoke")"
+if [[ "$PROXIED_BODY" != "proxied-by-vigilant" ]]; then
+    echo "unexpected proxied response: $PROXIED_BODY" >&2
+    exit 1
+fi
+
+docker stop --timeout 35 "$CONTAINER_ID" >/dev/null
+STOP_EXIT_CODE="$(docker inspect --format '{{.State.ExitCode}}' "$CONTAINER_ID")"
+if [[ "$STOP_EXIT_CODE" != "0" && "$STOP_EXIT_CODE" != "143" ]]; then
+    echo "gateway stopped with unexpected exit code $STOP_EXIT_CODE; expected 0 or SIGTERM code 143" >&2
+    exit 1
+fi
+docker rm "$CONTAINER_ID" >/dev/null
+CONTAINER_ID=""
+
+printf '%s\n' \
+    'vigilant {' \
+    "  upstream-url = \"http://host.docker.internal:$UPSTREAM_PORT\"" \
+    '  port = 8080' \
+    '}' \
+    > "$TMP_DIR/vigilant.conf"
+chmod 0444 "$TMP_DIR/vigilant.conf"
+
+CONFIG_CONTAINER_ID="$(
+    docker run --detach \
+        --name "$CONFIG_CONTAINER_NAME" \
+        --add-host host.docker.internal:host-gateway \
+        --mount "type=bind,src=$TMP_DIR/vigilant.conf,dst=/etc/vigilant/vigilant.conf,readonly" \
+        --publish 127.0.0.1::8080 \
+        "$IMAGE_TAG"
+)"
+CONFIG_MOUNT_RW="$(
+    docker inspect --format \
+        '{{range .Mounts}}{{if eq .Destination "/etc/vigilant/vigilant.conf"}}{{.RW}}{{end}}{{end}}' \
+        "$CONFIG_CONTAINER_ID"
+)"
+if [[ "$CONFIG_MOUNT_RW" != "false" ]]; then
+    echo "configuration file mount must be read-only" >&2
+    exit 1
+fi
+CONFIG_GATEWAY_PORT="$(
+    docker port "$CONFIG_CONTAINER_ID" 8080/tcp | sed -E 's/.*:([0-9]+)$/\1/' | head -n 1
+)"
+for _ in {1..120}; do
+    if curl --fail --silent "http://127.0.0.1:$CONFIG_GATEWAY_PORT/healthz" >/dev/null; then
+        break
+    fi
+    sleep 0.25
+done
+CONFIG_PROXIED_BODY="$(curl --fail --silent "http://127.0.0.1:$CONFIG_GATEWAY_PORT/proxy-smoke")"
+if [[ "$CONFIG_PROXIED_BODY" != "proxied-by-vigilant" ]]; then
+    echo "unexpected response with read-only configuration: $CONFIG_PROXIED_BODY" >&2
+    exit 1
+fi
+docker stop --timeout 35 "$CONFIG_CONTAINER_ID" >/dev/null
+docker rm "$CONFIG_CONTAINER_ID" >/dev/null
+CONFIG_CONTAINER_ID=""
+
+set +e
+docker run --name "$INVALID_CONTAINER_NAME" \
+    --env VIGILANT_UPSTREAM_URL=ftp://invalid.example \
+    "$IMAGE_TAG" >"$TMP_DIR/invalid-config.log" 2>&1
+INVALID_CONFIG_EXIT="$?"
+set -e
+if [[ "$INVALID_CONFIG_EXIT" != "2" ]]; then
+    echo "invalid configuration exited with $INVALID_CONFIG_EXIT instead of 2" >&2
+    cat "$TMP_DIR/invalid-config.log" >&2
+    exit 1
+fi
+docker rm "$INVALID_CONTAINER_NAME" >/dev/null
+
+echo "OCI smoke passed: artifact, env, read-only config, proxy, non-root, invalid config, SIGTERM"

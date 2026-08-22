@@ -2,7 +2,7 @@
 
 **ID:** `EPIC-05`
 **Тип:** Epic
-**Статус:** In progress
+**Статус:** Done
 **Приоритет:** High
 **Предварительная оценка:** 20-33 инженерных дня
 **Связанные требования:** `PROXY-01`, `PROXY-03`, `CONC-04`, `PERF-01`, `PERF-06`, Наблюдаемость, Поставка, критерии готовности v0 №2, №3, №4, №6
@@ -57,7 +57,7 @@ EPIC-05 v0 hardening
 - [x] [VIG-05-06: Correlation/trace ID и OTel traces](../issues/epic_05/issue_05_06_trace_id_otlp.md) - `Done`
 - [x] [VIG-05-07: OTel metrics прокси-трафика](../issues/epic_05/issue_05_07_otlp_metrics.md) - `Done`
 - [x] [VIG-05-08: Нагрузочный тест PERF-01](../issues/epic_05/issue_05_08_load_test.md) - `Done`
-- [ ] [VIG-05-09: OCI-образ поставки](../issues/epic_05/issue_05_09_oci_image.md) - `Ready for implementation`
+- [x] [VIG-05-09: OCI-образ поставки](../issues/epic_05/issue_05_09_oci_image.md) - `Done`
 
 Issues независимы: жёстких блокировок нет, frontier - все девять. Предпочтительный
 порядок (не блокировка): VIG-05-01 раньше VIG-05-05 и VIG-05-07, чтобы таймауты и
