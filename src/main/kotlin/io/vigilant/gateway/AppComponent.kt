@@ -6,17 +6,20 @@ import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.DependencyGraph
 import dev.zacsweers.metro.Provides
 import dev.zacsweers.metro.SingleIn
+import io.opentelemetry.api.trace.Tracer
+import io.opentelemetry.sdk.trace.SdkTracerProvider
 import java.net.URI
 import java.time.Duration
 
 /**
  * Application-wide dependency graph: configuration, the upstream [WebClient],
- * and the assembled Armeria [Server].
+ * the tracing SDK, and the assembled Armeria [Server].
  */
 @DependencyGraph(AppScope::class)
 interface AppComponent {
     val server: Server
     val readinessService: ReadinessService
+    val sdkTracerProvider: SdkTracerProvider
 
     companion object {
         @Provides
@@ -33,18 +36,33 @@ interface AppComponent {
 
         @Provides
         @SingleIn(AppScope::class)
+        fun sdkTracerProvider(appConfig: AppConfig): SdkTracerProvider =
+            buildSdkTracerProvider(appConfig.otlp)
+
+        @Provides
+        @SingleIn(AppScope::class)
+        fun tracer(sdkTracerProvider: SdkTracerProvider): Tracer =
+            sdkTracerProvider.get("io.vigilant.gateway")
+
+        @Provides
+        @SingleIn(AppScope::class)
+        fun tracingService(bypassProxyService: BypassProxyService, tracer: Tracer): TracingService =
+            TracingService(bypassProxyService, tracer)
+
+        @Provides
+        @SingleIn(AppScope::class)
         fun server(
             appConfig: AppConfig,
             livenessService: LivenessService,
             readinessService: ReadinessService,
-            bypassProxyService: BypassProxyService,
+            tracingService: TracingService,
         ): Server =
             Server.builder()
                 .http(appConfig.port)
                 .gracefulShutdownTimeout(GRACEFUL_SHUTDOWN_QUIET_PERIOD, GRACEFUL_SHUTDOWN_TIMEOUT)
                 .service("/healthz", livenessService)
                 .service("/readyz", readinessService)
-                .serviceUnder("/", bypassProxyService)
+                .serviceUnder("/", tracingService)
                 .build()
 
         /**

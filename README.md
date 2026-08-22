@@ -59,6 +59,8 @@ vigilant {
 - `VIGILANT_UPSTREAM_WRITE_TIMEOUT` - таймаут записи запроса в upstream, по умолчанию `30s`;
 - `VIGILANT_UPSTREAM_RESPONSE_TIMEOUT` - таймаут ответа upstream (модель - в разделе «Таймауты upstream-клиента»), по умолчанию `5m`;
 - `VIGILANT_UPSTREAM_CONNECTION_IDLE_TIMEOUT` - сколько простаивающее соединение к upstream живёт в пуле, по умолчанию `10s`;
+- `VIGILANT_OTLP_ENDPOINT` - базовый HTTP(S) endpoint OTLP-коллектора для экспорта traces; `/v1/traces` добавляется сам; без значения экспорт выключен;
+- `VIGILANT_OTLP_ENABLED` - выключатель OTLP-экспорта, по умолчанию `true`;
 - `VIGILANT_CONFIG` - путь к файлу конфигурации.
 
 Правило переопределения: любой ключ `vigilant.some-setting` из файла переопределяется переменной `VIGILANT_SOME_SETTING`.
@@ -77,6 +79,12 @@ vigilant {
 | upstream не ответил за response timeout | `504 Gateway Timeout` | `{"error":"upstream_timeout"}` |
 
 Каждая proxy-ошибка логируется одним структурным WARN-событием (`event.name=upstream_request_failed`, `upstream.error`, `upstream.cause`) без тел запросов/ответов, query string и auth-заголовков.
+
+## Трейсинг и correlation ID
+
+Каждый запрос получает correlation/trace ID: входящий W3C `traceparent` продолжается, без него gateway генерирует новый trace ID. Trace ID попадает в MDC (`trace_id`) каждой JSONL-строки логов, относящейся к запросу, и в span proxy-обмена с атрибутами метода, пути без query, статуса и длительностей `upstream.duration_ms`/`gateway.duration_ms`. Тела и auth-заголовки в span и логи не попадают.
+
+Экспорт traces через OTLP HTTP включается заданием `VIGILANT_OTLP_ENDPOINT` (базовый URL; `/v1/traces` добавляется автоматически) и выключается `VIGILANT_OTLP_ENABLED=false`. Без endpoint gateway работает как раньше: трейсинг и логи работают, экспорт выключен. На shutdown queued spans сбрасываются в коллектор.
 
 ## Таймауты upstream-клиента
 

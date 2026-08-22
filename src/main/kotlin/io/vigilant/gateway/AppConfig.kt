@@ -23,6 +23,7 @@ private const val UPSTREAM_CONNECT_TIMEOUT_ENV = "VIGILANT_UPSTREAM_CONNECT_TIME
 private const val UPSTREAM_WRITE_TIMEOUT_ENV = "VIGILANT_UPSTREAM_WRITE_TIMEOUT"
 private const val UPSTREAM_RESPONSE_TIMEOUT_ENV = "VIGILANT_UPSTREAM_RESPONSE_TIMEOUT"
 private const val UPSTREAM_CONNECTION_IDLE_TIMEOUT_ENV = "VIGILANT_UPSTREAM_CONNECTION_IDLE_TIMEOUT"
+private const val OTLP_ENDPOINT_ENV = "VIGILANT_OTLP_ENDPOINT"
 private const val DEFAULT_CONNECT_TIMEOUT_SECONDS = 10L
 private const val DEFAULT_WRITE_TIMEOUT_SECONDS = 30L
 private const val DEFAULT_RESPONSE_TIMEOUT_SECONDS = 300L
@@ -72,11 +73,27 @@ private val DEFAULT_CONFIG_PATHS: List<Path> = listOf(
  * @param upstreamUri validated absolute HTTP(S) URL of the upstream service.
  * @param port HTTP port the gateway listens on.
  * @param upstream validated timeouts and pooling settings of the upstream client.
+ * @param otlp OTLP export settings; traces are always traced locally, export is
+ *   active only when [OtlpSettings.enabled] is `true` and an endpoint is set.
  */
 data class AppConfig(
     val upstreamUri: URI,
     val port: Int,
     val upstream: UpstreamClientSettings,
+    val otlp: OtlpSettings,
+)
+
+/**
+ * Validated OTLP export settings (spec observability: OTLP exporter configured
+ * via `env > file > defaults`, export off when no endpoint is set).
+ *
+ * @param enabled whether OTLP export is enabled; `true` by default.
+ * @param endpoint base endpoint of the OTLP HTTP collector, or `null` when
+ *   unset, which keeps the export off.
+ */
+data class OtlpSettings(
+    val enabled: Boolean,
+    val endpoint: URI?,
 )
 
 /**
@@ -113,6 +130,8 @@ internal data class VigilantSettings(
     val upstreamWriteTimeout: Duration = DEFAULT_UPSTREAM_WRITE_TIMEOUT,
     val upstreamResponseTimeout: Duration = DEFAULT_UPSTREAM_RESPONSE_TIMEOUT,
     val upstreamConnectionIdleTimeout: Duration = DEFAULT_UPSTREAM_CONNECTION_IDLE_TIMEOUT,
+    val otlpEnabled: Boolean = true,
+    val otlpEndpoint: String? = null,
 )
 
 /**
@@ -177,6 +196,12 @@ internal fun loadAppConfig(
                 UPSTREAM_RESPONSE_TIMEOUT_ENV,
                 root.vigilant.upstreamResponseTimeout,
             ),
+        ),
+        otlp = OtlpSettings(
+            enabled = root.vigilant.otlpEnabled,
+            endpoint = root.vigilant.otlpEndpoint
+                ?.takeUnless(String::isBlank)
+                ?.let(::validatedOtlpEndpoint),
         ),
     )
 }
@@ -262,6 +287,32 @@ internal fun validatedPort(port: Int): Int {
 internal fun validatedPositiveDuration(envName: String, value: Duration): Duration {
     require(value > Duration.ZERO) { "$envName must be a positive duration, was: $value" }
     return value
+}
+
+/**
+ * Validates the OTLP collector endpoint.
+ *
+ * @param rawEndpoint decoded value of `vigilant.otlp-endpoint`, from the environment or the file.
+ * @return the validated [URI] of the OTLP collector.
+ * @throws IllegalArgumentException if [rawEndpoint] is not an absolute HTTP(S) URL, or carries user
+ * info, a query, or a fragment.
+ */
+internal fun validatedOtlpEndpoint(rawEndpoint: String): URI =
+    URI.create(rawEndpoint).also(::validateOtlpEndpoint)
+
+/**
+ * Validates that [uri] is an absolute HTTP(S) URL without user info, query, or fragment;
+ * a path is allowed because OTLP collectors may live under a base path.
+ *
+ * @throws IllegalArgumentException if [uri] fails validation.
+ */
+private fun validateOtlpEndpoint(uri: URI) {
+    require(uri.isAbsolute && uri.scheme in setOf("http", "https") && uri.host != null) {
+        "$OTLP_ENDPOINT_ENV must contain an absolute HTTP(S) URL"
+    }
+    require(uri.rawUserInfo == null && uri.rawQuery == null && uri.rawFragment == null) {
+        "$OTLP_ENDPOINT_ENV must not contain user info, query, or fragment"
+    }
 }
 
 /**

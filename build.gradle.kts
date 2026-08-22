@@ -19,9 +19,12 @@ repositories {
 }
 
 dependencies {
+    implementation(platform(libs.opentelemetry.bom))
     implementation(libs.armeria)
     implementation(libs.hoplite.core)
     implementation(libs.hoplite.hocon)
+    implementation(libs.opentelemetry.sdk)
+    implementation(libs.opentelemetry.exporter.otlp)
     implementation(libs.slf4j.api)
     implementation(libs.logback.classic)
 

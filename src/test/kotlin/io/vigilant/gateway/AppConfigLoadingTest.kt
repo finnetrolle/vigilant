@@ -256,6 +256,71 @@ class AppConfigLoadingTest {
     }
 
     @Test
+    fun `otlp settings default to enabled without endpoint`() {
+        val config = loadAppConfig(
+            env = mapOf("VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081"),
+            defaultConfigPaths = emptyList(),
+        )
+
+        assertEquals(OtlpSettings(enabled = true, endpoint = null), config.otlp)
+    }
+
+    @Test
+    fun `environment overrides otlp endpoint and enabled`() {
+        val config = loadAppConfig(
+            env = mapOf(
+                "VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081",
+                "VIGILANT_OTLP_ENDPOINT" to "http://collector:4318",
+                "VIGILANT_OTLP_ENABLED" to "false",
+            ),
+            defaultConfigPaths = emptyList(),
+        )
+
+        assertEquals(OtlpSettings(enabled = false, endpoint = URI("http://collector:4318")), config.otlp)
+    }
+
+    @Test
+    fun `otlp endpoint from hocon file is loaded`() {
+        val file = writeConfig(
+            """
+            vigilant {
+              upstream-url = "http://127.0.0.1:18081"
+              otlp-endpoint = "http://collector:4318/telemetry"
+            }
+            """.trimIndent(),
+        )
+
+        val config = loadAppConfig(
+            env = mapOf("VIGILANT_CONFIG" to file.toString()),
+            defaultConfigPaths = emptyList(),
+        )
+
+        assertEquals(OtlpSettings(enabled = true, endpoint = URI("http://collector:4318/telemetry")), config.otlp)
+    }
+
+    @Test
+    fun `environment overrides file for otlp endpoint`() {
+        val file = writeConfig(
+            """
+            vigilant {
+              upstream-url = "http://127.0.0.1:18081"
+              otlp-endpoint = "http://file-collector:4318"
+            }
+            """.trimIndent(),
+        )
+
+        val config = loadAppConfig(
+            env = mapOf(
+                "VIGILANT_CONFIG" to file.toString(),
+                "VIGILANT_OTLP_ENDPOINT" to "http://env-collector:4318",
+            ),
+            defaultConfigPaths = emptyList(),
+        )
+
+        assertEquals(URI("http://env-collector:4318"), config.otlp.endpoint)
+    }
+
+    @Test
     fun `upstream client timeout defaults are applied when absent`() {
         val config = loadAppConfig(
             env = mapOf("VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081"),
@@ -346,6 +411,34 @@ class AppConfigLoadingTest {
             exception.message!!.contains("upstreamConnectTimeout"),
             "error must name the offending field, was: ${exception.message}",
         )
+    }
+
+    @Test
+    fun `non http otlp endpoint fails with validation message`() {
+        val exception = assertFailsWith<IllegalArgumentException> {
+            loadAppConfig(
+                env = mapOf(
+                    "VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081",
+                    "VIGILANT_OTLP_ENDPOINT" to "ftp://collector:4318",
+                ),
+                defaultConfigPaths = emptyList(),
+            )
+        }
+        assertEquals("VIGILANT_OTLP_ENDPOINT must contain an absolute HTTP(S) URL", exception.message)
+    }
+
+    @Test
+    fun `otlp endpoint with query fails`() {
+        val exception = assertFailsWith<IllegalArgumentException> {
+            loadAppConfig(
+                env = mapOf(
+                    "VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081",
+                    "VIGILANT_OTLP_ENDPOINT" to "http://collector:4318?v=1",
+                ),
+                defaultConfigPaths = emptyList(),
+            )
+        }
+        assertEquals("VIGILANT_OTLP_ENDPOINT must not contain user info, query, or fragment", exception.message)
     }
 
     private fun writeConfig(content: String): Path =

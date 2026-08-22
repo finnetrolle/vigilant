@@ -1,5 +1,6 @@
 package io.vigilant.gateway
 
+import java.net.URI
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -24,6 +25,26 @@ class MainTest {
 
         assertFailsWith<IllegalArgumentException> { validatedPort(0) }
         assertFailsWith<IllegalArgumentException> { validatedPort(65536) }
+    }
+
+    @Test
+    fun `resolves otlp trace endpoint from configured base endpoint`() {
+        assertEquals(
+            URI("http://collector:4318/v1/traces"),
+            resolveTracesEndpoint(URI("http://collector:4318")),
+        )
+        assertEquals(
+            URI("https://collector/tel/v1/traces"),
+            resolveTracesEndpoint(URI("https://collector/tel")),
+        )
+        assertEquals(
+            URI("http://collector:4318/v1/traces"),
+            resolveTracesEndpoint(URI("http://collector:4318/v1/traces")),
+        )
+        assertEquals(
+            URI("http://collector:4318/v1/traces/"),
+            resolveTracesEndpoint(URI("http://collector:4318/v1/traces/")),
+        )
     }
 
     @Test

@@ -18,6 +18,7 @@ import dev.zacsweers.metro.Inject
 import dev.zacsweers.metro.SingleIn
 import java.net.URI
 import org.slf4j.LoggerFactory
+import org.slf4j.MDC
 
 @SingleIn(AppScope::class)
 @Inject
@@ -48,7 +49,7 @@ class BypassProxyService(
         val upstreamResponse = upstream.execute(outbound)
             .mapHeaders(::rewriteResponseHeaders)
         upstreamResponse.whenComplete().whenComplete { _, cause ->
-            if (cause != null) logUpstreamFailure(request, cause)
+            if (cause != null) logUpstreamFailure(ctx, request, cause)
         }
         return HttpResponse.of(
             upstreamResponse.recover { cause -> upstreamError(cause) },
@@ -58,14 +59,28 @@ class BypassProxyService(
     /**
      * Logs a failed upstream exchange as a structured event without bodies, query
      * strings, or auth headers, keeping the cause class distinguishable for
-     * metrics.
+     * metrics. The trace ID of the exchange, when [TracingService] published one
+     * into the context, is put into the MDC for the duration of the log call so
+     * the JSONL line correlates with the span.
      */
-    private fun logUpstreamFailure(request: HttpRequest, cause: Throwable) {
-        logger.atWarn()
-            .addKeyValue("event.name", "upstream_request_failed")
-            .addKeyValue("upstream.error", UpstreamFailure.from(cause).code)
-            .addKeyValue("upstream.cause", cause.javaClass.simpleName)
-            .log("upstream request failed: ${request.method()} ${pathWithoutQuery(request.path())}")
+    private fun logUpstreamFailure(
+        ctx: ServiceRequestContext,
+        request: HttpRequest,
+        cause: Throwable,
+    ) {
+        val traceId = ctx.attr(RequestTracing.TRACE_ID)
+        val logEvent = {
+            logger.atWarn()
+                .addKeyValue("event.name", "upstream_request_failed")
+                .addKeyValue("upstream.error", UpstreamFailure.from(cause).code)
+                .addKeyValue("upstream.cause", cause.javaClass.simpleName)
+                .log("upstream request failed: ${request.method()} ${pathWithoutQuery(request.path())}")
+        }
+        if (traceId == null) {
+            logEvent()
+        } else {
+            MDC.putCloseable(RequestTracing.TRACE_ID_MDC_KEY, traceId).use { logEvent() }
+        }
     }
 
     /**
@@ -77,11 +92,6 @@ class BypassProxyService(
         val failure = UpstreamFailure.from(cause)
         return proxyError(failure.status, failure.code)
     }
-
-    /**
-     * Strips the query string, which may carry secrets, from the logged path.
-     */
-    private fun pathWithoutQuery(path: String): String = path.substringBefore('?')
 
     /**
      * Builds the stable proxy error response for the given status and error code.
