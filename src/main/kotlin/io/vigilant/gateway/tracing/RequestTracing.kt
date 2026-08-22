@@ -1,4 +1,4 @@
-package io.vigilant.gateway
+package io.vigilant.gateway.tracing
 
 import io.netty.util.AttributeKey
 

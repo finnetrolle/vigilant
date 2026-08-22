@@ -1,4 +1,4 @@
-package io.vigilant.gateway
+package io.vigilant.gateway.tracing
 
 import com.linecorp.armeria.client.WebClient
 import com.linecorp.armeria.common.HttpData
@@ -17,6 +17,8 @@ import io.opentelemetry.sdk.common.CompletableResultCode
 import io.opentelemetry.sdk.trace.SdkTracerProvider
 import io.opentelemetry.sdk.trace.data.SpanData
 import io.opentelemetry.sdk.trace.export.SpanExporter
+import io.vigilant.gateway.GatewayTestFixture
+import io.vigilant.gateway.proxy.BypassProxyService
 import java.time.Duration
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.AfterTest

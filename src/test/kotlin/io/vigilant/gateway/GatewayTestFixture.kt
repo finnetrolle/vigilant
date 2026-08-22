@@ -8,6 +8,8 @@ import com.linecorp.armeria.common.HttpRequest
 import com.linecorp.armeria.common.HttpResponse
 import com.linecorp.armeria.server.Server
 import io.opentelemetry.api.trace.Tracer
+import io.vigilant.gateway.proxy.BypassProxyService
+import io.vigilant.gateway.tracing.TracingService
 import java.net.URI
 import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap

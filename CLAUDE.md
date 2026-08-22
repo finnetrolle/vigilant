@@ -19,7 +19,7 @@ The current codebase is **v0: a transparent bypass proxy**. It forwards all HTTP
 ```bash
 ./gradlew build                 # compile + tests
 ./gradlew test                  # tests only
-./gradlew test --tests "io.vigilant.gateway.BypassProxyServiceTest"  # single test class
+./gradlew test --tests "io.vigilant.gateway.proxy.BypassProxyServiceTest"  # single test class
 ./gradlew installDist           # build distributable into build/install/vigilant/
 
 # Run env-only (VIGILANT_UPSTREAM_URL is required; VIGILANT_PORT optional, default 8080)
@@ -88,12 +88,12 @@ Stack: Kotlin 2.4.10, JVM toolchain 25, Armeria (HTTP server + client), Metro DI
 
 Request path: `Client -> Armeria Server -> BypassProxyService -> WebClient -> Upstream`.
 
-Key files (all in `src/main/kotlin/io/vigilant/gateway/`):
+Key files (under `src/main/kotlin/io/vigilant/gateway/`, split into the subpackages `config`, `proxy`, `health`, and `tracing` plus the composition root):
 
-- `BypassProxyService.kt` - catch-all `HttpService`. Rewrites headers via `rewriteRequestHeaders` (sets upstream scheme/authority/path, strips hop-by-hop headers including those named in `Connection`) and `rewriteResponseHeaders` (strips hop-by-hop). The body is never aggregated - `HttpRequest`/`HttpResponse` stay streaming publishers end to end, which is what keeps streaming responses and backpressure working (spec PROXY-01).
-- `AppConfig.kt` - config loading via Hoplite: optional HOCON file (`VIGILANT_CONFIG`, else `./vigilant.conf`, else `/etc/vigilant/vigilant.conf`) with `VIGILANT_*` env overrides on top (env > file > defaults), then post-decode validation (`loadAppConfig`, `validatedUpstreamUri`, `validatedPort`). Unit-tested directly without a running server.
+- `proxy/BypassProxyService.kt` - catch-all `HttpService`. Rewrites headers via `rewriteRequestHeaders` (sets upstream scheme/authority/path, strips hop-by-hop headers including those named in `Connection`) and `rewriteResponseHeaders` (strips hop-by-hop). The body is never aggregated - `HttpRequest`/`HttpResponse` stay streaming publishers end to end, which is what keeps streaming responses and backpressure working (spec PROXY-01).
+- `config/AppConfig.kt` - config loading via Hoplite: optional HOCON file (`VIGILANT_CONFIG`, else `./vigilant.conf`, else `/etc/vigilant/vigilant.conf`) with `VIGILANT_*` env overrides on top (env > file > defaults), then post-decode validation (`loadAppConfig`, `validatedUpstreamUri`, `validatedPort`). Unit-tested directly without a running server.
 - `AppComponent.kt` - Metro `@DependencyGraph(AppScope::class)`. Providers live in the companion object; the graph also assembles the Armeria `Server`. New injectable classes use `dev.zacsweers.metro.Inject` / `@SingleIn(AppScope::class)` (not `javax.inject` - Metro does not ship it, and `dev.zacsweers.metro.Singleton` does not exist).
-- `LivenessService.kt` / `ReadinessService.kt` - gateway-owned probes registered before the catch-all and never proxied upstream: `/healthz` answers `200` while the server accepts connections; `/readyz` answers `200` when ready and `503` once the shutdown hook has called `ReadinessService.markNotReady()`, before the server actually closes (enabled by a graceful shutdown timeout on the `Server`).
+- `health/LivenessService.kt` / `health/ReadinessService.kt` - gateway-owned probes registered before the catch-all and never proxied upstream: `/healthz` answers `200` while the server accepts connections; `/readyz` answers `200` when ready and `503` once the shutdown hook has called `ReadinessService.markNotReady()`, before the server actually closes (enabled by a graceful shutdown timeout on the `Server`).
 - `Main.kt` - builds the graph, registers a shutdown hook that marks readiness as draining and then stops the server gracefully, blocks until the server closes.
 
 Tests spin up real Armeria servers on ephemeral ports (`http(0)`) and proxy through them - keep this E2E style for proxy behavior changes.

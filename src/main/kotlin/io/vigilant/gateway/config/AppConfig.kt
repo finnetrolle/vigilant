@@ -1,4 +1,4 @@
-package io.vigilant.gateway
+package io.vigilant.gateway.config
 
 import com.sksamuel.hoplite.ConfigLoaderBuilder
 import com.sksamuel.hoplite.ExperimentalHoplite

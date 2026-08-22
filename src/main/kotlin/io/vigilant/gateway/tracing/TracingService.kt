@@ -1,4 +1,4 @@
-package io.vigilant.gateway
+package io.vigilant.gateway.tracing
 
 import com.linecorp.armeria.common.HttpRequest
 import com.linecorp.armeria.common.HttpResponse

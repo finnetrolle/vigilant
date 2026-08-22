@@ -1,4 +1,4 @@
-package io.vigilant.gateway
+package io.vigilant.gateway.proxy
 
 import com.linecorp.armeria.client.ResponseTimeoutException
 import com.linecorp.armeria.client.WebClient
@@ -16,6 +16,8 @@ import com.linecorp.armeria.server.ServiceRequestContext
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.Inject
 import dev.zacsweers.metro.SingleIn
+import io.vigilant.gateway.tracing.RequestTracing
+import io.vigilant.gateway.tracing.pathWithoutQuery
 import java.net.URI
 import org.slf4j.LoggerFactory
 import org.slf4j.MDC

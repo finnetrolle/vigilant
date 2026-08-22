@@ -1,4 +1,4 @@
-package io.vigilant.gateway
+package io.vigilant.gateway.proxy
 
 import com.linecorp.armeria.client.WebClient
 import com.linecorp.armeria.common.HttpData
@@ -7,6 +7,7 @@ import com.linecorp.armeria.common.HttpResponse
 import com.linecorp.armeria.common.HttpStatus
 import com.linecorp.armeria.common.ResponseHeaders
 import com.linecorp.armeria.server.Server
+import io.vigilant.gateway.config.loadAppConfig
 import java.net.URI
 import java.time.Duration
 import kotlin.concurrent.thread

@@ -8,6 +8,14 @@ import dev.zacsweers.metro.Provides
 import dev.zacsweers.metro.SingleIn
 import io.opentelemetry.api.trace.Tracer
 import io.opentelemetry.sdk.trace.SdkTracerProvider
+import io.vigilant.gateway.config.AppConfig
+import io.vigilant.gateway.config.loadAppConfig
+import io.vigilant.gateway.health.LivenessService
+import io.vigilant.gateway.health.ReadinessService
+import io.vigilant.gateway.proxy.BypassProxyService
+import io.vigilant.gateway.proxy.buildUpstreamWebClient
+import io.vigilant.gateway.tracing.TracingService
+import io.vigilant.gateway.tracing.buildSdkTracerProvider
 import java.net.URI
 import java.time.Duration
 

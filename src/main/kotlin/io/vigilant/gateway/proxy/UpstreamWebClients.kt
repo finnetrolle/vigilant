@@ -1,9 +1,10 @@
-package io.vigilant.gateway
+package io.vigilant.gateway.proxy
 
 import com.linecorp.armeria.client.ClientFactory
 import com.linecorp.armeria.client.DecoratingHttpClientFunction
 import com.linecorp.armeria.client.WebClient
 import com.linecorp.armeria.common.util.TimeoutMode
+import io.vigilant.gateway.config.UpstreamClientSettings
 import java.time.Duration
 
 /**

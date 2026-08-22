@@ -1,4 +1,4 @@
-package io.vigilant.gateway
+package io.vigilant.gateway.proxy
 
 import com.linecorp.armeria.client.WebClient
 import com.linecorp.armeria.common.HttpData

@@ -1,6 +1,7 @@
-package io.vigilant.gateway
+package io.vigilant.gateway.tracing
 
 import io.opentelemetry.exporter.otlp.http.trace.OtlpHttpSpanExporter
+import io.vigilant.gateway.config.OtlpSettings
 import java.net.URI
 import io.opentelemetry.sdk.resources.Resource
 import io.opentelemetry.sdk.trace.SdkTracerProvider

@@ -1,4 +1,4 @@
-package io.vigilant.gateway
+package io.vigilant.gateway.config
 
 import java.net.URI
 import java.nio.file.Files
@@ -439,6 +439,25 @@ class AppConfigLoadingTest {
             )
         }
         assertEquals("VIGILANT_OTLP_ENDPOINT must not contain user info, query, or fragment", exception.message)
+    }
+
+    @Test
+    fun `validates upstream uri`() {
+        assertEquals("https", validatedUpstreamUri("https://example.com").scheme)
+
+        assertFailsWith<IllegalArgumentException> { validatedUpstreamUri("") }
+        assertFailsWith<IllegalArgumentException> { validatedUpstreamUri("ftp://example.com") }
+        assertFailsWith<IllegalArgumentException> {
+            validatedUpstreamUri("https://user@example.com/path?query=true")
+        }
+    }
+
+    @Test
+    fun `validates port`() {
+        assertEquals(9090, validatedPort(9090))
+
+        assertFailsWith<IllegalArgumentException> { validatedPort(0) }
+        assertFailsWith<IllegalArgumentException> { validatedPort(65536) }
     }
 
     private fun writeConfig(content: String): Path =

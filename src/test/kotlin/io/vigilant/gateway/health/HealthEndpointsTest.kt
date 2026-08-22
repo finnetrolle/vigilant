@@ -1,4 +1,4 @@
-package io.vigilant.gateway
+package io.vigilant.gateway.health
 
 import com.linecorp.armeria.client.WebClient
 import com.linecorp.armeria.common.HttpRequest
@@ -6,6 +6,8 @@ import com.linecorp.armeria.common.HttpResponse
 import com.linecorp.armeria.common.HttpStatus
 import com.linecorp.armeria.common.MediaType
 import com.linecorp.armeria.server.Server
+import io.vigilant.gateway.AppComponent
+import io.vigilant.gateway.proxy.BypassProxyService
 import java.net.URI
 import java.net.ServerSocket
 import java.util.concurrent.CopyOnWriteArrayList
