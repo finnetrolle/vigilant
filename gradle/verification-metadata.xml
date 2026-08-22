@@ -10,12 +10,10 @@
       <ignored-keys>
          <ignored-key id="0374CF2E8DD1BDFD" reason="Key couldn't be downloaded from any key server"/>
          <ignored-key id="075DEF3EF14F0793" reason="Key couldn't be downloaded from any key server"/>
-         <ignored-key id="0AF99366B4D6DE14" reason="Key couldn't be downloaded from any key server"/>
          <ignored-key id="0DA8A5EC02D11EAD" reason="Key couldn't be downloaded from any key server"/>
          <ignored-key id="28F57F70167C0B3A" reason="Key couldn't be downloaded from any key server"/>
          <ignored-key id="2B183B279DFD639E" reason="Key couldn't be downloaded from any key server"/>
          <ignored-key id="3D5839A2262CBBFB" reason="Key couldn't be downloaded from any key server"/>
-         <ignored-key id="530AA5F25C25011F" reason="Key couldn't be downloaded from any key server"/>
          <ignored-key id="55C7E5E701832382" reason="Key couldn't be downloaded from any key server"/>
          <ignored-key id="58BD11D32974088F" reason="Key couldn't be downloaded from any key server"/>
          <ignored-key id="6A65176A0FB1CD0B" reason="Key couldn't be downloaded from any key server"/>
@@ -35,18 +33,26 @@
          <ignored-key id="FF844A3256C7FB01" reason="Key couldn't be downloaded from any key server"/>
       </ignored-keys>
       <trusted-keys>
+         <trusted-key id="0181A4828FA27B6BE6F1F5A68611CD28F472E006" group="org.codehaus.plexus" name="plexus-utils" version="4.0.3"/>
+         <trusted-key id="052D3458525080E1C1F9DEB07CF1897E6E834E59" group="org.scala-lang.modules" name="scala-parser-combinators_2.13" version="2.4.0"/>
          <trusted-key id="066263ABA3F9AA7BC0A1087D40B4D7ECFEAF091D" group="org.eclipse.parsson"/>
          <trusted-key id="06D0369BE1D0B06997DA66E8C33B56C147B01975" group="org.sonarsource.scanner.gradle" name="sonarqube-gradle-plugin" version="7.4.0.8496"/>
          <trusted-key id="09939C73246B4BA7444CAA453D002DBC5EA9615F" group="dev.drewhamilton.poko"/>
          <trusted-key id="0D35D3F60078655126908E8AF3D1600878E85A3D" group="io.netty"/>
          <trusted-key id="10F3C7A02ECA55E502BADCF3991EFB94DB91127D" group="org.ow2" name="ow2" version="1.5.1"/>
+         <trusted-key id="140B427C0E8CADFA005124FDF9E31246D0BA1E40" group="com.eatthepath" name="fast-uuid" version="0.2.0"/>
+         <trusted-key id="16FFFF8AD10219BC78B42B18243FBB4D5814C621" group="net.jodah" name="typetools" version="0.6.3"/>
          <trusted-key id="1D217F8475EEE9F19AB8DD6B793FD5751A0F0780" group="^com[.]squareup($|([.].*))" regex="true"/>
          <trusted-key id="1D85469D8559C2E1DF5F925131D2D79DF7E85DD3" group="org.jcommander" name="jcommander" version="1.85"/>
+         <trusted-key id="1FA868A348719E88B6D0DE24C03EF1D7D692BCFF" group="org.scala-lang" name="scala-reflect"/>
+         <trusted-key id="1FCFFE916B6670868FA0EA0391AE1504568EC4DD" group="org.jodd"/>
          <trusted-key id="259A55407DD6C00299E6607EFFDE55BE73A2D1ED">
             <trusting group="io.github.jeremylong"/>
             <trusting group="org.owasp"/>
          </trusted-key>
          <trusted-key id="28118C070CB22A0175A2E8D43D12CA2AC19F3181" group="^com[.]fasterxml($|([.].*))" regex="true"/>
+         <trusted-key id="2A5E8B338438CAC7033F9D8FB8A045C0A6EC398E" group="org.scala-lang" name="scala-library" version="2.13.18"/>
+         <trusted-key id="2AE829FFCC287A9A928029B8C14C3EEACA43FCA9" group="io.suzaku" name="boopickle_2.13" version="1.5.0"/>
          <trusted-key id="2D2F3E7BAB60EDC51AEB4531419A28E3A649A40B" group="com.kichik.pecoff4j" name="pecoff4j" version="0.4.1"/>
          <trusted-key id="2DB4F1EF0FA761ECC4EA935C86FDC7E2A11262CB">
             <trusting group="commons-codec"/>
@@ -63,13 +69,22 @@
          </trusted-key>
          <trusted-key id="41CD49B4EF5876F9E9F691DABAC30622339994C4" group="org.jspecify" name="jspecify" version="1.0.0"/>
          <trusted-key id="44FBDBBC1A00FE414F1C1873586654072EAD6677" group="org.sonatype.oss" name="oss-parent" version="9"/>
+         <trusted-key id="4548945A7793445B67F8F8723B17BFC1FCC1B644" group="io.pebbletemplates"/>
          <trusted-key id="45B1912987CB9DFA6A0D9693067091F1549B293F" group="org.semver4j" name="semver4j" version="5.8.0"/>
+         <trusted-key id="475F3B8E59E6E63AA78067482C7B12F2A511E325" group="org.slf4j"/>
          <trusted-key id="48B086A7D843CFA258E83286928FBF39003C0425" group="io.micrometer"/>
+         <trusted-key id="4C5F68D09D42BA7FAC888DF9A929EA2321FDBF8F">
+            <trusting group="net.sf.saxon"/>
+            <trusting group="org.xmlresolver"/>
+         </trusted-key>
+         <trusted-key id="4E25DCAF7FE5F10D7228309DBD646D93190A1F12" group="org.simpleflatmapper"/>
          <trusted-key id="4F7E32D440EF90A83011A8FC6425559C47CC79C4">
             <trusting group="javax.activation"/>
             <trusting group="javax.ws.rs"/>
          </trusted-key>
          <trusted-key id="50A628FFAF58480736B1079FD1031D14464180E0" group="org.reactivestreams" name="reactive-streams" version="1.0.4"/>
+         <trusted-key id="5470DFCDA4CB06EE1890118B28BE55DFA0E95B3D" group="^io[.]gatling($|([.].*))" regex="true"/>
+         <trusted-key id="5B51871EA3910573DCD83A1B0AF99366B4D6DE14" group="com.aayushatharva.brotli4j"/>
          <trusted-key id="5D283C23D9D9DC2D9C2130E6AADF2C18DCF95764">
             <trusting group="com.github.package-url"/>
             <trusting group="us.springett"/>
@@ -78,32 +93,52 @@
             <trusting group="ch.qos.logback"/>
             <trusting group="org.slf4j"/>
          </trusted-key>
+         <trusted-key id="635EE627345F3C1DD422B2E207D3516820BCF6B1" group="com.github.ben-manes.caffeine" name="caffeine" version="3.2.4"/>
+         <trusted-key id="6CFDF5062176DE9FB05578013C45A82BD53DADD4" group="io.github.metarank" name="cfor_2.13" version="0.3"/>
          <trusted-key id="6F538074CCEBF35F28AF9B066A0975F8B1127B83" group="org.jetbrains.kotlin"/>
          <trusted-key id="6F9D10E747DC79485ABB4F72B709E61252F136DD" group="org.apache.velocity"/>
          <trusted-key id="70CD19BFD9F6C330027D6F260315BFB7970A144F" group="javax.xml.bind"/>
+         <trusted-key id="71802A809F3BF4F890FB57FBBA49EC255A5759E8" group="net.debasishg" name="redisclient_2.13" version="3.42"/>
          <trusted-key id="719F7C29985A8E95F58F47194D8159D6A1159B69" group="dev.zacsweers.metro"/>
          <trusted-key id="7616EB882DAF57A11477AAF559A252FB1199D873" group="com.google.code.findbugs" name="jsr305" version="3.0.2"/>
          <trusted-key id="7B121B76A7ED6CE6E60AD51784E913A8E3A748C0" group="org.bouncycastle"/>
+         <trusted-key id="839323A4780D5BF9A6978970152888E10EF880B3" group="org.unbescape" name="unbescape" version="1.1.6.RELEASE"/>
          <trusted-key id="839B8C32286C100BDB08F5522EB9468288817402" group="org.apache.commons"/>
          <trusted-key id="84789D24DF77A32433CE1F079EB80E92EB2135B1" group="org.apache" name="apache"/>
          <trusted-key id="84A57AA4E0A825D5D57BB4EF0548F2E9D52EC853" group="info.solidsoft.gradle.pitest" name="gradle-pitest-plugin" version="1.19.0"/>
          <trusted-key id="8569C95CADC508B09FE90F3002216ED811210DAA" group="io.github.detekt.sarif4k"/>
          <trusted-key id="8756C4F765C9AC3CB6B85D62379CE192D401AB61" group="org.jetbrains.intellij.deps" name="trove4j" version="1.0.20200330"/>
          <trusted-key id="8E3A02905A1AE67E7B0F9ACD3967D4EDA591B991" group="org.jetbrains.kotlinx" name="kotlinx-html-jvm" version="0.8.1"/>
+         <trusted-key id="9857C388D7D1D9D031274CD0A5DEF5A76F94A471" group="com.github.spotbugs" name="spotbugs-annotations" version="4.9.0"/>
+         <trusted-key id="A1483F88BA771993AB609C43590C2310CEE1C9BE" group="jakarta.jms" name="jakarta.jms-api" version="3.1.0"/>
          <trusted-key id="A22931805BEA371C4B607CD9CCC16740C5666D5A" group="com.github.spullara.mustache.java"/>
          <trusted-key id="A413F67D71BEEC23ADD0CE0ACB43338E060CF9FA" group="org.jacoco"/>
          <trusted-key id="A5BD02B93E7A40482EB1D66A5F69AD087600B22C" group="org.ow2.asm"/>
          <trusted-key id="AA70C7C433D501636392EC02153E7A3C2B4E5118" group="org.eclipse.ee4j" name="project"/>
+         <trusted-key id="B15474418972C26277AD2185DE3B15B43EDFE54B" group="com.tdunning"/>
          <trusted-key id="B41089A2DA79B0FA5810252872385FF0AF338D52" group="joda-time" name="joda-time" version="2.14.2"/>
          <trusted-key id="BDB5FA4FE719D787FB3D3197F6D4A1D411E9D1AE" group="com.google.guava"/>
          <trusted-key id="C3259D20DAEC4ACE6D57CC83340B090F727518D8" group="com.google.j2objc" name="j2objc-annotations" version="3.1"/>
+         <trusted-key id="C478A820AD150412FF2860C563426A08B91ED6B0" group="org.scala-lang.modules" name="scala-swing_2.13" version="3.0.0"/>
+         <trusted-key id="C62C0CE2E5C346B2D9BF2D8BB2CA0DFE9ED21C6E" group="io.burt"/>
          <trusted-key id="CAFE8E040FD28E7873171932BBE1070F76B97956" group="org.eclipse.packager"/>
          <trusted-key id="CFC10B69382CBCF5387E51484ECE492B63E38ACF" group="com.h3xstream.retirejs"/>
          <trusted-key id="D1436C0DBACEA48702AF97C363F1DD7753B8B315" group="^org[.]sonarsource($|([.].*))" regex="true"/>
+         <trusted-key id="DFD60A08EC2B0CECED24A01F36A22209606109DC" group="com.typesafe" name="config"/>
          <trusted-key id="E4EDD17FF6346F018F6FC7F34871433C7653D10C" group="net.gpedro.integrations.slack" name="slack-webhook" version="1.4.0"/>
          <trusted-key id="E5138A8E9F2E7E42D38B14D99AEE152CDCCEBFCB" group="io.github.hakky54"/>
+         <trusted-key id="EA313384CA0EBA950EA017E937890E298D9A2BFA" group="com.github.scopt" name="scopt_2.13" version="4.1.0"/>
          <trusted-key id="EE0CA873074092F806F59B65D364ABAA39A47320" group="com.google.errorprone"/>
          <trusted-key id="F3184BCD55F4D016E30D4C9BF42E87F9665015C9" group="org.jsoup" name="jsoup" version="1.23.1"/>
+         <trusted-key id="F4DD59C90148BDC52BEB90A4530AA5F25C25011F">
+            <trusting group="commons-io" name="commons-io" version="2.22.0"/>
+            <trusting group="org.apache.commons" name="commons-dbcp2" version="2.14.0"/>
+            <trusting group="org.apache.commons" name="commons-parent" version="98"/>
+            <trusting group="org.apache.commons" name="commons-pool2" version="2.13.0"/>
+            <trusting group="org.apache.commons" name="commons-pool2" version="2.13.1"/>
+            <trusting group="org.apache.commons" name="commons-text" version="1.15.0"/>
+         </trusted-key>
+         <trusted-key id="F5BC7853AF3A3C717B37A69658FA985FA76E71A8" group="com.typesafe.scala-logging" name="scala-logging_2.13" version="3.9.6"/>
          <trusted-key id="FB35C8D02B4724DADA23DE0AFD116C1969FCCFF3" group="org.json" name="json" version="20260522"/>
          <trusted-key id="FF6E2C001948C5F2F38B0CC385911F425EC61B51">
             <trusting group="org.apiguardian"/>
@@ -319,9 +354,22 @@
             <sha256 value="3fa14ee8d991bc9d87de4874a1832e0291812565df6284bbcbb9c49db5c8ca8d" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
          </artifact>
       </component>
+      <component group="gradle.plugin.io.gatling.gradle" name="gatling-gradle-plugin" version="3.15.1.2">
+         <artifact name="gatling-gradle-plugin-3.15.1.2.jar">
+            <sha256 value="d4056f45ed98a73fa18946c1d510e54f1f6de5f9b5fd78cd69fedebd12bbbb8e" origin="Generated by Gradle" reason="Artifact is not signed"/>
+         </artifact>
+         <artifact name="gatling-gradle-plugin-3.15.1.2.module">
+            <sha256 value="55018b614410b6c6bd8078bb87454db73248f93d55fe00109dff6157ba62e1be" origin="Generated by Gradle" reason="Artifact is not signed"/>
+         </artifact>
+      </component>
       <component group="info.solidsoft.pitest" name="info.solidsoft.pitest.gradle.plugin" version="1.19.0">
          <artifact name="info.solidsoft.pitest.gradle.plugin-1.19.0.pom">
             <sha256 value="ba8acf87233b8a93d04d5554aa787c47bb6afe824a68520220a51334b0b23018" origin="Generated by Gradle" reason="Artifact is not signed"/>
+         </artifact>
+      </component>
+      <component group="io.gatling.gradle" name="io.gatling.gradle.gradle.plugin" version="3.15.1.2">
+         <artifact name="io.gatling.gradle.gradle.plugin-3.15.1.2.pom">
+            <sha256 value="20906f3aaa24e47375313741717e41494da45dcda3715abdabc7d22e41cd208f" origin="Generated by Gradle" reason="Artifact is not signed"/>
          </artifact>
       </component>
       <component group="io.github.davidburstrom.contester" name="contester-breakpoint" version="0.2.0">
@@ -812,6 +860,11 @@
             <sha256 value="94f6c027b15f6402995dd1b2c7ea35bfe1ebc88b6832b3134368b41998721953" origin="Generated by Gradle"/>
          </artifact>
       </component>
+      <component group="org.apache.commons" name="commons-parent" version="93">
+         <artifact name="commons-parent-93.pom">
+            <sha256 value="a88b5f6165a659bf835441837bcc5c53e99fde79b92cfbb86988ce2954cd5267" origin="Generated by Gradle"/>
+         </artifact>
+      </component>
       <component group="org.apache.commons" name="commons-parent" version="98">
          <artifact name="commons-parent-98.pom">
             <sha256 value="d40318527f56033e0ff0789971cc38c856aa99a685eea11270814e7f1eda9fba" origin="Generated by Gradle" reason="A key couldn't be downloaded"/>
@@ -954,6 +1007,16 @@
       <component group="org.assertj" name="assertj-bom" version="3.27.6">
          <artifact name="assertj-bom-3.27.6.pom">
             <pgp value="BE685132AFD2740D9095F9040CC0B712FEE75827"/>
+         </artifact>
+      </component>
+      <component group="org.bouncycastle" name="bc-jdk18on-bom" version="1.84">
+         <artifact name="bc-jdk18on-bom-1.84.pom">
+            <sha256 value="f0eee932bfb246b0dfbebc089261364c603dbadead18fc55fd6342c17c56f34c" origin="Generated by Gradle"/>
+         </artifact>
+      </component>
+      <component group="org.codehaus.plexus" name="plexus" version="25">
+         <artifact name="plexus-25.pom">
+            <pgp value="84789D24DF77A32433CE1F079EB80E92EB2135B1"/>
          </artifact>
       </component>
       <component group="org.hdrhistogram" name="HdrHistogram" version="2.2.2">
@@ -1283,6 +1346,11 @@
       <component group="org.junit" name="junit-bom" version="5.13.4">
          <artifact name="junit-bom-5.13.4.pom">
             <sha256 value="d7a08a99b2502f0bb68cd4e1f984f0bf69324aaa208bd0f73366c03fc3548a42" origin="Generated by Gradle"/>
+         </artifact>
+      </component>
+      <component group="org.junit" name="junit-bom" version="5.14.1">
+         <artifact name="junit-bom-5.14.1.pom">
+            <sha256 value="01b01dfa366550b40ac5760548a7d728b6109d17c451e83864d1e5e0ce862c94" origin="Generated by Gradle"/>
          </artifact>
       </component>
       <component group="org.mockito" name="mockito-bom" version="5.23.0">
