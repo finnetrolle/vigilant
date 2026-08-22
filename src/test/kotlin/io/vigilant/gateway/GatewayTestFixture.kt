@@ -6,8 +6,11 @@ import ch.qos.logback.core.AppenderBase
 import com.linecorp.armeria.client.WebClient
 import com.linecorp.armeria.common.HttpRequest
 import com.linecorp.armeria.common.HttpResponse
+import com.linecorp.armeria.server.HttpService
 import com.linecorp.armeria.server.Server
+import io.opentelemetry.api.metrics.Meter
 import io.opentelemetry.api.trace.Tracer
+import io.vigilant.gateway.metrics.MetricsService
 import io.vigilant.gateway.proxy.BypassProxyService
 import io.vigilant.gateway.tracing.TracingService
 import java.net.URI
@@ -40,18 +43,34 @@ internal class GatewayTestFixture {
             .startAndTrack()
 
     /**
+     * Starts an Armeria server on an ephemeral port serving the supplied
+     * context-aware [service] under `"/"` and tracks it for [close].
+     */
+    fun startServer(service: HttpService): Server =
+        Server.builder()
+            .http(0)
+            .serviceUnder("/", service)
+            .build()
+            .startAndTrack()
+
+    /**
      * Starts the traced bypass gateway against [upstream] on an ephemeral port
      * and tracks it for [close].
      */
     fun startTracedGateway(upstream: URI, tracer: Tracer): Server =
-        Server.builder()
-            .http(0)
-            .serviceUnder(
-                "/",
-                TracingService(BypassProxyService(upstream, WebClient.of()), tracer),
-            )
-            .build()
-            .startAndTrack()
+        startServer(TracingService(BypassProxyService(upstream, WebClient.of()), tracer))
+
+    /**
+     * Starts the metrics-decorated bypass gateway against [upstream] on an
+     * ephemeral port and tracks it for [close]. Uses [upstreamClient] for the
+     * proxied exchanges, defaulting to a plain [WebClient.of].
+     */
+    fun startMetricsGateway(
+        upstream: URI,
+        meter: Meter,
+        upstreamClient: WebClient = WebClient.of(),
+    ): Server =
+        startServer(MetricsService(BypassProxyService(upstream, upstreamClient), meter))
 
     /**
      * Returns the `http://127.0.0.1:<port>` URI of a started [server].

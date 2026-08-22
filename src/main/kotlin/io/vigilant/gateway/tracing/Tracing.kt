@@ -1,16 +1,11 @@
 package io.vigilant.gateway.tracing
 
 import io.opentelemetry.exporter.otlp.http.trace.OtlpHttpSpanExporter
-import io.vigilant.gateway.config.OtlpSettings
-import java.net.URI
-import io.opentelemetry.sdk.resources.Resource
 import io.opentelemetry.sdk.trace.SdkTracerProvider
 import io.opentelemetry.sdk.trace.export.BatchSpanProcessor
-
-/**
- * Name under which the gateway identifies itself to OTLP backends.
- */
-private const val SERVICE_NAME = "vigilant"
+import io.vigilant.gateway.config.OtlpSettings
+import io.vigilant.gateway.telemetry.buildGatewayOtelResource
+import io.vigilant.gateway.telemetry.resolveOtlpSignalEndpoint
 
 /**
  * Assembles the tracing [SdkTracerProvider] from the OTLP settings.
@@ -26,30 +21,15 @@ private const val SERVICE_NAME = "vigilant"
  */
 internal fun buildSdkTracerProvider(otlp: OtlpSettings): SdkTracerProvider {
     val builder = SdkTracerProvider.builder()
-        .setResource(
-            Resource.getDefault().toBuilder().put("service.name", SERVICE_NAME).build(),
-        )
+        .setResource(buildGatewayOtelResource())
     if (otlp.enabled && otlp.endpoint != null) {
         builder.addSpanProcessor(
             BatchSpanProcessor.builder(
                 OtlpHttpSpanExporter.builder()
-                    .setEndpoint(resolveTracesEndpoint(otlp.endpoint).toString())
+                    .setEndpoint(resolveOtlpSignalEndpoint(otlp.endpoint, "/v1/traces").toString())
                     .build(),
             ).build(),
         )
     }
     return builder.build()
-}
-
-/**
- * Resolves the configured OTLP base endpoint into the spans URL: the signal
- * path `/v1/traces` is appended when the endpoint does not already carry it,
- * matching the convention of the OTel autoconfigure module while this project
- * wires the SDK manually.
- */
-internal fun resolveTracesEndpoint(endpoint: URI): URI {
-    val path = endpoint.rawPath.orEmpty().trimEnd('/')
-    if (path.endsWith("/v1/traces")) return endpoint
-    val resolvedPath = (path + "/v1/traces").let { if (it.isEmpty()) "/v1/traces" else it }
-    return URI(endpoint.scheme, endpoint.rawAuthority, resolvedPath, null, null)
 }

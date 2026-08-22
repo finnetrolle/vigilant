@@ -73,8 +73,8 @@ private val DEFAULT_CONFIG_PATHS: List<Path> = listOf(
  * @param upstreamUri validated absolute HTTP(S) URL of the upstream service.
  * @param port HTTP port the gateway listens on.
  * @param upstream validated timeouts and pooling settings of the upstream client.
- * @param otlp OTLP export settings; traces are always traced locally, export is
- *   active only when [OtlpSettings.enabled] is `true` and an endpoint is set.
+ * @param otlp common OTLP export settings for traces and metrics; external
+ *   export is active only when [OtlpSettings.enabled] is `true` and an endpoint is set.
  */
 data class AppConfig(
     val upstreamUri: URI,

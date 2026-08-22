@@ -1,6 +1,6 @@
 # VIG-05-07: OTel metrics прокси-трафика
 
-**Статус:** Ready for implementation
+**Статус:** Done
 **Epic:** [EPIC-05](../../epics/epic_05_v0_hardening.md)
 **Ветка:** Наблюдаемость > OTel metrics
 **Зависит от:** нет
@@ -22,22 +22,22 @@ errors.
 
 ## Критерии готовности
 
-- [ ] Экспортируются counter'ы: request count, response status (по классам
+- [x] Экспортируются counter'ы: request count, response status (по классам
   статусов), timeouts, cancellations, transport errors.
-- [ ] Экспортируются histogram'ы/gauge: upstream latency, gateway processing
+- [x] Экспортируются histogram'ы/gauge: upstream latency, gateway processing
   latency, active requests.
-- [ ] Proxy overhead не вычисляется gateway на боевых запросах (по спецификации
+- [x] Proxy overhead не вычисляется gateway на боевых запросах (по спецификации
   это задача нагрузочного теста, VIG-05-08) - метрики не вводят такую
   семантику.
-- [ ] Метрики не содержат тел, заголовков, query-строк и секретов; имена и
+- [x] Метрики не содержат тел, заголовков, query-строк и секретов; имена и
   атрибуты согласованы с политикой безопасных логов.
-- [ ] Экспорт конфигурируется теми же настройками OTLP, что и traces
+- [x] Экспорт конфигурируется теми же настройками OTLP, что и traces
   (переиспользуется конфигурация VIG-05-06; при независимой реализации -
   согласованные названия).
-- [ ] Тест: прогоны успешного запроса, запроса с 4xx/5xx от upstream,
+- [x] Тест: прогоны успешного запроса, запроса с 4xx/5xx от upstream,
   отменённого запроса и запроса к мёртвому upstream меняют соответствующие
   метрики (in-memory SDK reader или тестовый OTLP endpoint).
-- [ ] `./gradlew build` проходит.
+- [x] `./gradlew build` проходит.
 
 ## Не входит
 

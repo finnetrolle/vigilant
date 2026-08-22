@@ -1,6 +1,5 @@
 package io.vigilant.gateway.proxy
 
-import com.linecorp.armeria.client.ResponseTimeoutException
 import com.linecorp.armeria.client.WebClient
 import com.linecorp.armeria.common.HttpHeaderNames
 import com.linecorp.armeria.common.HttpHeaders
@@ -51,30 +50,34 @@ class BypassProxyService(
         val upstreamResponse = upstream.execute(outbound)
             .mapHeaders(::rewriteResponseHeaders)
         upstreamResponse.whenComplete().whenComplete { _, cause ->
-            if (cause != null) logUpstreamFailure(ctx, request, cause)
+            if (cause != null) {
+                val failure = observeUpstreamFailure(ctx, cause)
+                logUpstreamFailure(ctx, request, cause, failure)
+            }
         }
         return HttpResponse.of(
-            upstreamResponse.recover { cause -> upstreamError(cause) },
+            upstreamResponse.recover { cause -> upstreamError(ctx, cause) },
         )
     }
 
     /**
      * Logs a failed upstream exchange as a structured event without bodies, query
-     * strings, or auth headers, keeping the cause class distinguishable for
-     * metrics. The trace ID of the exchange, when [TracingService] published one
-     * into the context, is put into the MDC for the duration of the log call so
-     * the JSONL line correlates with the span.
+     * strings, or auth headers, while keeping the cause class distinguishable in
+     * the structured event. The trace ID of the exchange, when [TracingService]
+     * published one into the context, is put into the MDC for the duration of the
+     * log call so the JSONL line correlates with the span.
      */
     private fun logUpstreamFailure(
         ctx: ServiceRequestContext,
         request: HttpRequest,
         cause: Throwable,
+        failure: UpstreamFailure,
     ) {
         val traceId = ctx.attr(RequestTracing.TRACE_ID)
         val logEvent = {
             logger.atWarn()
                 .addKeyValue("event.name", "upstream_request_failed")
-                .addKeyValue("upstream.error", UpstreamFailure.from(cause).code)
+                .addKeyValue("upstream.error", failure.code)
                 .addKeyValue("upstream.cause", cause.javaClass.simpleName)
                 .log("upstream request failed: ${request.method()} ${pathWithoutQuery(request.path())}")
         }
@@ -90,9 +93,19 @@ class BypassProxyService(
      * Armeria exception when the exchange fails before anything was sent
      * (spec PROXY-03).
      */
-    private fun upstreamError(cause: Throwable): HttpResponse {
-        val failure = UpstreamFailure.from(cause)
+    private fun upstreamError(ctx: ServiceRequestContext, cause: Throwable): HttpResponse {
+        val failure = observeUpstreamFailure(ctx, cause)
         return proxyError(failure.status, failure.code)
+    }
+
+    /** Records a safe request-scoped observation of an upstream failure. */
+    private fun observeUpstreamFailure(
+        ctx: ServiceRequestContext,
+        cause: Throwable,
+    ): UpstreamFailure {
+        val observation = UpstreamFailureObservation.from(cause)
+        ctx.setAttr(ProxyRequestOutcome.UPSTREAM_FAILURE, observation)
+        return UpstreamFailure.from(observation.category)
     }
 
     /**
@@ -164,23 +177,30 @@ class BypassProxyService(
     }
 
     /**
-     * The stable classes of a failed upstream exchange, each pairing the status
-     * the client receives with the stable code that identifies the failure
-     * class in logs and metrics (spec PROXY-03).
+     * The stable client-facing forms of a failed upstream exchange, each pairing
+     * the status the client receives with the public error code used in the
+     * response and structured log (spec PROXY-03).
      */
-    private enum class UpstreamFailure(val status: HttpStatus, val code: String) {
+    private enum class UpstreamFailure(
+        val status: HttpStatus,
+        val code: String,
+    ) {
         TIMEOUT(HttpStatus.GATEWAY_TIMEOUT, "upstream_timeout"),
         UNAVAILABLE(HttpStatus.BAD_GATEWAY, "upstream_unavailable"),
         ;
 
         companion object {
             /**
-             * Classifies an upstream failure cause: a response timeout is a
-             * timeout; every other failure - connection errors, malformed HTTP,
-             * and so on - is an upstream availability problem.
+             * Maps the shared metrics category to the stable client-facing
+             * status and error code.
              */
-            fun from(cause: Throwable): UpstreamFailure =
-                if (cause is ResponseTimeoutException) TIMEOUT else UNAVAILABLE
+            fun from(category: UpstreamFailureCategory): UpstreamFailure =
+                when (category) {
+                    UpstreamFailureCategory.TIMEOUT -> TIMEOUT
+                    UpstreamFailureCategory.CANCELLATION,
+                    UpstreamFailureCategory.TRANSPORT,
+                    -> UNAVAILABLE
+                }
         }
     }
 

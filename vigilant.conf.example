@@ -12,8 +12,9 @@ vigilant {
   upstream-response-timeout = 5m         # первый объект ответа + пауза между чанками
   upstream-connection-idle-timeout = 10s # жизнь простаивающего соединения в пуле
 
-  # Экспорт traces через OTLP HTTP (трейсинг и correlation ID работают всегда;
-  # без endpoint экспорт выключен). Базовый путь /v1/traces добавляется сам.
+  # Экспорт traces и metrics через OTLP HTTP (локальный трейсинг и correlation ID
+  # работают всегда; без endpoint внешний экспорт выключен). К общему базовому
+  # endpoint автоматически добавляются signal paths /v1/traces и /v1/metrics.
   otlp-endpoint = "http://127.0.0.1:4318"
   otlp-enabled = true
 }

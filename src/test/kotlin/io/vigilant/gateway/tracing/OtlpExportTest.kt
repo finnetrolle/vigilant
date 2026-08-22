@@ -11,6 +11,7 @@ import com.linecorp.armeria.common.RequestHeaders
 import io.opentelemetry.sdk.trace.SdkTracerProvider
 import io.vigilant.gateway.GatewayTestFixture
 import io.vigilant.gateway.config.OtlpSettings
+import io.vigilant.gateway.telemetry.resolveOtlpSignalEndpoint
 import java.net.URI
 import java.time.Duration
 import java.util.concurrent.CopyOnWriteArrayList
@@ -133,19 +134,19 @@ class OtlpExportTest {
     fun `resolves otlp trace endpoint from configured base endpoint`() {
         assertEquals(
             URI("http://collector:4318/v1/traces"),
-            resolveTracesEndpoint(URI("http://collector:4318")),
+            resolveOtlpSignalEndpoint(URI("http://collector:4318"), "/v1/traces"),
         )
         assertEquals(
             URI("https://collector/tel/v1/traces"),
-            resolveTracesEndpoint(URI("https://collector/tel")),
+            resolveOtlpSignalEndpoint(URI("https://collector/tel"), "/v1/traces"),
         )
         assertEquals(
             URI("http://collector:4318/v1/traces"),
-            resolveTracesEndpoint(URI("http://collector:4318/v1/traces")),
+            resolveOtlpSignalEndpoint(URI("http://collector:4318/v1/traces"), "/v1/traces"),
         )
         assertEquals(
             URI("http://collector:4318/v1/traces/"),
-            resolveTracesEndpoint(URI("http://collector:4318/v1/traces/")),
+            resolveOtlpSignalEndpoint(URI("http://collector:4318/v1/traces/"), "/v1/traces"),
         )
     }
 

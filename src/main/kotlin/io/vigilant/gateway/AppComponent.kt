@@ -7,11 +7,15 @@ import dev.zacsweers.metro.DependencyGraph
 import dev.zacsweers.metro.Provides
 import dev.zacsweers.metro.SingleIn
 import io.opentelemetry.api.trace.Tracer
+import io.opentelemetry.api.metrics.Meter
+import io.opentelemetry.sdk.metrics.SdkMeterProvider
 import io.opentelemetry.sdk.trace.SdkTracerProvider
 import io.vigilant.gateway.config.AppConfig
 import io.vigilant.gateway.config.loadAppConfig
 import io.vigilant.gateway.health.LivenessService
 import io.vigilant.gateway.health.ReadinessService
+import io.vigilant.gateway.metrics.MetricsService
+import io.vigilant.gateway.metrics.buildSdkMeterProvider
 import io.vigilant.gateway.proxy.BypassProxyService
 import io.vigilant.gateway.proxy.buildUpstreamWebClient
 import io.vigilant.gateway.tracing.TracingService
@@ -21,13 +25,14 @@ import java.time.Duration
 
 /**
  * Application-wide dependency graph: configuration, the upstream [WebClient],
- * the tracing SDK, and the assembled Armeria [Server].
+ * the tracing and metrics SDKs, and the assembled Armeria [Server].
  */
 @DependencyGraph(AppScope::class)
 interface AppComponent {
     val server: Server
     val readinessService: ReadinessService
     val sdkTracerProvider: SdkTracerProvider
+    val sdkMeterProvider: SdkMeterProvider
 
     companion object {
         @Provides
@@ -52,25 +57,44 @@ interface AppComponent {
         fun tracer(sdkTracerProvider: SdkTracerProvider): Tracer =
             sdkTracerProvider.get("io.vigilant.gateway")
 
+        /** Builds the metrics SDK from the same OTLP settings used by traces. */
+        @Provides
+        @SingleIn(AppScope::class)
+        fun sdkMeterProvider(appConfig: AppConfig): SdkMeterProvider =
+            buildSdkMeterProvider(appConfig.otlp)
+
+        /** Creates the application meter from the process-wide metrics SDK. */
+        @Provides
+        @SingleIn(AppScope::class)
+        fun meter(sdkMeterProvider: SdkMeterProvider): Meter =
+            sdkMeterProvider.get("io.vigilant.gateway")
+
         @Provides
         @SingleIn(AppScope::class)
         fun tracingService(bypassProxyService: BypassProxyService, tracer: Tracer): TracingService =
             TracingService(bypassProxyService, tracer)
 
+        /** Decorates the traced proxy route with safe traffic measurements. */
+        @Provides
+        @SingleIn(AppScope::class)
+        fun metricsService(tracingService: TracingService, meter: Meter): MetricsService =
+            MetricsService(tracingService, meter)
+
+        /** Assembles gateway-owned probes and the observed proxy catch-all route. */
         @Provides
         @SingleIn(AppScope::class)
         fun server(
             appConfig: AppConfig,
             livenessService: LivenessService,
             readinessService: ReadinessService,
-            tracingService: TracingService,
+            metricsService: MetricsService,
         ): Server =
             Server.builder()
                 .http(appConfig.port)
                 .gracefulShutdownTimeout(GRACEFUL_SHUTDOWN_QUIET_PERIOD, GRACEFUL_SHUTDOWN_TIMEOUT)
                 .service("/healthz", livenessService)
                 .service("/readyz", readinessService)
-                .serviceUnder("/", tracingService)
+                .serviceUnder("/", metricsService)
                 .build()
 
         /**
