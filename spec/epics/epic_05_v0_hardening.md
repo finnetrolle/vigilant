@@ -54,7 +54,7 @@ EPIC-05 v0 hardening
 - [x] [VIG-05-03: E2E-тест стриминга без буферизации](../issues/epic_05/issue_05_03_streaming_e2e.md) - `Done`
 - [x] [VIG-05-04: E2E-тест отмены клиента](../issues/epic_05/issue_05_04_cancellation_e2e.md) - `Done`
 - [x] [VIG-05-05: Явные таймауты upstream-клиента](../issues/epic_05/issue_05_05_upstream_timeouts.md) - `Done`
-- [ ] [VIG-05-06: Correlation/trace ID и OTel traces](../issues/epic_05/issue_05_06_trace_id_otlp.md) - `Ready for implementation`
+- [x] [VIG-05-06: Correlation/trace ID и OTel traces](../issues/epic_05/issue_05_06_trace_id_otlp.md) - `Done`
 - [x] [VIG-05-07: OTel metrics прокси-трафика](../issues/epic_05/issue_05_07_otlp_metrics.md) - `Done`
 - [ ] [VIG-05-08: Нагрузочный тест PERF-01](../issues/epic_05/issue_05_08_load_test.md) - `Ready for implementation`
 - [ ] [VIG-05-09: OCI-образ поставки](../issues/epic_05/issue_05_09_oci_image.md) - `Ready for implementation`

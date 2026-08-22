@@ -1,6 +1,6 @@
 # VIG-05-06: Correlation/trace ID и OTel traces
 
-**Статус:** Ready for implementation
+**Статус:** Done
 **Epic:** [EPIC-05](../../epics/epic_05_v0_hardening.md)
 **Ветка:** Наблюдаемость > correlation/trace ID и OTel traces
 **Зависит от:** нет
@@ -22,20 +22,20 @@
 
 ## Критерии готовности
 
-- [ ] Входящий W3C `traceparent` принимается и продолжается; при отсутствии
+- [x] Входящий W3C `traceparent` принимается и продолжается; при отсутствии
   gateway генерирует новый trace ID.
-- [ ] Correlation/trace ID попадает в MDC и присутствует в каждой строке JSONL
+- [x] Correlation/trace ID попадает в MDC и присутствует в каждой строке JSONL
   логов, относящейся к запросу.
-- [ ] На proxy-обмен создаётся span с атрибутами метода, пути, статусов и
+- [x] На proxy-обмен создаётся span с атрибутами метода, пути, статусов и
   длительностей upstream/gateway; тела и auth headers в атрибуты не попадают.
-- [ ] OTLP exporter конфигурируется (endpoint, включён/выключен) через
+- [x] OTLP exporter конфигурируется (endpoint, включён/выключен) через
   существующий механизм `env > file > defaults`; export выключен, когда
   endpoint не задан.
-- [ ] Тест: один прогон запроса производит логи с одинаковым trace ID и span с
+- [x] Тест: один прогон запроса производит логи с одинаковым trace ID и span с
   ожидаемыми атрибутами (in-memory SDK reader или тестовый OTLP endpoint).
-- [ ] Существующие тесты утечек сентинелов (INFO/DEBUG stdout) продолжают
+- [x] Существующие тесты утечек сентинелов (INFO/DEBUG stdout) продолжают
   проходить.
-- [ ] `./gradlew build` проходит.
+- [x] `./gradlew build` проходит.
 
 ## Не входит
 
