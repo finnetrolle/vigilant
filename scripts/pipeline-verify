@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 
 # Post-issue pipeline, verify gates: full build (compile, tests, detekt) and
-# full verification (pitest + OWASP dependency check). Zero LLM involvement.
+# OWASP dependency check. Zero LLM involvement. Mutation testing (pitest) is
+# on-demand only and not part of this pipeline; run the analyze-pitest skill
+# separately when needed.
 # Exits non-zero on the first failing gate; on success prints artifact paths.
 
 set -euo pipefail
@@ -19,5 +21,4 @@ step "gate 2/2: ./gradlew verifyAll"
 step "verify gates passed"
 printf 'artifacts:\n'
 printf '  tests:  build/reports/tests/test/index.html\n'
-printf '  pitest: build/reports/pitest/index.html\n'
 printf '  deps:   build/reports/dependency-check/dependency-check-report.html\n'

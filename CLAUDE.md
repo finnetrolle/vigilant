@@ -30,9 +30,9 @@ VIGILANT_CONFIG=./vigilant.conf.example ./build/install/vigilant/bin/vigilant
 
 # Quality tools (beyond SonarQube + JaCoCo)
 ./gradlew detekt                 # Kotlin static analysis, wired into build/check; project tweaks in config/detekt/detekt.yml
-./gradlew pitest                 # mutation testing against io.vigilant.* classes
+./gradlew pitest                 # mutation testing against io.vigilant.* classes; on-demand only (analyze-pitest skill), not part of regular checks
 ./gradlew dependencyCheckAnalyze # OWASP CVE scan of the dependency tree
-./gradlew verifyAll              # full local verification: build + pitest + dependency check
+./gradlew verifyAll              # full local verification: build + dependency check
 ./gradlew installGitHooks        # one-time after clone: installs pre-push hook from config/git/hooks/
 ```
 

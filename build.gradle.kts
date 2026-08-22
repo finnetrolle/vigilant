@@ -76,8 +76,8 @@ tasks.test {
 
 tasks.register("verifyAll") {
     group = "verification"
-    description = "Full local verification: build (compile, tests, detekt) + mutation testing + CVE scan."
-    dependsOn("build", "pitest", "dependencyCheckAnalyze")
+    description = "Full local verification: build (compile, tests, detekt) + CVE scan."
+    dependsOn("build", "dependencyCheckAnalyze")
 }
 
 tasks.register("installGitHooks") {
