@@ -159,7 +159,7 @@ services:
 ./gradlew verifyAll               # полный локальный прогон: build + dependency-check
 ```
 
-CVE-скан требует NVD API-ключ (бесплатный: https://nvd.nist.gov/developers/request-an-api-key). Ключ читается из gradle-свойства `nvdApiKey` (например, в `~/.gradle/gradle.properties`) или переменной окружения `NVD_API_KEY`. Первый запуск синхронизирует базу NVD (десятки минут), последующие - секунды. Отчёт: `build/reports/dependency-check/`. Ложные срабатывания подавляются в `config/dependency-check/suppressions.xml` с обоснованием.
+CVE-скан требует NVD API-ключ (бесплатный: https://nvd.nist.gov/developers/request-an-api-key). Ключ читается из gradle-свойства `nvdApiKey` (например, в `~/.gradle/gradle.properties`) или переменной окружения `NVD_API_KEY`. Первый запуск синхронизирует базу NVD (десятки минут), последующие - секунды. Проверка блокирует сборку для Critical-уязвимостей с CVSS 9.0 и выше. Отчёт: `build/reports/dependency-check/`. Ложные срабатывания подавляются в `config/dependency-check/suppressions.xml` с обоснованием.
 
 Git-хуки и CI:
 

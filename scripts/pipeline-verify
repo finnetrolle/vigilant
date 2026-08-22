@@ -4,7 +4,9 @@
 # OWASP dependency check. Zero LLM involvement. Mutation testing (pitest) is
 # on-demand only and not part of this pipeline; run the analyze-pitest skill
 # separately when needed.
-# Exits non-zero on the first failing gate; on success prints artifact paths.
+# Exit 1 means a Gradle verification task failed and its output needs root-cause
+# classification. Exit 2 means the gate is not configured. On success prints
+# artifact paths.
 
 set -euo pipefail
 
@@ -12,11 +14,23 @@ cd "$(dirname -- "${BASH_SOURCE[0]}")/.."
 
 step() { printf '\n== %s ==\n' "$1"; }
 
+if ! grep -Eq 'failBuildOnCVSS[[:space:]]*=' build.gradle.kts; then
+    printf '%s\n' \
+        'ENVIRONMENT FAILURE: dependencyCheck.failBuildOnCVSS is not configured.' \
+        'The plugin default is report-only, so the OWASP step cannot act as a gate.' \
+        'Choose and configure a project CVSS threshold before running verification.' >&2
+    exit 2
+fi
+
 step "gate 1/2: ./gradlew build"
-./gradlew build
+if ! ./gradlew build; then
+    exit 1
+fi
 
 step "gate 2/2: ./gradlew verifyAll"
-./gradlew verifyAll
+if ! ./gradlew verifyAll; then
+    exit 1
+fi
 
 step "verify gates passed"
 printf 'artifacts:\n'

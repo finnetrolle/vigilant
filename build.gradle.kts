@@ -60,6 +60,8 @@ dependencyCheck {
     // Scan only what the distributable ships; buildscript/test-only dependencies
     // (kotlin-gradle-plugin, pitest, ...) are not part of the attack surface.
     scanConfigurations = listOf("runtimeClasspath")
+    // Fail verification only for Critical vulnerabilities (CVSS 9.0-10.0).
+    failBuildOnCVSS = 9.0f
     suppressionFile = "$rootDir/config/dependency-check/suppressions.xml"
     nvd {
         apiKey = providers.gradleProperty("nvdApiKey").orElse(providers.environmentVariable("NVD_API_KEY")).orNull
@@ -109,4 +111,3 @@ sonar {
         property("sonar.scm.disabled", "true")
     }
 }
-
