@@ -40,15 +40,18 @@ Gatling запланировал и завершил все 840 000 запрос
 
 - direct measurement выполнил 240 000 запросов без ошибок;
 - proxy начал терять соединения во время steady-state прогрева;
+- gateway process log зафиксировал повторяющийся `OutOfMemoryError` в Armeria
+  worker и boss threads во время collapse;
 - после насыщения proxy path преобладали connect timeout, затем появились
   локальное исчерпание ephemeral ports и request timeout;
 - к началу measurement gateway не восстановился, поэтому успешных измеряемых
   proxy-ответов не было.
 
-Наблюдаемая причина отклонения - gateway не поддерживает длительную нагрузку
-2 000 RPS и перестаёт устанавливать клиентские соединения. Конкретный
-production-code root cause внутри Armeria server/client path этим load-test
-issue не устанавливался; для него нужен отдельный profiling/fix work item.
+Наблюдаемая непосредственная причина отклонения - `OutOfMemoryError` в gateway
+JVM под длительной нагрузкой 2 000 RPS, после которого gateway перестаёт
+устанавливать клиентские соединения. Конкретная retained/allocation причина
+внутри Armeria server/client path этим load-test issue не устанавливалась; для
+неё нужен отдельный profiling/fix work item.
 Исправление gateway не входит в VIG-05-08, которая явно допускает отчёт об
 отклонении с причиной и baseline.
 

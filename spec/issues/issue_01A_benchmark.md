@@ -6,6 +6,11 @@
 **Примечание:** реализация не начата
 **Приоритет:** High
 **Связанные требования:** `PERF-01`, `PERF-06`, `CONC-01`, критерии приёмки v0 из `../MVP_NON_FUNCTIONAL_REQUIREMENTS.md`
+**Зависит от:** [VIG-09-02](epic_09/issue_09_02_perf01_latency.md)
+
+VIG-09-02 является жёсткой зависимостью: logging-specific slow-sink и profiling
+scenarios нельзя интерпретировать, пока default gateway path не выдерживает
+полный workload и не имеет подтверждённого PERF-01 baseline.
 
 ## Контекст
 
