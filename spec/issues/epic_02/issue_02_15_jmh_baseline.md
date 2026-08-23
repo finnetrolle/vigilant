@@ -3,7 +3,7 @@
 **Статус:** Ready for implementation  
 **Epic:** [EPIC-02](../../epics/epic_02_fast_pii_detector.md)  
 **Ветка:** Evidence > performance baseline  
-**Зависит от:** [VIG-02-14](issue_02_14_quality_corpora.md)  
+**Зависит от:** [VIG-02-16](issue_02_16_canonical_quality_corpora.md)  
 **Оценка:** 3-4 инженерных дня
 
 ## Результат

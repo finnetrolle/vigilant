@@ -4,7 +4,7 @@
 **Тип:** Epic  
 **Статус:** In progress  
 **Приоритет:** High  
-**Суммарная оценка:** 33-48 инженерных дней  
+**Суммарная оценка:** 35-51 инженерный день  
 **Связанные требования:** `MVP-10`, `MVP-13`, `MVP-15`, `MVP-16`, `MVP-18`, `MVP-19`, `PERF-02`–`PERF-05`, `CONC-01`–`CONC-04`, `EXT-01`–`EXT-04`
 
 ## Карта декомпозиции
@@ -27,7 +27,8 @@ EPIC-02 Fast PII detector
 │   └── RU_OMS
 └── Evidence
     ├── cross-recognizer semantics
-    ├── quality corpora and report
+    ├── external RedMadRobot benchmark
+    ├── canonical quality corpora and report
     └── JMH performance baseline
 ```
 
@@ -40,7 +41,7 @@ offsets, порядка и безопасности остаются в этом
 - [x] [VIG-02-01: Public API и invariants](../issues/epic_02/issue_02_01_public_contract.md) - `Done`
 - [x] [VIG-02-02: Payload preflight и UTF-8 offsets](../issues/epic_02/issue_02_02_payload_preflight.md) - `Done`
 - [x] [VIG-02-03: Recognizer pipeline](../issues/epic_02/issue_02_03_recognizer_pipeline.md) - `Done`
-- [ ] [VIG-02-04: EMAIL_ADDRESS](../issues/epic_02/issue_02_04_email_recognizer.md) - `Ready for implementation`
+- [x] [VIG-02-04: EMAIL_ADDRESS](../issues/epic_02/issue_02_04_email_recognizer.md) - `Done`
 - [ ] [VIG-02-05: PHONE_NUMBER](../issues/epic_02/issue_02_05_phone_recognizer.md) - `Ready for implementation`
 - [ ] [VIG-02-06: PAYMENT_CARD](../issues/epic_02/issue_02_06_payment_card_recognizer.md) - `Ready for implementation`
 - [ ] [VIG-02-07: IP_ADDRESS](../issues/epic_02/issue_02_07_ip_address_recognizer.md) - `Ready for implementation`
@@ -50,7 +51,8 @@ offsets, порядка и безопасности остаются в этом
 - [ ] [VIG-02-11: RU_PASSPORT](../issues/epic_02/issue_02_11_ru_passport_recognizer.md) - `Ready for implementation`
 - [ ] [VIG-02-12: RU_OMS](../issues/epic_02/issue_02_12_ru_oms_recognizer.md) - `Ready for implementation`
 - [ ] [VIG-02-13: Cross-recognizer semantics](../issues/epic_02/issue_02_13_cross_recognizer_semantics.md) - `Ready for implementation`
-- [ ] [VIG-02-14: Quality corpora и report](../issues/epic_02/issue_02_14_quality_corpora.md) - `Ready for implementation`
+- [ ] [VIG-02-14: External RedMadRobot PII benchmark](../issues/epic_02/issue_02_14_quality_corpora.md) - `Ready for implementation`
+- [ ] [VIG-02-16: Canonical quality corpora и report](../issues/epic_02/issue_02_16_canonical_quality_corpora.md) - `Ready for implementation`
 - [ ] [VIG-02-15: JMH baseline](../issues/epic_02/issue_02_15_jmh_baseline.md) - `Ready for implementation`
 
 ## Контекст
@@ -521,9 +523,32 @@ Corpus files хранятся в UTF-8 TSV без test-framework-specific serial
 
 Генераторы реализуются обычным test-only Kotlin-кодом поверх `kotlin.random.Random(seed)`; обязательной сторонней property-testing library нет. Seed и число итераций фиксируются в имени/выводе теста, чтобы любой failure воспроизводился локально.
 
-### Realistic report
+### Quality reports
 
-Отдельный mixed-text corpus используется для публикации exact и relaxed span precision, recall и F1 по каждому типу и в целом. Exact match требует одинаковых `type`, `startUtf8` и `endUtf8`; relaxed match требует одинакового `type` и непустого пересечения spans. Для relaxed metric каждый expected и actual finding участвует не более чем в одной паре; выбирается maximum-cardinality matching с детерминированным tie-break по offsets. В первой версии эти агрегатные метрики публикуются, но не являются release threshold: обязательный gate задаётся точным контрактом поддерживаемых форматов выше.
+Canonical quality gate использует отдельный version-controlled synthetic
+mixed-text corpus для публикации exact и relaxed span precision, recall и F1 по
+каждому типу и в целом. Exact match требует одинаковых `type`, `startUtf8` и
+`endUtf8`; relaxed match требует одинакового `type` и непустого пересечения
+spans. Для relaxed metric каждый expected и actual finding участвует не более
+чем в одной паре; выбирается maximum-cardinality matching с детерминированным
+tie-break по offsets. Эти агрегатные метрики не являются release threshold:
+обязательный gate задаётся точным контрактом поддерживаемых форматов выше.
+
+Отдельный non-gating report оценивает detector на `test.csv` русского
+[RedMadRobot PII benchmark](https://huggingface.co/datasets/redmadrobot-rnd/pii_benchmark)
+из immutable revision `f77ea831274daf980cc45c61a93c226be9d978d6`.
+Он использует те же exact/relaxed matching rules, но сохраняет external metrics
+отдельно от canonical gate. Явно отображаются только пересекающиеся labels:
+`EMAIL`, `PHONE`, `CREDIT_CARD`, `IP_ADDRESS`, `INN`, `SNILS`, `PASSPORT` и
+`OMS`; IBAN dataset не покрывает. Upstream noisy и typo-containing values не
+расширяют supported forms, checksum, context или boundary contract detector.
+
+External adapter выравнивает tokens с исходным `text` точным
+регистрозависимым поиском слева направо без case folding, Unicode normalization
+или восстановления текста. Неоднозначный или невозможный alignment отклоняет
+case и отражается в coverage counts. Dataset file не хранится в git, не
+скачивается обычными `build`/`test` и принимается только явной benchmark task
+после проверки pinned size и SHA-256.
 
 ### Общие regression tests
 
@@ -548,6 +573,8 @@ Corpus files хранятся в UTF-8 TSV без test-framework-specific serial
 - Не используется cache, interning или static/thread-local storage, содержащий данные запроса.
 - Exception messages и test failure helpers не должны автоматически включать production payload.
 - Production corpus не собирается этой реализацией; repository fixtures используют только синтетические значения.
+- Внешний RedMadRobot dataset не добавляется в git, хранится только под
+  `build/` после явной preparation task и не печатается в diagnostics/reports.
 - Benchmark output содержит только имя сценария, размеры и timing, но не печатает payload или findings.
 
 ## Выбранные и отклонённые альтернативы
@@ -563,6 +590,8 @@ Corpus files хранятся в UTF-8 TSV без test-framework-specific serial
 | Raw HTTP/JSON input | Отклонён | Нарушает SRP и связывает detector с gateway schemas |
 | Возврат matched PII text | Отклонён | Дублирует чувствительное значение и не нужен при наличии точных offsets |
 | Ранний поиск самого левого span среди всех типов | Отклонён | Требует работы всех recognizer'ов и противоречит latency-first default |
+| RedMadRobot как canonical gate | Отклонён | Dataset имеет более широкую noisy NER taxonomy и не покрывает IBAN; он полезен только как отдельная realistic evaluation |
+| External и canonical reports в одной issue | Отклонён | Это независимые observable outcomes с разными seams и суммарной оценкой больше пяти дней |
 
 ## План изменений по файлам
 
@@ -576,13 +605,16 @@ Corpus files хранятся в UTF-8 TSV без test-framework-specific serial
 - `src/main/kotlin/io/vigilant/detectors/pii/fast/recognizers/` — девять internal recognizer implementations и pure validators.
 - `src/main/resources/io/vigilant/detectors/pii/fast/iban-country-lengths.csv` — pinned SWIFT registry release 102 country-length mapping с source/version header.
 - `src/test/kotlin/io/vigilant/detectors/pii/` — public contract, preflight, ordering, Unicode offset и error tests.
-- `src/test/kotlin/io/vigilant/detectors/pii/fast/` — recognizer, checksum, corpus и property-based tests.
-- `src/test/resources/io/vigilant/detectors/pii/` — version-controlled positive, hard-negative и realistic synthetic corpora.
+- `src/test/kotlin/io/vigilant/detectors/pii/fast/` - recognizer, checksum и property-based tests.
+- `src/test/kotlin/io/vigilant/detectors/pii/quality/` - canonical corpus runner/report и focused RedMadRobot adapter tests.
+- `src/test/resources/io/vigilant/detectors/pii/` - version-controlled positive, hard-negative и mixed-text synthetic corpora.
 - `src/jmh/java/io/vigilant/detectors/pii/fast/FastPiiDetectorBenchmark.java` — обязательные benchmark scenarios.
 
 ### Изменить
 
-- `build.gradle.kts` — добавить benchmark-only JMH plugin/configuration; production dependency list detector не расширяет.
+- `build.gradle.kts` - добавить явные canonical/external report tasks и
+  benchmark-only JMH plugin/configuration; production dependency list detector
+  не расширяет.
 
 ### Не изменять
 
@@ -599,8 +631,10 @@ Corpus files хранятся в UTF-8 TSV без test-framework-specific serial
 4. Реализовать recognizer'ы в зафиксированном порядке с unit/property tests.
 5. Добавить overlap/dedup/order и stop-on-first regression tests.
 6. Добавить pinned IBAN registry resource и provenance test.
-7. Добавить synthetic corpora и выполнить correctness gate.
-8. Добавить JMH source set, выполнить обязательные scenarios и сохранить baseline report.
+7. После cross-recognizer semantics независимо подготовить external RedMadRobot
+   benchmark и canonical synthetic corpora с correctness gate.
+8. После canonical corpus gate добавить JMH source set, выполнить обязательные
+   scenarios и сохранить baseline report.
 9. Проверить production runtime classpath и отсутствие gateway/DI/logging integration.
 
 ## Критерии готовности
@@ -611,11 +645,14 @@ Corpus files хранятся в UTF-8 TSV без test-framework-specific serial
 4. `enabledTypes` отключает recognizer'ы без изменения порядка оставшихся.
 5. При непустом `enabledTypes` input preflight корректно обрабатывает empty payload, invalid Unicode, ровно `1 MiB` и превышение лимита без копирования payload в exception; при пустом `enabledTypes` preflight не запускается.
 6. Corpus gate, checksum property tests, Unicode offsets, overlap/dedup и adversarial regex tests проходят полностью.
-7. JMH benchmark выполняет все обязательные datasets/sizes/modes и сохраняет baseline с описанием среды; числовой latency gate для V1 отсутствует.
-8. Detector immutable, concurrent-safe, cooperative-cancellable и не хранит/логирует PII.
-9. Production detector code не добавляет сторонних runtime dependencies.
-10. Gateway, DI, policy engine и HTTP path не изменены.
-11. Полный `./gradlew test` завершается успешно.
+7. External RedMadRobot benchmark воспроизводимо публикует отдельные
+   source-aligned metrics, provenance и coverage counts, не изменяя canonical
+   contract и не запускаясь из обычных `build`/`test`.
+8. JMH benchmark выполняет все обязательные datasets/sizes/modes и сохраняет baseline с описанием среды; числовой latency gate для V1 отсутствует.
+9. Detector immutable, concurrent-safe, cooperative-cancellable и не хранит/логирует PII.
+10. Production detector code не добавляет сторонних runtime dependencies.
+11. Gateway, DI, policy engine и HTTP path не изменены.
+12. Полный `./gradlew test` завершается успешно.
 
 ## Не входит в первую версию
 
@@ -635,7 +672,10 @@ Corpus files хранятся в UTF-8 TSV без test-framework-specific serial
 
 ## Открытые решения
 
-Нет. Literal regex и конкретная внутренняя декомпозиция validators остаются implementation details, ограниченными наблюдаемым контрактом и обязательными fixtures.
+Нет. Literal regex и конкретная внутренняя декомпозиция validators остаются
+implementation details, ограниченными наблюдаемым контрактом и обязательными
+fixtures. MIT фиксируется только как upstream license declaration; юридическая
+проверка потребуется отдельно, если внешний dataset станет release evidence.
 
 ## Ambiguity Report
 
@@ -645,9 +685,10 @@ Ambiguity Report:
   Acceptance:   0.0   ✓ clear
   Boundaries:   0.0   ✓ clear
   Alternatives: 0.0   ✓ clear
-  Assumptions:  0.1   ✓ clear; numerical latency budget intentionally deferred
+  Assumptions:  0.25  ✓ external license is recorded as upstream metadata
   ──────────────────────────────
-  Aggregate:    0.02  ✓ below threshold (0.2 spec)
+  Aggregate:    0.05  ✓ below threshold (0.2 spec)
 
-Push lightly on: production latency threshold after the first measured JMH baseline.
+Push lightly on: production latency threshold after JMH; legal review only if
+the external dataset becomes release evidence.
 ```
