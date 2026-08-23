@@ -2,7 +2,7 @@
 
 **ID:** `EPIC-02`  
 **Тип:** Epic  
-**Статус:** Ready for implementation  
+**Статус:** In progress  
 **Приоритет:** High  
 **Суммарная оценка:** 33-48 инженерных дней  
 **Связанные требования:** `MVP-10`, `MVP-13`, `MVP-15`, `MVP-16`, `MVP-18`, `MVP-19`, `PERF-02`–`PERF-05`, `CONC-01`–`CONC-04`, `EXT-01`–`EXT-04`
@@ -37,7 +37,7 @@ offsets, порядка и безопасности остаются в этом
 
 ## Дочерние issues
 
-- [ ] [VIG-02-01: Public API и invariants](../issues/epic_02/issue_02_01_public_contract.md) - `Ready for implementation`
+- [x] [VIG-02-01: Public API и invariants](../issues/epic_02/issue_02_01_public_contract.md) - `Done`
 - [ ] [VIG-02-02: Payload preflight и UTF-8 offsets](../issues/epic_02/issue_02_02_payload_preflight.md) - `Ready for implementation`
 - [ ] [VIG-02-03: Recognizer pipeline](../issues/epic_02/issue_02_03_recognizer_pipeline.md) - `Ready for implementation`
 - [ ] [VIG-02-04: EMAIL_ADDRESS](../issues/epic_02/issue_02_04_email_recognizer.md) - `Ready for implementation`
@@ -266,7 +266,14 @@ enum class EvidenceStrength {
 - `evidenceStrength=FORMAT_ONLY` означает, что finding основан на достаточно характерном формате, для которого нет checksum и не требуется контекст.
 - `evidenceStrength` описывает основание срабатывания, но не является вероятностью и не задаёт универсальный порядок качества между разными PII types.
 - Если `confidence` не равен `null` в будущей реализации, значение обязано находиться в диапазоне `[0.0, 1.0]`; V1 такое значение не создаёт.
-- Public model проверяет перечисленные инварианты при создании и отклоняет invalid state без включения чувствительных данных в сообщение.
+- `PiiFinding` проверяет при создании только context-free invariants:
+  `0 <= startUtf8 < endUtf8`, диапазон ненулевого `confidence` и непустые
+  `recognizerId` / `recognizerVersion`. Invalid state отклоняется без включения
+  чувствительных данных в сообщение.
+- Payload-dependent invariants (`endUtf8 <= payloadUtf8Size` и принадлежность
+  offsets границам UTF-8 code points) проверяет detector implementation после
+  preflight и до возврата результата. Public model не принимает и не хранит
+  payload только ради повторной проверки этих условий.
 
 ### Идентификаторы recognizer'ов
 

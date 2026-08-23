@@ -12,7 +12,14 @@ Vigilant is a guardrails system for AI agent platforms. The product specs live i
 - `spec/epics/*` - large outcomes decomposed into linked issues
 - `spec/issues/**` - standalone and epic-scoped issues I can ask you to implement
 
-The current codebase is **v0: a transparent bypass proxy**. It forwards all HTTP traffic between a client and a single configured upstream (OpenAI/Anthropic-style LLM API) without inspecting bodies. Policies, detectors, plugin workers, and JSON parsing are explicitly out of scope for v0 - do not add them.
+The project has moved beyond bypass-only v0 and is now developing its first
+guardrail: the deterministic PII detector from EPIC-02. The completed v0 proxy
+remains the runtime foundation, and the current HTTP request path still forwards
+bodies without inspection. Implementation-ready issues may add isolated
+guardrail-domain components within their documented boundaries. Do not connect
+detectors or policies to the gateway, aggregate or parse HTTP bodies, add plugin
+workers, or otherwise change runtime proxy behavior unless a dedicated
+implementation-ready issue explicitly requires it.
 
 ## Commands
 
@@ -126,7 +133,7 @@ After the final slice, run the narrowest affected test suite once, then run `./g
 
 ## Protocol compatibility principle
 
-For guardrail-enabled stages after v0, the OpenAI-compatible protocol layer must be **schema-tolerant, lossless in forwarding, and strict about inspectability**:
+For guardrail-enabled work after bypass-only v0, the OpenAI-compatible protocol layer must be **schema-tolerant, lossless in forwarding, and strict about inspectability**:
 
 - Preserve the original request body and derive a separate normalized view containing only the data needed by guardrails.
 - If a request is allowed without modification, forward its original body rather than rebuilding it from typed DTOs.
@@ -135,7 +142,9 @@ For guardrail-enabled stages after v0, the OpenAI-compatible protocol layer must
 - Do not silently coerce non-conformant request shapes. Use an explicit, versioned compatibility adapter when Vigilant intentionally accepts a format that the selected upstream does not accept directly.
 - Forward only end-to-end headers. Vigilant remains responsible for upstream authentication and for rewriting `Host`, `Content-Length`, and hop-by-hop headers.
 
-This principle applies when body inspection is introduced in a later stage. It does not relax the v0 requirement to forward bodies as uninterpreted byte streams without aggregation or JSON parsing.
+This principle applies when an implementation-ready issue introduces body
+inspection. Until then, the runtime request path must continue forwarding bodies
+as uninterpreted byte streams without aggregation or JSON parsing.
 
 ## Constraints to preserve when editing
 

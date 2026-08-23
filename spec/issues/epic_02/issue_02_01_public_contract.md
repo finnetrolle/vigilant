@@ -1,6 +1,6 @@
 # VIG-02-01: Public API и invariants PII-detector
 
-**Статус:** Ready for implementation  
+**Статус:** Done  
 **Epic:** [EPIC-02](../../epics/epic_02_fast_pii_detector.md)  
 **Ветка:** Public contract  
 **Зависит от:** нет  
@@ -15,8 +15,8 @@
 
 ## Границы
 
-- Реализовать модели и их constructor invariants из разделов «Публичный API»
-  и «Контракт результата» epic.
+- Реализовать модели и их context-free constructor invariants из разделов
+  «Публичный API» и «Контракт результата» epic.
 - Не создавать `FastPiiDetector`, recognizer-ы, DI registration или HTTP
   integration.
 - Production-код использует только Kotlin/JDK и не зависит от logging.
@@ -27,12 +27,13 @@ Focused unit tests публичных типов из Kotlin и Java caller pers
 
 ## Критерии готовности
 
-- [ ] Все публичные модели и enum соответствуют нормативному контракту epic.
-- [ ] Invalid finding state отклоняется без PII в exception message.
-- [ ] `ALL_PII_TYPES` и возвращаемые коллекции нельзя изменить caller-у.
-- [ ] API не содержит Armeria, coroutine, DI, policy или transport types.
-- [ ] Для добавленных и изменённых Kotlin declarations написан KDoc.
-- [ ] Focused tests и `./gradlew test` проходят.
+- [x] Все публичные модели и enum соответствуют нормативному контракту epic.
+- [x] Context-free invalid finding state отклоняется без PII в exception message.
+- [x] `ALL_PII_TYPES` immutable; API требует immutable result collections,
+  реализация требования проверяется вместе с `FastPiiDetector` в VIG-02-03.
+- [x] API не содержит Armeria, coroutine, DI, policy или transport types.
+- [x] Для добавленных и изменённых Kotlin declarations написан KDoc.
+- [x] Focused tests и `./gradlew test` проходят.
 
 ## Не входит
 
