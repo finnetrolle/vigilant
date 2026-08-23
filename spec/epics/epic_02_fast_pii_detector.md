@@ -46,10 +46,10 @@ offsets, порядка и безопасности остаются в этом
 - [x] [VIG-02-06: PAYMENT_CARD](../issues/epic_02/issue_02_06_payment_card_recognizer.md) - `Done`
 - [x] [VIG-02-07: IP_ADDRESS](../issues/epic_02/issue_02_07_ip_address_recognizer.md) - `Done`
 - [x] [VIG-02-08: IBAN](../issues/epic_02/issue_02_08_iban_recognizer.md) - `Done`
-- [ ] [VIG-02-09: RU_INN](../issues/epic_02/issue_02_09_ru_inn_recognizer.md) - `Ready for implementation`
-- [ ] [VIG-02-10: RU_SNILS](../issues/epic_02/issue_02_10_ru_snils_recognizer.md) - `Ready for implementation`
-- [ ] [VIG-02-11: RU_PASSPORT](../issues/epic_02/issue_02_11_ru_passport_recognizer.md) - `Ready for implementation`
-- [ ] [VIG-02-12: RU_OMS](../issues/epic_02/issue_02_12_ru_oms_recognizer.md) - `Ready for implementation`
+- [x] [VIG-02-09: RU_INN](../issues/epic_02/issue_02_09_ru_inn_recognizer.md) - `Done`
+- [x] [VIG-02-10: RU_SNILS](../issues/epic_02/issue_02_10_ru_snils_recognizer.md) - `Done`
+- [x] [VIG-02-11: RU_PASSPORT](../issues/epic_02/issue_02_11_ru_passport_recognizer.md) - `Done`
+- [x] [VIG-02-12: RU_OMS](../issues/epic_02/issue_02_12_ru_oms_recognizer.md) - `Done`
 - [ ] [VIG-02-13: Cross-recognizer semantics](../issues/epic_02/issue_02_13_cross_recognizer_semantics.md) - `Ready for implementation`
 - [ ] [VIG-02-14: External RedMadRobot PII benchmark](../issues/epic_02/issue_02_14_quality_corpora.md) - `Ready for implementation`
 - [ ] [VIG-02-16: Canonical quality corpora и report](../issues/epic_02/issue_02_16_canonical_quality_corpora.md) - `Ready for implementation`

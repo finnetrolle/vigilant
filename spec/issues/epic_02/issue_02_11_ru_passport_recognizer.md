@@ -1,6 +1,6 @@
 # VIG-02-11: Recognizer `RU_PASSPORT`
 
-**Статус:** Ready for implementation  
+**Статус:** Done  
 **Epic:** [EPIC-02](../../epics/epic_02_fast_pii_detector.md)  
 **Ветка:** Recognizers > RU_PASSPORT  
 **Зависит от:** [VIG-02-03](issue_02_03_recognizer_pipeline.md)  
@@ -14,15 +14,15 @@ Fast detector распознаёт четыре зафиксированные �
 
 ## Критерии готовности
 
-- [ ] Поддержаны ровно четыре формы из epic.
-- [ ] Окно ограничено 64 Unicode code points с каждой стороны.
-- [ ] Контекст принимает prefix `паспорт` либо отдельные слова `серия` и
+- [x] Поддержаны ровно четыре формы из epic.
+- [x] Окно ограничено 64 Unicode code points с каждой стороны.
+- [x] Контекст принимает prefix `паспорт` либо отдельные слова `серия` и
   `номер` одновременно.
-- [ ] Одного слова `серия` или `номер` недостаточно.
-- [ ] Контекст не входит в finding span.
-- [ ] Проверены границы payload, supplementary code points и false positives.
-- [ ] Для добавленных и изменённых Kotlin declarations написан KDoc.
-- [ ] Focused tests и `./gradlew test` проходят.
+- [x] Одного слова `серия` или `номер` недостаточно.
+- [x] Контекст не входит в finding span.
+- [x] Проверены границы payload, supplementary code points и false positives.
+- [x] Для добавленных и изменённых Kotlin declarations написан KDoc.
+- [x] Focused tests и `./gradlew test` проходят.
 
 ## Не входит
 

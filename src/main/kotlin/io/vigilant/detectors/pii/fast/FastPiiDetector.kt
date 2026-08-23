@@ -23,6 +23,10 @@ class FastPiiDetector private constructor(
                 PaymentCardRecognizer,
                 IpAddressRecognizer,
                 IbanRecognizer,
+                RuInnRecognizer,
+                RuSnilsRecognizer,
+                RuPassportRecognizer,
+                RuOmsRecognizer,
             ),
         )
 

@@ -1,6 +1,6 @@
 # VIG-02-12: Recognizer `RU_OMS`
 
-**Статус:** Ready for implementation  
+**Статус:** Done  
 **Epic:** [EPIC-02](../../epics/epic_02_fast_pii_detector.md)  
 **Ветка:** Recognizers > RU_OMS  
 **Зависит от:** [VIG-02-03](issue_02_03_recognizer_pipeline.md)  
@@ -14,13 +14,13 @@ Fast detector распознаёт compact и four-by-four spaced номер О�
 
 ## Критерии готовности
 
-- [ ] Поддержаны только compact и группы по четыре с одиночным `U+0020`.
-- [ ] Hyphens и Unicode spaces отклоняются.
-- [ ] Mod10 соответствует нормативной формуле epic.
-- [ ] Property tests проверяют valid generation и checksum mutations.
-- [ ] Digit boundaries, offsets и invalid candidate continuation покрыты.
-- [ ] Для добавленных и изменённых Kotlin declarations написан KDoc.
-- [ ] Focused tests и `./gradlew test` проходят.
+- [x] Поддержаны только compact и группы по четыре с одиночным `U+0020`.
+- [x] Hyphens и Unicode spaces отклоняются.
+- [x] Mod10 соответствует нормативной формуле epic.
+- [x] Property tests проверяют valid generation и checksum mutations.
+- [x] Digit boundaries, offsets и invalid candidate continuation покрыты.
+- [x] Для добавленных и изменённых Kotlin declarations написан KDoc.
+- [x] Focused tests и `./gradlew test` проходят.
 
 ## Не входит
 
