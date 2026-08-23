@@ -1,6 +1,6 @@
 # VIG-02-03: Последовательный recognizer pipeline
 
-**Статус:** Ready for implementation  
+**Статус:** Done  
 **Epic:** [EPIC-02](../../epics/epic_02_fast_pii_detector.md)  
 **Ветка:** Public contract  
 **Зависит от:** [VIG-02-01](issue_02_01_public_contract.md), [VIG-02-02](issue_02_02_payload_preflight.md)  
@@ -31,12 +31,12 @@ Focused orchestration tests с deterministic fake recognizer-ами.
 
 ## Критерии готовности
 
-- [ ] Реализованы ordering, filtering, early exit и empty-set semantics.
-- [ ] Cancellation и concurrent calls проверены воспроизводимыми тестами.
-- [ ] Package не создаёт threads, executor или coroutine scope.
-- [ ] Pipeline не зависит от gateway, DI или logging.
-- [ ] Для добавленных и изменённых Kotlin declarations написан KDoc.
-- [ ] Focused tests и `./gradlew test` проходят.
+- [x] Реализованы ordering, filtering, early exit и empty-set semantics.
+- [x] Cancellation и concurrent calls проверены воспроизводимыми тестами.
+- [x] Package не создаёт threads, executor или coroutine scope.
+- [x] Pipeline не зависит от gateway, DI или logging.
+- [x] Для добавленных и изменённых Kotlin declarations написан KDoc.
+- [x] Focused tests и `./gradlew test` проходят.
 
 ## Не входит
 

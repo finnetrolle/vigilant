@@ -39,7 +39,7 @@ offsets, порядка и безопасности остаются в этом
 
 - [x] [VIG-02-01: Public API и invariants](../issues/epic_02/issue_02_01_public_contract.md) - `Done`
 - [x] [VIG-02-02: Payload preflight и UTF-8 offsets](../issues/epic_02/issue_02_02_payload_preflight.md) - `Done`
-- [ ] [VIG-02-03: Recognizer pipeline](../issues/epic_02/issue_02_03_recognizer_pipeline.md) - `Ready for implementation`
+- [x] [VIG-02-03: Recognizer pipeline](../issues/epic_02/issue_02_03_recognizer_pipeline.md) - `Done`
 - [ ] [VIG-02-04: EMAIL_ADDRESS](../issues/epic_02/issue_02_04_email_recognizer.md) - `Ready for implementation`
 - [ ] [VIG-02-05: PHONE_NUMBER](../issues/epic_02/issue_02_05_phone_recognizer.md) - `Ready for implementation`
 - [ ] [VIG-02-06: PAYMENT_CARD](../issues/epic_02/issue_02_06_payment_card_recognizer.md) - `Ready for implementation`
