@@ -15,7 +15,16 @@ class FastPiiDetector private constructor(
         recognizers.sortedBy { recognizer -> CANONICAL_TYPE_ORDER.indexOf(recognizer.type) }
 
     /** Creates the detector with the built-in recognizer set. */
-    constructor() : this(listOf(EmailAddressRecognizer))
+    constructor() :
+        this(
+            listOf(
+                EmailAddressRecognizer,
+                PhoneNumberRecognizer,
+                PaymentCardRecognizer,
+                IpAddressRecognizer,
+                IbanRecognizer,
+            ),
+        )
 
     /**
      * Detects enabled PII categories in canonical recognizer order.

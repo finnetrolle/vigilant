@@ -1,6 +1,6 @@
 # VIG-02-06: Recognizer `PAYMENT_CARD`
 
-**Статус:** Ready for implementation  
+**Статус:** Done  
 **Epic:** [EPIC-02](../../epics/epic_02_fast_pii_detector.md)  
 **Ветка:** Recognizers > PAYMENT_CARD  
 **Зависит от:** [VIG-02-03](issue_02_03_recognizer_pipeline.md)  
@@ -14,14 +14,14 @@ separators и обязательным Luhn, возвращая metadata
 
 ## Критерии готовности
 
-- [ ] Luhn реализован без преобразования всего кандидата в integer.
-- [ ] Повторяющаяся одна цифра, включая нули, отклоняется.
-- [ ] Separator и digit-boundary rules соответствуют epic.
-- [ ] Property tests генерируют валидные формы и checksum mutations с
+- [x] Luhn реализован без преобразования всего кандидата в integer.
+- [x] Повторяющаяся одна цифра, включая нули, отклоняется.
+- [x] Separator и digit-boundary rules соответствуют epic.
+- [x] Property tests генерируют валидные формы и checksum mutations с
   фиксированным seed.
-- [ ] Проверены compact/formatted inputs, offsets и invalid candidates.
-- [ ] Для добавленных и изменённых Kotlin declarations написан KDoc.
-- [ ] Focused tests и `./gradlew test` проходят.
+- [x] Проверены compact/formatted inputs, offsets и invalid candidates.
+- [x] Для добавленных и изменённых Kotlin declarations написан KDoc.
+- [x] Focused tests и `./gradlew test` проходят.
 
 ## Не входит
 

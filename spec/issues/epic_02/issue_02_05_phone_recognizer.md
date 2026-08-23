@@ -1,6 +1,6 @@
 # VIG-02-05: Recognizer `PHONE_NUMBER`
 
-**Статус:** Ready for implementation  
+**Статус:** Done  
 **Epic:** [EPIC-02](../../epics/epic_02_fast_pii_detector.md)  
 **Ветка:** Recognizers > PHONE_NUMBER  
 **Зависит от:** [VIG-02-03](issue_02_03_recognizer_pipeline.md)  
@@ -14,14 +14,14 @@ Fast detector распознаёт российские номера с `+7` и�
 
 ## Критерии готовности
 
-- [ ] После локальной нормализации остаётся ровно 11 ASCII digits.
-- [ ] Поддержана одна корректная пара скобок вокруг трёх цифр area code.
-- [ ] Повторные, крайние и неподдерживаемые separators отклонены.
-- [ ] Extensions не входят в finding и не валидируются.
-- [ ] Candidate boundaries и продолжение после invalid candidate проверены.
-- [ ] Есть positive, hard-negative, Unicode offset и adversarial tests.
-- [ ] Для добавленных и изменённых Kotlin declarations написан KDoc.
-- [ ] Focused tests и `./gradlew test` проходят.
+- [x] После локальной нормализации остаётся ровно 11 ASCII digits.
+- [x] Поддержана одна корректная пара скобок вокруг трёх цифр area code.
+- [x] Повторные, крайние и неподдерживаемые separators отклонены.
+- [x] Extensions не входят в finding и не валидируются.
+- [x] Candidate boundaries и продолжение после invalid candidate проверены.
+- [x] Есть positive, hard-negative, Unicode offset и adversarial tests.
+- [x] Для добавленных и изменённых Kotlin declarations написан KDoc.
+- [x] Focused tests и `./gradlew test` проходят.
 
 ## Не входит
 
