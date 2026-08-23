@@ -1,6 +1,6 @@
 # VIG-02-02: Payload preflight и UTF-8 offsets
 
-**Статус:** Ready for implementation  
+**Статус:** Done  
 **Epic:** [EPIC-02](../../epics/epic_02_fast_pii_detector.md)  
 **Ветка:** Public contract  
 **Зависит от:** [VIG-02-01](issue_02_01_public_contract.md)  
@@ -29,12 +29,12 @@ Pure unit tests preflight и offset conversion. Integration с pipeline вход
 
 ## Критерии готовности
 
-- [ ] Все правила разделов «Размер payload» и «Ошибки входа» epic покрыты.
-- [ ] Нет полной UTF-8 копии payload во время preflight.
-- [ ] Проверены invalid surrogate и граничные размеры.
-- [ ] Проверены byte offsets на mixed Unicode.
-- [ ] Для добавленных и изменённых Kotlin declarations написан KDoc.
-- [ ] Focused tests и `./gradlew test` проходят.
+- [x] Все правила разделов «Размер payload» и «Ошибки входа» epic покрыты.
+- [x] Нет полной UTF-8 копии payload во время preflight.
+- [x] Проверены invalid surrogate и граничные размеры.
+- [x] Проверены byte offsets на mixed Unicode.
+- [x] Для добавленных и изменённых Kotlin declarations написан KDoc.
+- [x] Focused tests и `./gradlew test` проходят.
 
 ## Не входит
 
