@@ -179,6 +179,17 @@ tasks.register<JavaExec>("redMadRobotPiiBenchmark") {
     )
 }
 
+tasks.register<JavaExec>("piiQualityReport") {
+    dependsOn(tasks.named("testClasses"))
+    group = "verification"
+    description = "Runs the canonical synthetic PII corpus gate and writes JSON/Markdown quality reports."
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("io.vigilant.detectors.pii.quality.CanonicalQualityReportMain")
+    args(
+        layout.buildDirectory.dir("reports/pii/canonical").get().asFile.absolutePath,
+    )
+}
+
 tasks.register("verifyAll") {
     group = "verification"
     description = "Full local verification: build (compile, tests, detekt) + CVE scan."

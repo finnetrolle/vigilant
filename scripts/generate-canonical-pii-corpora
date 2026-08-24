@@ -1,0 +1,528 @@
+#!/usr/bin/env python3
+"""Generate deterministic synthetic canonical PII contract corpora."""
+
+from __future__ import annotations
+
+import base64
+from dataclasses import dataclass
+from pathlib import Path
+
+
+CORPUS_ROOT = (
+    Path(__file__).resolve().parents[1]
+    / "src/test/resources/io/vigilant/detectors/pii/quality/canonical"
+)
+HEADER = "# pii-corpus-v1"
+
+
+@dataclass(frozen=True)
+class Metadata:
+    """Canonical metadata expected from one recognizer."""
+
+    evidence: str
+    recognizer_id: str
+    version: str
+
+
+METADATA = {
+    "EMAIL_ADDRESS": Metadata("FORMAT_ONLY", "fast.email_address", "1.0.0"),
+    "PHONE_NUMBER": Metadata("FORMAT_ONLY", "fast.phone_number.ru", "1.0.0"),
+    "PAYMENT_CARD": Metadata("VALIDATED", "fast.payment_card.luhn", "1.0.0"),
+    "IP_ADDRESS": Metadata("VALIDATED", "fast.ip_address", "1.0.0"),
+    "IBAN": Metadata("VALIDATED", "fast.iban", "1.0.0+iban-registry.102"),
+    "RU_INN": Metadata("VALIDATED", "fast.ru_inn", "1.0.0"),
+    "RU_SNILS": Metadata("VALIDATED", "fast.ru_snils", "1.0.0"),
+    "RU_PASSPORT": Metadata("CONTEXTUAL", "fast.ru_passport", "1.0.0"),
+    "RU_OMS": Metadata("VALIDATED", "fast.ru_oms", "1.0.0"),
+}
+
+
+def wrapped(index: int, value: str, *, right_context: str = "") -> tuple[str, str]:
+    """Place a synthetic value at payload edges and after ASCII, Cyrillic, or emoji text."""
+
+    mode = index % 4
+    if mode == 0:
+        return value + right_context, value
+    if mode == 1:
+        return f"Value {index}: {value},{right_context}", value
+    if mode == 2:
+        return f"Значение {index}: {value}!{right_context}", value
+    return f"😀 тест {index}: {value};{right_context}", value
+
+
+def expected_finding(pii_type: str, payload: str, span_value: str) -> str:
+    """Build canonical metadata from independently known payload byte coordinates."""
+
+    character_start = payload.index(span_value)
+    start = len(payload[:character_start].encode("utf-8"))
+    end = start + len(span_value.encode("utf-8"))
+    metadata = METADATA[pii_type]
+    return (
+        f"{pii_type},{start},{end},{metadata.evidence},"
+        f"{metadata.recognizer_id},{metadata.version}"
+    )
+
+
+def record(case_id: str, pii_type: str, payload: str, expected: str = "") -> str:
+    """Encode one payload as exact UTF-8 bytes in the versioned TSV record."""
+
+    encoded = base64.b64encode(payload.encode("utf-8")).decode("ascii")
+    return "\t".join((case_id, pii_type, encoded, expected))
+
+
+def positive_record(
+    case_id: str,
+    pii_type: str,
+    payload: str,
+    span_value: str,
+) -> str:
+    """Encode one positive record with an explicit full finding contract."""
+
+    return record(case_id, pii_type, payload, expected_finding(pii_type, payload, span_value))
+
+
+def write_corpus(pii_type: str, category: str, records: list[str]) -> None:
+    """Write one deterministic corpus with the exact v1 header and final newline."""
+
+    if len(records) != 100:
+        raise ValueError(f"{pii_type}-{category} must contain exactly 100 records")
+    target = CORPUS_ROOT / f"{pii_type.lower()}.{category}.tsv"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(HEADER + "\n" + "\n".join(records) + "\n", encoding="utf-8")
+
+
+def mixed_record(case_id: str, payload: str, spans: list[tuple[str, str]]) -> str:
+    """Encode one mixed-text case in canonical detector order."""
+
+    type_order = {pii_type: index for index, pii_type in enumerate(METADATA)}
+    findings = [expected_finding(pii_type, payload, value) for pii_type, value in spans]
+    findings.sort(
+        key=lambda finding: (
+            type_order[finding.split(",", 1)[0]],
+            int(finding.split(",")[1]),
+            int(finding.split(",")[2]),
+            finding.split(",")[4],
+        )
+    )
+    return record(case_id, "*", payload, ";".join(findings))
+
+
+def write_mixed_corpus(records: list[str]) -> None:
+    """Write the separate synthetic mixed-text scoring corpus."""
+
+    target = CORPUS_ROOT / "mixed.tsv"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(HEADER + "\n" + "\n".join(records) + "\n", encoding="utf-8")
+
+
+def email_corpora() -> tuple[list[str], list[str]]:
+    """Create dot-atom, symbol, IDN, boundary, and invalid-label email cases."""
+
+    positives = []
+    negatives = []
+    local_symbols = "!#$%&'*+/=?^_`{|}~-"
+    for index in range(100):
+        variant = index % 5
+        if index < len(local_symbols):
+            value = f"a{local_symbols[index]}b{index}@example.com"
+        elif index == len(local_symbols):
+            value = "a!#$%&'*+/=?^_`{|}~-.z@example.com"
+        elif index == 20:
+            value = f"{'a' * 64}@{'b' * 63}.{'c' * 63}.{'d' * 61}"
+        elif index in (21, 22, 23):
+            value = f"user{index}@example{('。', '．', '｡')[index - 21]}com"
+        else:
+            values = (
+                f"user{index}@example.com",
+                f"first.last{index}@sub.example.org",
+                f"u+tag{index}@example.test",
+                f"user{index}@пример.рф",
+                f"user{index}@example。com",
+            )
+            value = values[variant]
+        invalid_values = (
+            f"user..{index}@example.com",
+            f".user{index}@example.com",
+            f"user{index}.@example.com",
+            f"user{index}@-example.com",
+            f"user{index}@example",
+        )
+        payload, span = wrapped(index, value)
+        negative_payload, _ = wrapped(index, invalid_values[variant])
+        positives.append(positive_record(f"email-positive-{index + 1:03d}", "EMAIL_ADDRESS", payload, span))
+        negatives.append(record(f"email-hard-negative-{index + 1:03d}", "EMAIL_ADDRESS", negative_payload))
+    return positives, negatives
+
+
+def phone_value(index: int) -> str:
+    """Create one unique synthetic Russian phone in all documented layouts."""
+
+    area = 900 + index
+    subscriber = f"{1_000_000 + index:07d}"
+    groups = (subscriber[:3], subscriber[3:5], subscriber[5:])
+    return (
+        f"+7{area}{subscriber}",
+        f"8 ({area}) {groups[0]}-{groups[1]}-{groups[2]}",
+        f"+7 ({area}) {groups[0]}-{groups[1]}-{groups[2]}",
+        f"8 {area} {groups[0]}-{groups[1]}-{groups[2]}",
+    )[index % 4]
+
+
+def phone_corpora() -> tuple[list[str], list[str]]:
+    """Create supported Russian phone layouts and wrong-country hard negatives."""
+
+    positives = []
+    negatives = []
+    for index in range(100):
+        value = phone_value(index)
+        payload, span = wrapped(index, value)
+        wrong_country = "+1" + f"{900 + index}{1_000_000 + index:07d}"
+        negative_payload, _ = wrapped(index, wrong_country)
+        positives.append(positive_record(f"phone-positive-{index + 1:03d}", "PHONE_NUMBER", payload, span))
+        negatives.append(record(f"phone-hard-negative-{index + 1:03d}", "PHONE_NUMBER", negative_payload))
+    return positives, negatives
+
+
+def luhn_value(index: int) -> str:
+    """Construct a non-repeating 13-to-19 digit value with a reference Luhn digit."""
+
+    length = 13 + index % 7
+    body = "4" + "".join(str((index * 7 + position * 3 + 1) % 10) for position in range(length - 2))
+    digits = [int(character) for character in body + "0"]
+    total = 0
+    for position, digit in enumerate(reversed(digits)):
+        if position % 2 == 1:
+            digit *= 2
+            if digit > 9:
+                digit -= 9
+        total += digit
+    return body + str((10 - total % 10) % 10)
+
+
+def grouped(value: str, separator: str) -> str:
+    """Group a compact value into the recognizer's supported four-character blocks."""
+
+    return separator.join(value[position : position + 4] for position in range(0, len(value), 4))
+
+
+def payment_card_corpora() -> tuple[list[str], list[str]]:
+    """Create Luhn-valid forms and single-check-digit hard negatives."""
+
+    positives = []
+    negatives = []
+    for index in range(100):
+        compact = luhn_value(index)
+        value = (compact, grouped(compact, " "), grouped(compact, "-"))[index % 3]
+        invalid_compact = compact[:-1] + str((int(compact[-1]) + 1) % 10)
+        invalid = (invalid_compact, grouped(invalid_compact, " "), grouped(invalid_compact, "-"))[index % 3]
+        payload, span = wrapped(index, value)
+        negative_payload, _ = wrapped(index, invalid)
+        positives.append(positive_record(f"card-positive-{index + 1:03d}", "PAYMENT_CARD", payload, span))
+        negatives.append(record(f"card-hard-negative-{index + 1:03d}", "PAYMENT_CARD", negative_payload))
+    return positives, negatives
+
+
+def ip_corpora() -> tuple[list[str], list[str]]:
+    """Create IPv4/IPv6 syntax variants and malformed address hard negatives."""
+
+    positives = []
+    negatives = []
+    invalid_forms = (
+        "256.0.0.1",
+        "01.2.3.4",
+        "1.2.3.4.5",
+        "2001:db8:::1",
+        "2001:db8::1::",
+        "1:2:3:4:5:6:7",
+        "12345::1",
+        "::ffff:192.168.001.1",
+        "fe80::1%eth0",
+        "[fe80::1%eth0]",
+    )
+    for index in range(100):
+        ordinal = index + 1
+        variant = index % 10
+        values = (
+            f"10.{index // 25}.{index % 25}.{ordinal}",
+            f"172.16.{index // 25}.{ordinal}",
+            f"2001:0db8:0000:0000:0000:ff00:{ordinal:04x}:8329",
+            f"2001:db8:{ordinal:x}::ff00:42:{ordinal:x}",
+            "::1",
+            "::",
+            f"fe80::{ordinal:x}",
+            f"::ffff:192.0.2.{ordinal}",
+            f"2001:db8:0:0:0:ffff:192.0.2.{ordinal}",
+            f"192.168.{index // 25}.{ordinal}",
+        )
+        value = values[variant]
+        display = f"[{value}]" if index % 3 == 0 and ":" in value else value
+        invalid = invalid_forms[variant]
+        payload, _ = wrapped(index, display)
+        negative_payload, _ = wrapped(index, invalid)
+        positives.append(positive_record(f"ip-positive-{index + 1:03d}", "IP_ADDRESS", payload, value))
+        negatives.append(record(f"ip-hard-negative-{index + 1:03d}", "IP_ADDRESS", negative_payload))
+    return positives, negatives
+
+
+def load_iban_countries() -> tuple[tuple[str, int], ...]:
+    """Load the pinned release-102 registry so every supported country appears in canonical evidence."""
+
+    registry = (
+        Path(__file__).resolve().parents[1]
+        / "src/main/resources/io/vigilant/detectors/pii/fast/iban-country-lengths.csv"
+    )
+    rows = [line for line in registry.read_text(encoding="utf-8").splitlines() if line and not line.startswith("#")]
+    if rows.pop(0) != "country_code,iban_length":
+        raise ValueError("Unexpected IBAN registry schema")
+    return tuple((row.split(",")[0], int(row.split(",")[1])) for row in rows)
+
+
+IBAN_COUNTRIES = load_iban_countries()
+
+
+def iban_remainder(value: str) -> int:
+    """Compute the ISO 13616 streaming remainder from an independently assembled value."""
+
+    remainder = 0
+    for character in value:
+        if character.isdigit():
+            remainder = (remainder * 10 + int(character)) % 97
+        else:
+            remainder = (remainder * 100 + ord(character) - ord("A") + 10) % 97
+    return remainder
+
+
+def iban_value(index: int) -> str:
+    """Construct a registry-length numeric IBAN with independent mod-97 check digits."""
+
+    country, length = IBAN_COUNTRIES[index % len(IBAN_COUNTRIES)]
+    bban = "".join(str((index * 3 + position * 7 + 1) % 10) for position in range(length - 4))
+    check_digits = f"{98 - iban_remainder(bban + country + '00'):02d}"
+    return country + check_digits + bban
+
+
+def iban_corpora() -> tuple[list[str], list[str]]:
+    """Create compact/grouped registry IBANs and checksum-invalid near matches."""
+
+    positives = []
+    negatives = []
+    for index in range(100):
+        compact = iban_value(index)
+        invalid_compact = compact[:2] + f"{(int(compact[2:4]) + 1) % 100:02d}" + compact[4:]
+        value = compact if index % 2 == 0 else grouped(compact, " ").lower()
+        invalid = invalid_compact if index % 2 == 0 else grouped(invalid_compact, " ").lower()
+        payload, span = wrapped(index, value)
+        negative_payload, _ = wrapped(index, invalid)
+        positives.append(positive_record(f"iban-positive-{index + 1:03d}", "IBAN", payload, span))
+        negatives.append(record(f"iban-hard-negative-{index + 1:03d}", "IBAN", negative_payload))
+    return positives, negatives
+
+
+def inn_check_digit(digits: str, weights: tuple[int, ...]) -> str:
+    """Compute one Russian personal-INN check digit from normative weights."""
+
+    return str(sum(int(digits[index]) * weight for index, weight in enumerate(weights)) % 11 % 10)
+
+
+def inn_value(index: int) -> str:
+    """Construct one unique 12-digit synthetic personal INN."""
+
+    base = f"500100{index:04d}"
+    first = inn_check_digit(base, (7, 2, 4, 10, 3, 5, 9, 4, 6, 8))
+    second = inn_check_digit(base + first, (3, 7, 2, 4, 10, 3, 5, 9, 4, 6, 8))
+    return base + first + second
+
+
+def inn_corpora() -> tuple[list[str], list[str]]:
+    """Create checksum-valid personal INNs and one-digit checksum mutations."""
+
+    positives = []
+    negatives = []
+    for index in range(100):
+        value = inn_value(index)
+        invalid = value[:-1] + str((int(value[-1]) + 1) % 10)
+        payload, span = wrapped(index, value)
+        negative_payload, _ = wrapped(index, invalid)
+        positives.append(positive_record(f"inn-positive-{index + 1:03d}", "RU_INN", payload, span))
+        negatives.append(record(f"inn-hard-negative-{index + 1:03d}", "RU_INN", negative_payload))
+    return positives, negatives
+
+
+def snils_value(index: int) -> str:
+    """Construct an eligible SNILS base and its official modulo-101 checksum."""
+
+    base = f"11223{index:04d}"
+    remainder = sum(int(base[position]) * (9 - position) for position in range(9)) % 101
+    checksum = 0 if remainder == 100 else remainder
+    return base + f"{checksum:02d}"
+
+
+def snils_form(compact: str, variant: int) -> str:
+    """Render compact and both documented SNILS separator layouts."""
+
+    if variant == 0:
+        return compact
+    separator = "-" if variant == 1 else " "
+    return f"{compact[:3]}-{compact[3:6]}-{compact[6:9]}{separator}{compact[9:]}"
+
+
+def snils_corpora() -> tuple[list[str], list[str]]:
+    """Create all SNILS forms and checksum-invalid hard negatives."""
+
+    positives = []
+    negatives = []
+    for index in range(100):
+        compact = snils_value(index)
+        invalid_compact = compact[:-1] + str((int(compact[-1]) + 1) % 10)
+        value = snils_form(compact, index % 3)
+        invalid = snils_form(invalid_compact, index % 3)
+        payload, span = wrapped(index, value)
+        negative_payload, _ = wrapped(index, invalid)
+        positives.append(positive_record(f"snils-positive-{index + 1:03d}", "RU_SNILS", payload, span))
+        negatives.append(record(f"snils-hard-negative-{index + 1:03d}", "RU_SNILS", negative_payload))
+    return positives, negatives
+
+
+def passport_value(index: int) -> str:
+    """Render all four context-gated Russian passport layouts."""
+
+    series = f"{4500 + index:04d}"
+    number = f"{100000 + index:06d}"
+    return (
+        f"{series} {number}",
+        f"{series[:2]} {series[2:]} {number}",
+        f"{series[:2]}-{series[2:]} {number}",
+        f"{series[:2]} {series[2:]} № {number}",
+    )[index % 4]
+
+
+def passport_positive_payload(index: int, value: str) -> tuple[str, str]:
+    """Place passport context before or after the finding across UTF-8 offset classes."""
+
+    mode = index % 4
+    if mode == 0:
+        return f"Паспорт {value}", value
+    if mode == 1:
+        return f"😀 Паспорт: {value}.", value
+    if mode == 2:
+        return f"Документ {value}, паспорт", value
+    return f"Кириллица: паспортные данные {value}!", value
+
+
+def passport_corpora() -> tuple[list[str], list[str]]:
+    """Create context-qualified passport forms and context/format hard negatives."""
+
+    positives = []
+    negatives = []
+    for index in range(100):
+        value = passport_value(index)
+        payload, span = passport_positive_payload(index, value)
+        if index % 2 == 0:
+            negative_payload = f"Документ: {value}"
+        else:
+            digits = value.replace(" ", "").replace("-", "").replace("№", "")
+            negative_payload = f"Паспорт {digits}"
+        positives.append(positive_record(f"passport-positive-{index + 1:03d}", "RU_PASSPORT", payload, span))
+        negatives.append(record(f"passport-hard-negative-{index + 1:03d}", "RU_PASSPORT", negative_payload))
+    return positives, negatives
+
+
+def oms_check_digit(base: str) -> str:
+    """Compute the documented OMS select/concatenate/multiply checksum."""
+
+    odd_position_number = "".join(base[index] for index in range(len(base) - 1, -1, -1) if index % 2 == 0)
+    even_position_number = "".join(base[index] for index in range(len(base) - 1, -1, -1) if index % 2 == 1)
+    doubled_odd = str(int(odd_position_number) * 2)
+    digit_sum = sum(int(character) for character in even_position_number + doubled_odd)
+    return str((10 - digit_sum % 10) % 10)
+
+
+def oms_value(index: int) -> str:
+    """Construct one unique synthetic 16-digit OMS policy number."""
+
+    base = f"12345678901{index:04d}"
+    return base + oms_check_digit(base)
+
+
+def oms_corpora() -> tuple[list[str], list[str]]:
+    """Create compact/grouped OMS forms and checksum-invalid hard negatives."""
+
+    positives = []
+    negatives = []
+    for index in range(100):
+        compact = oms_value(index)
+        invalid_compact = compact[:-1] + str((int(compact[-1]) + 1) % 10)
+        value = compact if index % 2 == 0 else grouped(compact, " ")
+        invalid = invalid_compact if index % 2 == 0 else grouped(invalid_compact, " ")
+        payload, span = wrapped(index, value)
+        negative_payload, _ = wrapped(index, invalid)
+        positives.append(positive_record(f"oms-positive-{index + 1:03d}", "RU_OMS", payload, span))
+        negatives.append(record(f"oms-hard-negative-{index + 1:03d}", "RU_OMS", negative_payload))
+    return positives, negatives
+
+
+def mixed_corpus() -> list[str]:
+    """Create mixed Unicode payloads with punctuation, hard negatives, and real cross-type overlap."""
+
+    overlapping_card_and_oms = "1234567890100005"
+    first_payload = (
+        "😀 Контакты: user42@пример.рф, +7 (912) 345-67-89; "
+        "ошибка bad..mail@example.com; карта/ОМС 1234567890100005; "
+        "IP [2001:db8::1]; IBAN DE89370400440532013000; "
+        "ИНН 500100732259; СНИЛС 112-233-445 95; паспорт 45 03 № 123456."
+    )
+    first_spans = [
+        ("EMAIL_ADDRESS", "user42@пример.рф"),
+        ("PHONE_NUMBER", "+7 (912) 345-67-89"),
+        ("PAYMENT_CARD", overlapping_card_and_oms),
+        ("IP_ADDRESS", "2001:db8::1"),
+        ("IBAN", "DE89370400440532013000"),
+        ("RU_INN", "500100732259"),
+        ("RU_SNILS", "112-233-445 95"),
+        ("RU_PASSPORT", "45 03 № 123456"),
+        ("RU_OMS", overlapping_card_and_oms),
+    ]
+    hard_negative_payload = (
+        "😀 Шум: bad..7@example.com, +19123456789, 4111111111111112, "
+        "256.7.7.7, DE88370400440532013000, 500100732258, "
+        "112-233-445 96, Паспорт 4503123456, 1234567890123453."
+    )
+    boundary_payload = (
+        "a@b.co; кириллица 127.0.0.1; emoji 😀 GB29NWBK60161331926819; "
+        "финал +79991112233"
+    )
+    boundary_spans = [
+        ("EMAIL_ADDRESS", "a@b.co"),
+        ("PHONE_NUMBER", "+79991112233"),
+        ("IP_ADDRESS", "127.0.0.1"),
+        ("IBAN", "GB29NWBK60161331926819"),
+    ]
+    return [
+        mixed_record("mixed-unicode-overlap-001", first_payload, first_spans),
+        mixed_record("mixed-hard-negative-002", hard_negative_payload, []),
+        mixed_record("mixed-boundaries-003", boundary_payload, boundary_spans),
+    ]
+
+
+def main() -> None:
+    """Regenerate all per-type positive and hard-negative canonical corpora."""
+
+    corpora = {
+        "EMAIL_ADDRESS": email_corpora(),
+        "PHONE_NUMBER": phone_corpora(),
+        "PAYMENT_CARD": payment_card_corpora(),
+        "IP_ADDRESS": ip_corpora(),
+        "IBAN": iban_corpora(),
+        "RU_INN": inn_corpora(),
+        "RU_SNILS": snils_corpora(),
+        "RU_PASSPORT": passport_corpora(),
+        "RU_OMS": oms_corpora(),
+    }
+    for pii_type, (positives, negatives) in corpora.items():
+        write_corpus(pii_type, "positive", positives)
+        write_corpus(pii_type, "hard-negative", negatives)
+    write_mixed_corpus(mixed_corpus())
+
+
+if __name__ == "__main__":
+    main()

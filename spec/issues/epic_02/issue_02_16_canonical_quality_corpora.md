@@ -1,6 +1,6 @@
 # VIG-02-16: Canonical quality corpora и report
 
-**Статус:** Ready for implementation  
+**Статус:** Done
 **Epic:** [EPIC-02](../../epics/epic_02_fast_pii_detector.md)  
 **Ветка:** Evidence > canonical quality gate  
 **Зависит от:** [VIG-02-13](issue_02_13_cross_recognizer_semantics.md)  
@@ -42,20 +42,20 @@ exact/relaxed качество без числового release threshold.
 
 ## Критерии готовности
 
-- [ ] Для каждого PII type существует не менее 100 positive и 100 hard-negative
+- [x] Для каждого PII type существует не менее 100 positive и 100 hard-negative
       version-controlled synthetic cases.
-- [ ] Positive corpus проходит со 100% exact type/span/evidence/metadata match.
-- [ ] Hard-negative corpus проходит со 100% rejection.
-- [ ] Все fixtures синтетические и не содержат production или RedMadRobot data.
-- [ ] Parser отклоняет неверный header, Base64, columns, enum values, offsets,
+- [x] Positive corpus проходит со 100% exact type/span/evidence/metadata match.
+- [x] Hard-negative corpus проходит со 100% rejection.
+- [x] Все fixtures синтетические и не содержат production или RedMadRobot data.
+- [x] Parser отклоняет неверный header, Base64, columns, enum values, offsets,
       ordering и duplicate case IDs понятной безопасной ошибкой.
-- [ ] Mixed-text corpus проверяет exact и relaxed one-to-one matching,
+- [x] Mixed-text corpus проверяет exact и relaxed one-to-one matching,
       overlapping findings и deterministic aggregate metrics.
-- [ ] `./gradlew piiQualityReport` воспроизводимо создаёт per-type и aggregate
+- [x] `./gradlew piiQualityReport` воспроизводимо создаёт per-type и aggregate
       JSON/Markdown reports с corpus version и case counts.
-- [ ] Test failures и reports не содержат raw payload, candidates или matched
+- [x] Test failures и reports не содержат raw payload, candidates или matched
       PII values.
-- [ ] Focused corpus tests и `./gradlew test` проходят.
+- [x] Focused corpus tests и `./gradlew test` проходят.
 
 ## Validation seam
 

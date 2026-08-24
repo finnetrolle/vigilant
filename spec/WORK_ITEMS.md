@@ -90,7 +90,7 @@ Issue является листом mind map, если:
 |---|---|---:|---:|
 | [VIG-01: Асинхронные JSON-логи](issues/issue_01_logging.md) | `Done` | завершена | 0 дней осталось |
 | [VIG-01A: Benchmark логирования](issues/issue_01A_benchmark.md) | `Ready for implementation` | не начата | 4-7 дней |
-| [EPIC-02: Быстрый PII-detector](epics/epic_02_fast_pii_detector.md) | `In progress` | 14/16 | 15-22 дня |
+| [EPIC-02: Быстрый PII-detector](epics/epic_02_fast_pii_detector.md) | `In progress` | 15/16 | 3-4 дня |
 | [EPIC-03: Policy context extraction](epics/epic_03_policy_context_extraction.md) | `Draft` | 0/6 | 17-27 дней после решений |
 | [EPIC-04: Policy engine](epics/epic_04_policy_engine.md) | `Ready for implementation` | 0/11 | 36-51 дней |
 | [EPIC-05: v0 hardening](epics/epic_05_v0_hardening.md) | `Done` | 9/9 | 0 дней осталось |
