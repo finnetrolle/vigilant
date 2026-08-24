@@ -12,21 +12,24 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
+import org.junit.jupiter.api.Timeout
 
 /** Focused orchestration tests for the fast PII recognizer pipeline. */
 class FastPiiDetectorTest {
-    /** Verifies that an empty type selection bypasses payload preflight. */
+    /** Verifies that an empty type selection bypasses Unicode and size preflight. */
     @Test
     fun `empty enabled types return no findings without preflight`() {
-        val invalidUnicode = charArrayOf('\uD800').concatToString()
-
-        val findings =
-            FastPiiDetector().detect(
-                payload = invalidUnicode,
-                enabledTypes = emptySet(),
+        val uninspectedPayloads =
+            listOf(
+                charArrayOf('\uD800').concatToString(),
+                "a".repeat(1_048_577),
             )
 
-        assertEquals(emptyList(), findings)
+        uninspectedPayloads.forEach { payload ->
+            val findings = FastPiiDetector().detect(payload = payload, enabledTypes = emptySet())
+
+            assertEquals(emptyList(), findings)
+        }
     }
 
     /** Verifies that selecting a type performs full payload preflight. */
@@ -102,6 +105,143 @@ class FastPiiDetectorTest {
         val expectedOrder = canonicalOrder.filter { type -> type in enabledTypes }
         assertEquals(expectedOrder, invocations)
         assertEquals(expectedOrder, findings.map { it.type })
+    }
+
+    /** Verifies canonical merge ordering, cross-type overlaps, and exact duplicate removal. */
+    @Test
+    fun `full detection preserves overlaps and removes only exact duplicates`() {
+        val detector = mergeSemanticsDetector()
+
+        val findings =
+            detector.detect(
+                payload = "abcdef",
+                stopOnFirst = false,
+                enabledTypes = setOf(PiiType.EMAIL_ADDRESS, PiiType.PHONE_NUMBER),
+            )
+
+        assertEquals(
+            listOf(
+                FindingIdentity(PiiType.EMAIL_ADDRESS, 1L, 4L, "fake.email.a"),
+                FindingIdentity(PiiType.EMAIL_ADDRESS, 1L, 4L, "fake.email.z"),
+                FindingIdentity(PiiType.EMAIL_ADDRESS, 1L, 5L, "fake.email.a"),
+                FindingIdentity(PiiType.EMAIL_ADDRESS, 3L, 6L, "fake.email.z"),
+                FindingIdentity(PiiType.PHONE_NUMBER, 1L, 4L, "fake.phone"),
+            ),
+            findings.map { finding ->
+                FindingIdentity(
+                    type = finding.type,
+                    startUtf8 = finding.startUtf8,
+                    endUtf8 = finding.endUtf8,
+                    recognizerId = finding.recognizerId,
+                )
+            },
+        )
+    }
+
+    /** Verifies early exit against the canonical full result for one recognizer type. */
+    @Test
+    fun `stop on first equals canonical merge result`() {
+        val detector = mergeSemanticsDetector()
+        val enabledTypes = setOf(PiiType.EMAIL_ADDRESS, PiiType.PHONE_NUMBER)
+
+        val full = detector.detect("abcdef", stopOnFirst = false, enabledTypes = enabledTypes)
+        val first = detector.detect("abcdef", stopOnFirst = true, enabledTypes = enabledTypes)
+
+        assertEquals(listOf(full.first()), first)
+    }
+
+    /** Verifies canonical cross-recognizer composition through the built-in public detector. */
+    @Test
+    fun `built in recognizers compose one canonical mixed result`() {
+        val payload = canonicalMixedPayload()
+
+        val findings = FastPiiDetector().detect(payload, stopOnFirst = false)
+
+        assertEquals(
+            listOf(
+                FindingSpan(PiiType.EMAIL_ADDRESS, 5L, 22L),
+                FindingSpan(PiiType.PHONE_NUMBER, 30L, 42L),
+                FindingSpan(PiiType.PAYMENT_CARD, 49L, 65L),
+                FindingSpan(PiiType.IP_ADDRESS, 70L, 81L),
+                FindingSpan(PiiType.IBAN, 88L, 110L),
+                FindingSpan(PiiType.RU_INN, 116L, 128L),
+                FindingSpan(PiiType.RU_SNILS, 136L, 147L),
+                FindingSpan(PiiType.RU_PASSPORT, 164L, 175L),
+                FindingSpan(PiiType.RU_OMS, 49L, 65L),
+            ),
+            findings.map { finding ->
+                FindingSpan(finding.type, finding.startUtf8, finding.endUtf8)
+            },
+        )
+    }
+
+    /** Verifies stop-on-first equivalence for full and filtered built-in pipelines. */
+    @Test
+    fun `stop on first equals the first full finding for every filtered type set`() {
+        val detector = FastPiiDetector()
+        val enabledTypeSets =
+            listOf(
+                PiiType.entries.toSet(),
+                setOf(PiiType.PAYMENT_CARD, PiiType.IP_ADDRESS, PiiType.IBAN),
+                setOf(PiiType.RU_PASSPORT, PiiType.RU_OMS),
+                setOf(PiiType.RU_OMS),
+            )
+
+        enabledTypeSets.forEach { enabledTypes ->
+            val full =
+                detector.detect(
+                    payload = canonicalMixedPayload(),
+                    stopOnFirst = false,
+                    enabledTypes = enabledTypes,
+                )
+            val first =
+                detector.detect(
+                    payload = canonicalMixedPayload(),
+                    stopOnFirst = true,
+                    enabledTypes = enabledTypes,
+                )
+
+            assertEquals(listOf(full.first()), first)
+        }
+    }
+
+    /** Verifies deterministic results with unrelated calls interleaved on one detector. */
+    @Test
+    fun `repeated calls retain no request state`() {
+        val detector = FastPiiDetector()
+        val expected = detector.detect(canonicalMixedPayload(), stopOnFirst = false)
+
+        repeat(32) {
+            assertEquals(
+                emptyList(),
+                detector.detect(
+                    payload = "ordinary text",
+                    stopOnFirst = false,
+                    enabledTypes = setOf(PiiType.EMAIL_ADDRESS),
+                ),
+            )
+            assertEquals(expected, detector.detect(canonicalMixedPayload(), stopOnFirst = false))
+        }
+    }
+
+    /** Verifies bounded completion for a maximal mixed payload containing only hard negatives. */
+    @Test
+    @Timeout(value = 10, unit = TimeUnit.SECONDS)
+    fun `adversarial mixed no match payload completes without backtracking`() {
+        val adversarialUnit =
+            "a@b;8;0:;DE00 0000000000000001;500100732258;11223344596;" +
+                "4503-123456;1234567890123453;"
+        val payload =
+            buildString(MAX_PAYLOAD_UTF8_SIZE) {
+                while (length + adversarialUnit.length <= MAX_PAYLOAD_UTF8_SIZE) {
+                    append(adversarialUnit)
+                }
+                repeat(MAX_PAYLOAD_UTF8_SIZE - length) { append('.') }
+            }
+
+        val findings = FastPiiDetector().detect(payload, stopOnFirst = false)
+
+        assertEquals(emptyList(), findings)
     }
 
     /** Verifies early exit after the first finding in canonical type order. */
@@ -330,6 +470,19 @@ class FastPiiDetectorTest {
         }
     }
 
+    /** Deterministic recognizer exposing a preordered recognition script. */
+    private class ScriptedRecognizer(
+        override val type: PiiType,
+        private val recognitions: List<RecognizedPii>,
+    ) : PiiRecognizer {
+        /** Returns the complete script or its first recognition for early-exit calls. */
+        override fun recognize(
+            payload: String,
+            stopOnFirst: Boolean,
+            cancellationCheckpoint: () -> Unit,
+        ): List<RecognizedPii> = if (stopOnFirst) recognitions.take(1) else recognitions
+    }
+
     /** Deterministic recognizer that interrupts its caller before returning no finding. */
     private class InterruptingRecognizer(
         override val type: PiiType,
@@ -410,5 +563,74 @@ class FastPiiDetectorTest {
                 ),
             )
         }
+    }
+
+    /** Creates one deterministic recognition for merge-semantics tests. */
+    private fun recognition(
+        startCharacter: Int,
+        endCharacter: Int,
+        recognizerId: String,
+    ): RecognizedPii =
+        RecognizedPii(
+            startCharacter = startCharacter,
+            endCharacter = endCharacter,
+            evidenceStrength = EvidenceStrength.FORMAT_ONLY,
+            recognizerId = recognizerId,
+            recognizerVersion = "test",
+        )
+
+    /** Returns one worked mixed payload containing all built-in PII types. */
+    private fun canonicalMixedPayload(): String =
+        "mail alice@example.com; phone +79123456789; dual 1234567890123452; " +
+            "ip 192.168.1.1; iban DE89370400440532013000; inn 500100732259; " +
+            "snils 11223344595; паспорт 4503 123456"
+
+    /** Creates the controlled multi-recognizer detector used by merge regressions. */
+    private fun mergeSemanticsDetector(): FastPiiDetector =
+        FastPiiDetector.withRecognizers(
+            listOf(
+                ScriptedRecognizer(
+                    type = PiiType.PHONE_NUMBER,
+                    recognitions = listOf(recognition(1, 4, "fake.phone")),
+                ),
+                ScriptedRecognizer(
+                    type = PiiType.EMAIL_ADDRESS,
+                    recognitions =
+                        listOf(
+                            recognition(1, 4, "fake.email.z"),
+                            recognition(3, 6, "fake.email.z"),
+                        ),
+                ),
+                ScriptedRecognizer(
+                    type = PiiType.EMAIL_ADDRESS,
+                    recognitions =
+                        listOf(
+                            recognition(1, 4, "fake.email.a"),
+                            recognition(1, 4, "fake.email.a"),
+                            recognition(1, 5, "fake.email.a"),
+                        ),
+                ),
+            ),
+        )
+
+    /** Names every field participating in exact-duplicate and ordering assertions. */
+    private data class FindingIdentity(
+        val type: PiiType,
+        val startUtf8: Long,
+        val endUtf8: Long,
+        val recognizerId: String,
+    )
+
+    /** Names the public type and UTF-8 span used by mixed-result assertions. */
+    private data class FindingSpan(
+        val type: PiiType,
+        val startUtf8: Long,
+        val endUtf8: Long,
+    )
+
+    /** Holds the detector's normative maximum payload size for orchestration regressions. */
+    private companion object {
+        /** Maximum valid ASCII payload length in bytes and Kotlin characters. */
+        const val MAX_PAYLOAD_UTF8_SIZE = 1_048_576
     }
 }

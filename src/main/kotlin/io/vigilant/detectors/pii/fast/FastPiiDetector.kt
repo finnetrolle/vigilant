@@ -61,7 +61,7 @@ class FastPiiDetector private constructor(
      * Runs enabled recognizers sequentially and converts their character spans.
      *
      * @param payload validated non-empty logical text.
-     * @param stopOnFirst whether to return after the first valid recognition.
+     * @param stopOnFirst whether to return only the first canonical finding.
      * @param enabledTypes PII categories eligible for detection.
      * @param preflight UTF-8 boundary metadata for [payload].
      * @return immutable findings in canonical recognizer order.
@@ -78,21 +78,51 @@ class FastPiiDetector private constructor(
             if (recognizer.type !in enabledTypes) {
                 continue
             }
+            if (stopOnFirst && findings.isNotEmpty() && recognizer.type != findings.first().type) {
+                return firstCanonicalFinding(findings)
+            }
             checkCancellation()
             val recognitions = recognizer.recognize(payload, stopOnFirst, ::checkCancellation)
             checkCancellation()
             for (recognition in recognitions) {
                 checkCancellation()
                 findings += recognition.toFinding(recognizer.type, preflight)
-                if (stopOnFirst) {
-                    checkCancellation()
-                    return Collections.unmodifiableList(findings)
-                }
             }
         }
 
         checkCancellation()
-        return Collections.unmodifiableList(findings)
+        return if (stopOnFirst && findings.isNotEmpty()) {
+            firstCanonicalFinding(findings)
+        } else {
+            canonicalizeFindings(findings)
+        }
+    }
+
+    /** Returns the first finding from the canonicalized non-empty type group. */
+    private fun firstCanonicalFinding(findings: List<PiiFinding>): List<PiiFinding> =
+        Collections.singletonList(canonicalizeFindings(findings).first())
+
+    /** Sorts full-search findings by the public order and removes exact duplicates. */
+    private fun canonicalizeFindings(findings: List<PiiFinding>): List<PiiFinding> {
+        val canonicalFindings =
+            findings
+                .sortedWith(
+                    compareBy<PiiFinding>(
+                        { finding -> CANONICAL_TYPE_ORDER.indexOf(finding.type) },
+                        PiiFinding::startUtf8,
+                        PiiFinding::endUtf8,
+                        PiiFinding::recognizerId,
+                    ),
+                ).distinctBy { finding ->
+                    FindingIdentity(
+                        type = finding.type,
+                        startUtf8 = finding.startUtf8,
+                        endUtf8 = finding.endUtf8,
+                        recognizerId = finding.recognizerId,
+                    )
+                }
+        checkCancellation()
+        return Collections.unmodifiableList(canonicalFindings)
     }
 
     /** Converts one internal character span into a validated public UTF-8 finding. */
@@ -116,6 +146,14 @@ class FastPiiDetector private constructor(
             throw CancellationException()
         }
     }
+
+    /** Identity fields that define an exact duplicate in the detector contract. */
+    private data class FindingIdentity(
+        val type: PiiType,
+        val startUtf8: Long,
+        val endUtf8: Long,
+        val recognizerId: String,
+    )
 
     /** Holds internal construction support and canonical order metadata. */
     internal companion object {

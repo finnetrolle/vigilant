@@ -1,6 +1,6 @@
 # VIG-02-14: External RedMadRobot PII benchmark
 
-**Статус:** Ready for implementation  
+**Статус:** Done  
 **Epic:** [EPIC-02](../../epics/epic_02_fast_pii_detector.md)  
 **Ветка:** Evidence > external realistic benchmark  
 **Зависит от:** [VIG-02-13](issue_02_13_cross_recognizer_semantics.md)  
@@ -71,27 +71,27 @@
 
 ## Критерии готовности
 
-- [ ] Preparation task принимает pinned download и локальный offline input,
+- [x] Preparation task принимает pinned download и локальный offline input,
       проверяет точный размер и SHA-256 до parsing.
-- [ ] Неверные bytes, schema, JSON, длины arrays или BIO transitions дают
+- [x] Неверные bytes, schema, JSON, длины arrays или BIO transitions дают
       безопасную ошибку с `caseId`, но без raw text, token, tag или candidate.
-- [ ] Focused adapter tests на синтетических fixtures проверяют label mapping,
+- [x] Focused adapter tests на синтетических fixtures проверяют label mapping,
       BIO span conversion, supplementary code points, adjacent punctuation,
       repeated token text и безопасный отказ при ambiguous alignment.
-- [ ] Проверка pinned dataset подтверждает `2 841` total cases, `2 839`
+- [x] Проверка pinned dataset подтверждает `2 841` total cases, `2 839`
       processed cases, `2` rejected cases, `5 614` total spans, `1 902` mapped
       spans и `1 900` scored mapped spans.
-- [ ] `./gradlew redMadRobotPiiBenchmark` воспроизводимо создаёт отдельные
+- [x] `./gradlew redMadRobotPiiBenchmark` воспроизводимо создаёт отдельные
       per-type и aggregate exact/relaxed JSON и Markdown reports.
-- [ ] Report содержит dataset URL, revision, size, SHA-256, license declaration,
+- [x] Report содержит dataset URL, revision, size, SHA-256, license declaration,
       attribution, mapping, matching rules и coverage counts.
-- [ ] Report не смешивает external и canonical metrics и явно отмечает, что
+- [x] Report не смешивает external и canonical metrics и явно отмечает, что
       external metrics не являются release gate или leaderboard-comparable.
-- [ ] Ошибки, test output и reports не содержат raw payload, tokens, candidates
+- [x] Ошибки, test output и reports не содержат raw payload, tokens, candidates
       или matched values.
-- [ ] `./gradlew build` и `./gradlew test` не требуют сети, не скачивают внешний
+- [x] `./gradlew build` и `./gradlew test` не требуют сети, не скачивают внешний
       dataset и не запускают RedMadRobot benchmark.
-- [ ] Focused adapter tests и `./gradlew test` проходят.
+- [x] Focused adapter tests и `./gradlew test` проходят.
 
 ## Validation seam
 

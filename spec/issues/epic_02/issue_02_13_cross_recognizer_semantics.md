@@ -1,6 +1,6 @@
 # VIG-02-13: Cross-recognizer semantics
 
-**Статус:** Ready for implementation  
+**Статус:** Done  
 **Epic:** [EPIC-02](../../epics/epic_02_fast_pii_detector.md)  
 **Ветка:** Evidence > cross-recognizer semantics  
 **Зависит от:** [VIG-02-04](issue_02_04_email_recognizer.md), [VIG-02-05](issue_02_05_phone_recognizer.md), [VIG-02-06](issue_02_06_payment_card_recognizer.md), [VIG-02-07](issue_02_07_ip_address_recognizer.md), [VIG-02-08](issue_02_08_iban_recognizer.md), [VIG-02-09](issue_02_09_ru_inn_recognizer.md), [VIG-02-10](issue_02_10_ru_snils_recognizer.md), [VIG-02-11](issue_02_11_ru_passport_recognizer.md), [VIG-02-12](issue_02_12_ru_oms_recognizer.md)  
@@ -24,13 +24,13 @@
 
 ## Критерии готовности
 
-- [ ] Все общие regression cases из epic реализованы.
-- [ ] Проверены overlap, duplicates, ordering и filtered type sets.
-- [ ] Проверены immutable return list и отсутствие retained request state.
-- [ ] Cancellation во время candidate scan не возвращает partial results.
-- [ ] Adversarial no-match inputs завершаются без catastrophic backtracking.
-- [ ] Для добавленных и изменённых Kotlin declarations написан KDoc.
-- [ ] Focused tests и `./gradlew test` проходят.
+- [x] Все общие regression cases из epic реализованы.
+- [x] Проверены overlap, duplicates, ordering и filtered type sets.
+- [x] Проверены immutable return list и отсутствие retained request state.
+- [x] Cancellation во время candidate scan не возвращает partial results.
+- [x] Adversarial no-match inputs завершаются без catastrophic backtracking.
+- [x] Для добавленных и изменённых Kotlin declarations написан KDoc.
+- [x] Focused tests и `./gradlew test` проходят.
 
 ## Не входит
 

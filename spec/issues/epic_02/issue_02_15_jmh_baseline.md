@@ -1,9 +1,12 @@
 # VIG-02-15: JMH performance baseline
 
-**Статус:** Ready for implementation  
+**Статус:** Blocked
+
 **Epic:** [EPIC-02](../../epics/epic_02_fast_pii_detector.md)  
 **Ветка:** Evidence > performance baseline  
 **Зависит от:** [VIG-02-16](issue_02_16_canonical_quality_corpora.md)  
+**Блокер:** issue не начинается до завершения явно блокирующей VIG-02-16.
+
 **Оценка:** 3-4 инженерных дня
 
 ## Результат

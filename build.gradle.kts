@@ -144,6 +144,41 @@ tasks.register("perfTest") {
     description = "Runs PERF-01 explicitly; never runs as part of build or check."
 }
 
+val redMadRobotMetadataFile =
+    layout.projectDirectory.file(
+        "src/test/resources/io/vigilant/detectors/pii/benchmark/redmadrobot/metadata.properties",
+    )
+val redMadRobotPreparedDataset = layout.buildDirectory.file("redmadrobot-pii/test.csv")
+val redMadRobotOfflineDataset = providers.gradleProperty("redMadRobotPiiDataset")
+
+val prepareRedMadRobotPiiCorpus = tasks.register<JavaExec>("prepareRedMadRobotPiiCorpus") {
+    dependsOn(tasks.named("testClasses"))
+    group = "verification"
+    description = "Downloads or imports and verifies the pinned RedMadRobot PII test corpus."
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("io.vigilant.detectors.pii.benchmark.redmadrobot.RedMadRobotCorpusPreparationMain")
+    inputs.file(redMadRobotMetadataFile)
+    inputs.property("offlineDataset", redMadRobotOfflineDataset.orElse(""))
+    outputs.file(redMadRobotPreparedDataset)
+    outputs.upToDateWhen { false }
+    args(
+        redMadRobotPreparedDataset.get().asFile.absolutePath,
+        redMadRobotOfflineDataset.orNull.orEmpty(),
+    )
+}
+
+tasks.register<JavaExec>("redMadRobotPiiBenchmark") {
+    dependsOn(prepareRedMadRobotPiiCorpus, tasks.named("testClasses"))
+    group = "verification"
+    description = "Runs the explicit non-gating RedMadRobot PII external benchmark."
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("io.vigilant.detectors.pii.benchmark.redmadrobot.RedMadRobotBenchmarkMain")
+    args(
+        redMadRobotPreparedDataset.get().asFile.absolutePath,
+        layout.buildDirectory.dir("reports/pii/redmadrobot").get().asFile.absolutePath,
+    )
+}
+
 tasks.register("verifyAll") {
     group = "verification"
     description = "Full local verification: build (compile, tests, detekt) + CVE scan."
