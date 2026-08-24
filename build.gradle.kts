@@ -7,6 +7,7 @@ plugins {
     id("info.solidsoft.pitest") version "1.19.0"
     id("org.owasp.dependencycheck") version "13.0.0"
     id("io.gatling.gradle") version "3.15.1.2"
+    id("me.champeau.jmh") version "0.7.3"
     application
     jacoco
     id("org.sonarqube") version "7.4.0.8496"
@@ -67,6 +68,43 @@ kotlin {
         javaParameters = true
         allWarningsAsErrors = true
     }
+}
+
+val piiJmhVersion = "1.37"
+val piiJmhMode = "sample"
+val piiJmhWarmupIterations = 3
+val piiJmhWarmupTime = "1s"
+val piiJmhForks = 2
+val piiJmhMeasurementIterations = 5
+val piiJmhMeasurementTime = "1s"
+val piiJmhJvmArgs = listOf("-Xms1g", "-Xmx1g")
+val piiJmhReportDirectory = layout.buildDirectory.dir("reports/pii/jmh")
+val piiJmhResultFile = piiJmhReportDirectory.map { directory -> directory.file("baseline.json") }
+val piiJmhHumanOutputFile = piiJmhReportDirectory.map { directory -> directory.file("baseline.txt") }
+val piiJmhEnvironmentFile = piiJmhReportDirectory.map { directory -> directory.file("environment.properties") }
+val piiJmhJavaLauncher =
+    javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+
+jmh {
+    jmhVersion = piiJmhVersion
+    includes = listOf("io.vigilant.detectors.pii.fast.FastPiiDetectorBenchmark.detect")
+    benchmarkMode = listOf(piiJmhMode)
+    warmupIterations = piiJmhWarmupIterations
+    warmup = piiJmhWarmupTime
+    fork = piiJmhForks
+    iterations = piiJmhMeasurementIterations
+    timeOnIteration = piiJmhMeasurementTime
+    threads = 1
+    timeUnit = "us"
+    resultFormat = "JSON"
+    resultsFile = piiJmhResultFile.get().asFile
+    humanOutputFile = piiJmhHumanOutputFile.get().asFile
+    failOnError = true
+    jmhTimeout = "10m"
+    jvm = piiJmhJavaLauncher.get().executablePath.asFile.absolutePath
+    jvmArgs = piiJmhJvmArgs
 }
 
 detekt {
@@ -188,6 +226,65 @@ tasks.register<JavaExec>("piiQualityReport") {
     args(
         layout.buildDirectory.dir("reports/pii/canonical").get().asFile.absolutePath,
     )
+}
+
+val piiProductionRuntimeClasspathCheck = tasks.register("piiProductionRuntimeClasspathCheck") {
+    group = "verification"
+    description = "Verifies that JMH remains absent from the production runtime classpath."
+
+    doLast {
+        val forbiddenComponents =
+            configurations
+                .named("runtimeClasspath")
+                .get()
+                .incoming
+                .resolutionResult
+                .allComponents
+                .mapNotNull { component -> component.moduleVersion }
+                .filter { module ->
+                    module.group == "org.openjdk.jmh" ||
+                        module.group == "me.champeau.jmh" ||
+                        module.name.startsWith("jmh-")
+                }.map { module -> "${module.group}:${module.name}:${module.version}" }
+                .sorted()
+
+        check(forbiddenComponents.isEmpty()) {
+            "JMH leaked into production runtimeClasspath: ${forbiddenComponents.joinToString()}"
+        }
+        logger.lifecycle("Production runtimeClasspath contains no JMH components.")
+    }
+}
+
+val writePiiJmhEnvironment = tasks.register<JavaExec>("writePiiJmhEnvironment") {
+    dependsOn(tasks.named("jmh"))
+    group = "verification"
+    description = "Writes environment metadata next to the PII JMH baseline."
+    classpath = sourceSets.named("jmh").get().runtimeClasspath
+    mainClass.set("io.vigilant.detectors.pii.fast.PiiBenchmarkEnvironmentMain")
+    javaLauncher.set(piiJmhJavaLauncher)
+    jvmArgs(piiJmhJvmArgs)
+    outputs.file(piiJmhEnvironmentFile)
+    args(
+        piiJmhEnvironmentFile.get().asFile.absolutePath,
+        piiJmhResultFile.get().asFile.name,
+        piiJmhVersion,
+        piiJmhMode,
+        piiJmhWarmupIterations.toString(),
+        piiJmhWarmupTime,
+        piiJmhForks.toString(),
+        piiJmhMeasurementIterations.toString(),
+        piiJmhMeasurementTime,
+    )
+}
+
+tasks.register("piiJmhBaseline") {
+    dependsOn(piiProductionRuntimeClasspathCheck, writePiiJmhEnvironment)
+    group = "verification"
+    description = "Runs the complete non-gating PII detector JMH baseline and records its environment."
+}
+
+tasks.named("check") {
+    dependsOn(piiProductionRuntimeClasspathCheck)
 }
 
 tasks.register("verifyAll") {

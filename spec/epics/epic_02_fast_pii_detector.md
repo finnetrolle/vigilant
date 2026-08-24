@@ -2,7 +2,7 @@
 
 **ID:** `EPIC-02`  
 **Тип:** Epic  
-**Статус:** In progress  
+**Статус:** Done
 **Приоритет:** High  
 **Суммарная оценка:** 35-51 инженерный день  
 **Связанные требования:** `MVP-10`, `MVP-13`, `MVP-15`, `MVP-16`, `MVP-18`, `MVP-19`, `PERF-02`–`PERF-05`, `CONC-01`–`CONC-04`, `EXT-01`–`EXT-04`
@@ -53,7 +53,7 @@ offsets, порядка и безопасности остаются в этом
 - [x] [VIG-02-13: Cross-recognizer semantics](../issues/epic_02/issue_02_13_cross_recognizer_semantics.md) - `Done`
 - [x] [VIG-02-14: External RedMadRobot PII benchmark](../issues/epic_02/issue_02_14_quality_corpora.md) - `Done`
 - [x] [VIG-02-16: Canonical quality corpora и report](../issues/epic_02/issue_02_16_canonical_quality_corpora.md) - `Done`
-- [ ] [VIG-02-15: JMH baseline](../issues/epic_02/issue_02_15_jmh_baseline.md) - `Ready for implementation`
+- [x] [VIG-02-15: JMH baseline](../issues/epic_02/issue_02_15_jmh_baseline.md) - `Done`
 
 ## Контекст
 
@@ -485,10 +485,19 @@ Literal regex strings не являются частью публичного к
 ### Методика benchmark
 
 - Используется JMH в режиме `SampleTime` с публикацией p50, p95 и p99.
-- Отдельно измеряются ASCII, русский и mixed-Unicode payload datasets.
+- Отдельно измеряются ASCII, русский и mixed-Unicode payload datasets. Dataset
+  определяет фоновое заполнение payload; фиксированный positive fragment
+  scenario сохраняет символы, обязательные для распознаваемого формата или
+  контекста. Поэтому, например, `ASCII × RU_PASSPORT` использует ASCII padding,
+  но содержит кириллическое слово контекста паспорта.
 - Worst-case no-match corpus не содержит валидного PII, но содержит похожие невалидные кандидаты и неверные checksums.
 - Обязательные размеры payload: `1 KiB`, `64 KiB` и `1 MiB`.
-- Для `stopOnFirst=true` отдельно измеряются ранний `EMAIL_ADDRESS` и findings каждого последующего типа при включённых предыдущих recognizer'ах.
+- Для `stopOnFirst=true` отдельно измеряются ранний `EMAIL_ADDRESS` и findings
+  каждого последующего типа при включённых предыдущих recognizer'ах. Единственное
+  исключение - scenario `RU_OMS` отключает `PAYMENT_CARD`, потому что валидный
+  16-значный номер ОМС также проходит Luhn и при каноническом порядке неизбежно
+  возвращается как более ранний `PAYMENT_CARD`; full-scan scenario оставляет оба
+  recognizer включёнными и измеряет пересекающиеся findings.
 - Для `stopOnFirst=false` отдельно измеряется полный no-match scan и payload с несколькими findings каждого типа.
 - Измеряется только синхронный вызов `detect`; HTTP parsing, DI, executor queue и orchestration не входят в результат.
 - До измерения выполняется достаточный warmup до стабилизации JIT/GC-профиля.

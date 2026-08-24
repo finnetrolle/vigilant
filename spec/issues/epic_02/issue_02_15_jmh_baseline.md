@@ -1,6 +1,6 @@
 # VIG-02-15: JMH performance baseline
 
-**Статус:** Ready for implementation
+**Статус:** Done
 
 **Epic:** [EPIC-02](../../epics/epic_02_fast_pii_detector.md)  
 **Ветка:** Evidence > performance baseline  
@@ -18,19 +18,22 @@ sizes и modes, а baseline report сохраняется как build artifact 
 
 - Gradle JMH plugin `0.7.3` и JMH `1.37` только в benchmark configuration.
 - `SampleTime` с p50, p95 и p99.
-- ASCII, русский и mixed Unicode на `1 KiB`, `64 KiB`, `1 MiB`.
-- Worst-case no-match, early email, finding каждого позднего типа и full scan.
+- ASCII, русский и mixed Unicode background datasets на `1 KiB`, `64 KiB`,
+  `1 MiB`; positive fragment сохраняет обязательные символы своего scenario.
+- Worst-case no-match, early email, finding каждого позднего типа и full scan;
+  `RU_OMS` stop-on-first отключает неизбежно пересекающийся более ранний
+  `PAYMENT_CARD`, а full scan измеряет оба finding.
 - CPU/JVM/OS, warmup, forks и iterations рядом с результатом.
 
 ## Критерии готовности
 
-- [ ] Все обязательные scenarios epic запускаются одной документированной
+- [x] Все обязательные scenarios epic запускаются одной документированной
   Gradle-командой.
-- [ ] Benchmark не печатает payload или findings.
-- [ ] JMH отсутствует в production runtime classpath.
-- [ ] Baseline output и metadata сохранены как build artifact.
-- [ ] Числовой release gate не придуман без production baseline.
-- [ ] `./gradlew test` и production runtime classpath check проходят.
+- [x] Benchmark не печатает payload или findings.
+- [x] JMH отсутствует в production runtime classpath.
+- [x] Baseline output и metadata сохранены как build artifact.
+- [x] Числовой release gate не придуман без production baseline.
+- [x] `./gradlew test` и production runtime classpath check проходят.
 
 ## Не входит
 

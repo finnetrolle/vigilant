@@ -222,6 +222,39 @@ Git-хуки и CI:
 
 CI (`.github/workflows/ci.yml`) на каждый push в `main` и PR запускает build, мутационное тестирование и CVE-скан (для CVE-job нужен секрет `NVD_API_KEY`; без него job пропускается).
 
+## JMH baseline PII-детектора
+
+Полная performance-матрица V1 запускается одной явной командой:
+
+```bash
+./gradlew piiJmhBaseline
+```
+
+Команда выполняет 108 комбинаций в JMH `1.37` и режиме `SampleTime`: три
+dataset (`ASCII`, `RUSSIAN`, `MIXED_UNICODE`), три точных UTF-8 размера
+(`1 KiB`, `64 KiB`, `1 MiB`) и 12 scenarios. Scenarios включают worst-case
+no-match в обоих режимах, ранний email, finding каждого последующего типа и
+full scan с несколькими findings каждого типа. Конфигурация baseline: три
+warmup iteration по одной секунде, два fork и пять measurement iteration по
+одной секунде. JMH JSON публикует в том числе p50, p95 и p99.
+
+Dataset задаёт фоновое заполнение payload. Фиксированный positive fragment
+сохраняет символы, обязательные для своего scenario: например,
+`ASCII × RU_PASSPORT` имеет ASCII padding и кириллический паспортный контекст.
+
+В stop-on-first scenario `RU_OMS` включён весь предшествующий канонический
+prefix, кроме `PAYMENT_CARD`: любой валидный 16-значный ОМС одновременно
+проходит Luhn и иначе по контракту возвращается как более ранний
+`PAYMENT_CARD`. Full-scan scenario оставляет оба recognizer включёнными и
+измеряет оба пересекающихся finding.
+
+Артефакты сохраняются в `build/reports/pii/jmh/`: raw baseline
+`baseline.json`, человекочитаемый вывод `baseline.txt` и сведения о CPU, RAM,
+OS, JVM и параметрах прогона в `environment.properties`. Числового release
+gate у baseline нет. Benchmark не входит в `build`, `test`, `check`,
+`verifyAll` или CI. Отдельная быстрая проверка отсутствия JMH в production
+runtime classpath доступна как `./gradlew piiProductionRuntimeClasspathCheck`.
+
 ## Нагрузочный тест PERF-01
 
 Воспроизводимый Gatling-прогон одной командой сравнивает direct baseline и
