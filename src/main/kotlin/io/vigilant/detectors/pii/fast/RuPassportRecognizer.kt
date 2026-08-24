@@ -191,28 +191,64 @@ private object PassportContextMatcher {
         rangeEnd: Int,
     ): Int {
         var flags = 0
-        var index = rangeStart
-        if (index > 0 && index < rangeEnd && payload[index - 1].isRussianLetter()) {
-            while (index < rangeEnd && payload[index].isRussianLetter()) {
-                index += 1
-            }
-        }
+        var index = skipLeadingPartialWord(payload, rangeStart, rangeEnd)
 
         while (index < rangeEnd) {
-            while (index < rangeEnd && !payload[index].isRussianLetter()) {
-                index += 1
-            }
-            val wordStart = index
-            while (index < rangeEnd && payload[index].isRussianLetter()) {
-                index += 1
-            }
-            val wordEndsInRange = index > wordStart && (index == payload.length || !payload[index].isRussianLetter())
-            if (wordEndsInRange) {
+            val wordStart = skipNonRussianLetters(payload, index, rangeEnd)
+            index = skipRussianLetters(payload, wordStart, rangeEnd)
+            if (isWholeRussianWord(payload, wordStart, index)) {
                 flags = flags or flagsForWord(payload.substring(wordStart, index).lowercase(Locale.ROOT))
             }
         }
         return flags
     }
+
+    /** Skips a Russian word fragment when the range begins inside that word. */
+    private fun skipLeadingPartialWord(
+        payload: String,
+        rangeStart: Int,
+        rangeEnd: Int,
+    ): Int =
+        if (rangeStart > 0 && rangeStart < rangeEnd && payload[rangeStart - 1].isRussianLetter()) {
+            skipRussianLetters(payload, rangeStart, rangeEnd)
+        } else {
+            rangeStart
+        }
+
+    /** Advances to the next Russian letter or the end of the range. */
+    private fun skipNonRussianLetters(
+        payload: String,
+        start: Int,
+        rangeEnd: Int,
+    ): Int {
+        var index = start
+        while (index < rangeEnd && !payload[index].isRussianLetter()) {
+            index += 1
+        }
+        return index
+    }
+
+    /** Advances past consecutive Russian letters or to the end of the range. */
+    private fun skipRussianLetters(
+        payload: String,
+        start: Int,
+        rangeEnd: Int,
+    ): Int {
+        var index = start
+        while (index < rangeEnd && payload[index].isRussianLetter()) {
+            index += 1
+        }
+        return index
+    }
+
+    /** Returns whether the scanned letters form a complete word in the payload. */
+    private fun isWholeRussianWord(
+        payload: String,
+        wordStart: Int,
+        wordEnd: Int,
+    ): Boolean =
+        wordEnd > wordStart &&
+            (wordEnd == payload.length || !payload[wordEnd].isRussianLetter())
 
     /** Maps one normalized Russian word to all context conditions it satisfies. */
     private fun flagsForWord(word: String): Int {
