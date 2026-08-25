@@ -4,9 +4,11 @@ import io.vigilant.policy.domain.DetectionError
 import io.vigilant.policy.domain.DetectionResult
 import io.vigilant.policy.domain.DetectorId
 import io.vigilant.policy.domain.DetectorResult
+import io.vigilant.policy.domain.Disposition
 import io.vigilant.policy.domain.Policy
 import io.vigilant.policy.domain.PolicyReference
 import io.vigilant.policy.domain.PolicyResult
+import io.vigilant.policy.domain.ReactionPlan
 import io.vigilant.policy.domain.immutableDetectorResults
 import java.time.Duration
 import java.util.concurrent.CancellationException
@@ -42,8 +44,10 @@ class DetectorExecutionCoordinator @JvmOverloads constructor(
      * Executes the detectors referenced by [appliedPolicies] against one [payload] and joins them.
      *
      * Every policy waits independently for its complete detector set. A timed-out policy receives
-     * policy-local deadline errors for its unfinished detector IDs. Interrupting the caller cancels
-     * every active policy wait and detector execution before this method returns.
+     * policy-local deadline errors for its unfinished detector IDs. The first observed blocking
+     * reaction cancels consumers that have not contributed to BLOCK while retaining the detector
+     * work needed to finish every blocking explanation. Interrupting the caller cancels every
+     * active policy wait and detector execution before this method returns.
      *
      * Callers must invoke this blocking boundary from a virtual thread or another blocking-safe context.
      *
@@ -54,35 +58,14 @@ class DetectorExecutionCoordinator @JvmOverloads constructor(
         payload: String,
     ): DetectorExecutionResults {
         if (appliedPolicies.isEmpty()) {
-            return DetectorExecutionResults(emptyList(), emptyList())
+            return DetectorExecutionResults(emptyList(), emptyList(), Disposition.ALLOW)
         }
 
-        val policies =
-            appliedPolicies.sortedWith(
-                compareBy(
-                    { policy: Policy -> policy.reference.id.value },
-                    { policy: Policy -> policy.reference.version.value },
-                ),
-            )
-        val consumerCounts =
-            policies
-                .flatMap(Policy::detectors)
-                .groupingBy { detectorId -> detectorId }
-                .eachCount()
-        val executions =
-            consumerCounts
-                .toSortedMap(compareBy(DetectorId::value))
-                .mapValues { (detectorId, consumerCount) ->
-                    SharedDetectorExecution(detectorId, consumerCount)
-                }
-        val consumers =
-            policies.map { policy ->
-                PolicyExecutionConsumer(
-                    policy = policy,
-                    executions = policy.detectors.map(executions::getValue),
-                    deadlineScheduler = deadlineScheduler,
-                )
-            }
+        val policies = appliedPolicies.sortedDeterministically()
+        val executions = createSharedExecutions(policies)
+        val blockSignal = CompletableFuture<Unit>()
+        val consumers = createConsumers(policies, executions, blockSignal)
+        observeDetectorCompletions(executions.values, consumers, blockSignal)
 
         var callerInterrupted = false
         val detectorTasks: ExecutorService = Executors.newVirtualThreadPerTaskExecutor()
@@ -91,16 +74,17 @@ class DetectorExecutionCoordinator @JvmOverloads constructor(
             executions.values.forEach { execution ->
                 execution.start(detectorTasks, detectorExecutor, payload)
             }
-            val policyResults = consumers.map(PolicyExecutionConsumer::awaitResult)
+            val disposition = awaitFinalDisposition(consumers, blockSignal)
+            val policyResults = consumers.mapNotNull { consumer -> consumer.completion.completedResultOrNull() }
             val detectorResults = executions.values.mapNotNull(SharedDetectorExecution::completedResult)
-            return DetectorExecutionResults(detectorResults, policyResults)
+            return DetectorExecutionResults(detectorResults, policyResults, disposition)
         } catch (interrupted: InterruptedException) {
             callerInterrupted = true
             throw CancellationException("Detector evaluation was cancelled").also { cancellation ->
                 cancellation.initCause(interrupted)
             }
         } catch (failure: ExecutionException) {
-            throw failure.unwrapExecutionFailure()
+            rethrowExecutionFailure(failure.cause ?: failure)
         } finally {
             consumers.forEach(PolicyExecutionConsumer::cancel)
             executions.values.forEach(SharedDetectorExecution::cancel)
@@ -110,6 +94,87 @@ class DetectorExecutionCoordinator @JvmOverloads constructor(
                 Thread.currentThread().interrupt()
             }
         }
+    }
+
+    /** Creates one shared task holder for every distinct detector used by [policies]. */
+    private fun createSharedExecutions(policies: Collection<Policy>): Map<DetectorId, SharedDetectorExecution> =
+        policies
+            .flatMap(Policy::detectors)
+            .groupingBy { detectorId -> detectorId }
+            .eachCount()
+            .toSortedMap(compareBy(DetectorId::value))
+            .mapValues { (detectorId, consumerCount) ->
+                SharedDetectorExecution(detectorId, consumerCount)
+            }
+
+    /** Creates policy-specific consumers over the deduplicated [executions]. */
+    private fun createConsumers(
+        policies: Collection<Policy>,
+        executions: Map<DetectorId, SharedDetectorExecution>,
+        blockSignal: CompletableFuture<Unit>,
+    ): List<PolicyExecutionConsumer> =
+        policies.map { policy ->
+            PolicyExecutionConsumer(
+                policy = policy,
+                executions = policy.detectors.map(executions::getValue),
+                deadlineScheduler = deadlineScheduler,
+                onBlock = { blockSignal.complete(Unit) },
+            )
+        }
+
+    /** Broadcasts each shared detector completion to its policy consumers before signaling BLOCK. */
+    private fun observeDetectorCompletions(
+        executions: Collection<SharedDetectorExecution>,
+        consumers: Collection<PolicyExecutionConsumer>,
+        blockSignal: CompletableFuture<Unit>,
+    ) {
+        executions.forEach { execution ->
+            val interestedConsumers =
+                consumers.filter { consumer -> execution.detectorId in consumer.detectorIds }
+            execution.whenComplete { detectorResult, failure ->
+                interestedConsumers.forEach { consumer ->
+                    consumer.acceptDetectorCompletion(execution.detectorId, detectorResult, failure)
+                }
+                if (interestedConsumers.any { consumer -> consumer.isBlocking }) {
+                    blockSignal.complete(Unit)
+                }
+            }
+        }
+    }
+
+    /** Waits for all ALLOW work or retains only blocking consumers after the first BLOCK signal. */
+    @Throws(InterruptedException::class, ExecutionException::class)
+    private fun awaitFinalDisposition(
+        consumers: Collection<PolicyExecutionConsumer>,
+        blockSignal: CompletableFuture<Unit>,
+    ): Disposition {
+        CompletableFuture.anyOf(blockSignal, allConsumersCompleted(consumers)).get()
+        val blocked = blockSignal.isDone || consumers.any { consumer -> consumer.isBlocking }
+        if (!blocked) {
+            consumers.forEach { consumer ->
+                consumer.completion.completedFailureOrNull()?.let(::rethrowExecutionFailure)
+            }
+            return Disposition.ALLOW
+        }
+        consumers.forEach(PolicyExecutionConsumer::cancelUnlessBlocking)
+        consumers
+            .filter { consumer -> consumer.isBlocking }
+            .forEach { consumer -> consumer.completion.get() }
+        return Disposition.BLOCK
+    }
+
+    /** Completes after every policy consumer reaches any terminal state. */
+    private fun allConsumersCompleted(consumers: Collection<PolicyExecutionConsumer>): CompletableFuture<Unit> {
+        val completion = CompletableFuture<Unit>()
+        val remaining = AtomicInteger(consumers.size)
+        consumers.forEach { consumer ->
+            consumer.completion.whenComplete { _, _ ->
+                if (remaining.decrementAndGet() == 0) {
+                    completion.complete(Unit)
+                }
+            }
+        }
+        return completion
     }
 
     /** One deduplicated detector task retained until its final policy consumer leaves. */
@@ -142,7 +207,7 @@ class DetectorExecutionCoordinator @JvmOverloads constructor(
             }
         }
 
-        /** Registers a policy consumer for completion of this shared execution. */
+        /** Registers one observer for completion of this shared execution. */
         fun whenComplete(action: (DetectorResult?, Throwable?) -> Unit) {
             completion.whenComplete(action)
         }
@@ -188,19 +253,22 @@ class DetectorExecutionCoordinator @JvmOverloads constructor(
         private val policy: Policy,
         private val executions: List<SharedDetectorExecution>,
         private val deadlineScheduler: PolicyDeadlineScheduler,
+        private val onBlock: () -> Unit,
     ) {
         private val completedResults = ConcurrentHashMap<DetectorId, DetectorResult>()
-        private val result = CompletableFuture<PolicyResult>()
         private val deadlineTask = AtomicReference<PolicyDeadlineTask?>()
+        private val reactionFinalizer = PolicyReactionFinalizer(policy)
         private var released = false
 
-        init {
-            executions.forEach { execution ->
-                execution.whenComplete { detectorResult, failure ->
-                    acceptDetectorCompletion(execution.detectorId, detectorResult, failure)
-                }
-            }
-        }
+        /** Stable detector IDs consumed by this policy. */
+        val detectorIds: Set<DetectorId> = executions.map(SharedDetectorExecution::detectorId).toSet()
+
+        /** Future completed by this policy's full result or terminal failure. */
+        val completion: CompletableFuture<PolicyResult> = CompletableFuture()
+
+        /** Whether an observed reaction has already fixed this policy as blocking. */
+        val isBlocking: Boolean
+            get() = reactionFinalizer.isBlocking
 
         /** Starts this policy's deadline before detector tasks are submitted. */
         fun startDeadline() {
@@ -210,16 +278,20 @@ class DetectorExecutionCoordinator @JvmOverloads constructor(
             }
         }
 
-        /** Waits for this policy to complete or time out. */
-        @Throws(InterruptedException::class, ExecutionException::class)
-        fun awaitResult(): PolicyResult = result.get()
+        /** Atomically cancels this policy only when it has not contributed a blocking reaction. */
+        @Synchronized
+        fun cancelUnlessBlocking() {
+            if (!isBlocking) {
+                cancel()
+            }
+        }
 
         /** Cancels this policy wait and releases its detector consumers exactly once. */
         @Synchronized
         fun cancel() {
-            if (!result.isDone) {
+            if (!completion.isDone) {
                 releaseExecutions()
-                result.cancel(false)
+                completion.cancel(false)
             }
         }
 
@@ -230,28 +302,30 @@ class DetectorExecutionCoordinator @JvmOverloads constructor(
 
         /** Records one shared detector completion and finishes only after the complete set succeeds. */
         @Synchronized
-        private fun acceptDetectorCompletion(
+        fun acceptDetectorCompletion(
             detectorId: DetectorId,
             detectorResult: DetectorResult?,
             failure: Throwable?,
         ) {
-            if (result.isDone) {
+            if (completion.isDone) {
                 return
             }
             if (failure != null) {
                 releaseExecutions()
-                result.completeExceptionally(failure)
+                completion.completeExceptionally(failure)
                 return
             }
 
             completedResults[detectorId] = requireNotNull(detectorResult)
+            reactionFinalizer.observe(detectorResult)
             if (completedResults.size == executions.size) {
+                val appliedReactions = reactionFinalizer.resolve(completedResults.values)
                 releaseExecutions()
-                result.complete(
+                completion.complete(
                     PolicyResult(
                         policy = policy.reference,
                         detectorResults = completedResults.values,
-                        appliedReactions = emptyList(),
+                        appliedReactions = appliedReactions,
                         deadlineExceeded = false,
                     ),
                 )
@@ -261,7 +335,7 @@ class DetectorExecutionCoordinator @JvmOverloads constructor(
         /** Finishes this policy with errors for the exact detector IDs unfinished at its deadline. */
         @Synchronized
         private fun timeout() {
-            if (result.isDone) {
+            if (completion.isDone) {
                 return
             }
             val deadlineResults =
@@ -278,15 +352,19 @@ class DetectorExecutionCoordinator @JvmOverloads constructor(
                                 ),
                         )
                 }
+            val appliedReactions = reactionFinalizer.resolve(deadlineResults)
             releaseExecutions()
-            result.complete(
+            completion.complete(
                 PolicyResult(
                     policy = policy.reference,
                     detectorResults = deadlineResults,
-                    appliedReactions = listOf(policy.reactions.error),
+                    appliedReactions = appliedReactions,
                     deadlineExceeded = true,
                 ),
             )
+            if (isBlocking) {
+                onBlock()
+            }
         }
 
         /** Releases every detector execution referenced by this policy at most once. */
@@ -303,28 +381,71 @@ class DetectorExecutionCoordinator @JvmOverloads constructor(
  * Immutable shared and policy-specific detector outcomes produced for one evaluation.
  *
  * @property detectorResults deduplicated actual outcomes in deterministic detector-ID order.
+ * @property disposition final precedence-resolved allow or block outcome.
+ * @property finalizedReactionPlan final executable plan when BLOCK made aggregation unnecessary.
  */
 class DetectorExecutionResults internal constructor(
     detectorResults: Collection<DetectorResult>,
     policyResults: Collection<PolicyResult>,
+    val disposition: Disposition,
 ) {
     /** Deduplicated actual outcomes shared by policy consumers. */
     val detectorResults: List<DetectorResult> = immutableDetectorResults(detectorResults)
+
+    /** Final BLOCK plan, or `null` when ALLOW still requires transformation aggregation. */
+    val finalizedReactionPlan: ReactionPlan? = finalReactionPlanFor(disposition)
 
     /** Immutable policy-specific views keyed by stable policy identity. */
     private val policyResults: Map<PolicyReference, PolicyResult> =
         java.util.Map.copyOf(policyResults.associateBy(PolicyResult::policy))
 
-    /** Returns the policy-level result for one participant in this evaluation. */
+    /**
+     * Returns the policy-level result for one participant in this evaluation.
+     *
+     * A policy cancelled by fail-fast BLOCK finalization keeps no result and therefore
+     * reads like a policy that did not participate.
+     *
+     * @throws NoSuchElementException when [policy] did not finish this evaluation.
+     */
     fun policyResultFor(policy: PolicyReference): PolicyResult = policyResults.getValue(policy)
 
     /**
      * Returns the detector outcomes consumed by [policy].
      *
-     * @return an empty list when [policy] did not participate in this evaluation.
+     * A policy cancelled by fail-fast BLOCK finalization keeps no result and therefore
+     * reads like a policy that did not participate.
+     *
+     * @return an empty list when [policy] did not finish this evaluation.
      */
     fun resultsFor(policy: PolicyReference): List<DetectorResult> =
         policyResults[policy]?.detectorResults.orEmpty()
+}
+
+/** Returns policies in the stable order used by every execution plan and result. */
+private fun Collection<Policy>.sortedDeterministically(): List<Policy> =
+    sortedWith(
+        compareBy(
+            { policy: Policy -> policy.reference.id.value },
+            { policy: Policy -> policy.reference.version.value },
+        ),
+    )
+
+/** Returns a successful completed result, or `null` for unfinished and exceptional futures. */
+private fun CompletableFuture<PolicyResult>.completedResultOrNull(): PolicyResult? =
+    if (isDone && !isCompletedExceptionally) {
+        getNow(null)
+    } else {
+        null
+    }
+
+/** Returns the raw terminal failure of an exceptionally completed future, or `null`. */
+private fun CompletableFuture<PolicyResult>.completedFailureOrNull(): Throwable? {
+    if (!isCompletedExceptionally) {
+        return null
+    }
+    val failure = CompletableFuture<Throwable>()
+    whenComplete { _, terminalFailure -> failure.complete(terminalFailure) }
+    return failure.getNow(null)
 }
 
 /** Schedules one policy deadline independently from detector execution threads. */
@@ -377,11 +498,10 @@ private fun joinUninterruptibly(thread: Thread) {
     }
 }
 
-/** Returns the original unchecked task failure without leaking an execution wrapper. */
-private fun ExecutionException.unwrapExecutionFailure(): RuntimeException {
-    val original = cause
-    if (original is Error) {
-        throw original
+/** Rethrows the original unchecked task failure without leaking an execution wrapper. */
+private fun rethrowExecutionFailure(failure: Throwable): Nothing =
+    throw when (failure) {
+        is Error -> failure
+        is RuntimeException -> failure
+        else -> IllegalStateException("Detector task failed", failure)
     }
-    return original as? RuntimeException ?: IllegalStateException("Detector task failed", original)
-}

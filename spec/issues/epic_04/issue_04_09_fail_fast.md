@@ -1,6 +1,6 @@
 # VIG-04-09: Fail-fast finalization при `BLOCK`
 
-**Статус:** Ready for implementation  
+**Статус:** Done
 **Epic:** [EPIC-04](../../epics/epic_04_policy_engine.md)  
 **Ветка:** Detector execution > fail-fast finalization  
 **Зависит от:** [VIG-04-08](issue_04_08_deadlines_cancellation.md)  
@@ -27,13 +27,13 @@ Controllable detector completion order и cancellation probes.
 
 ## Критерии готовности
 
-- [ ] BLOCK first/middle/last даёт один детерминированный итог.
-- [ ] ALLOW не завершает evaluation до результатов остальных policies.
-- [ ] Ненужные executions получают cancellation после BLOCK.
-- [ ] Decision при BLOCK не содержит исполняемых transformations.
-- [ ] Policy results сохраняют результаты, уже сформировавшие BLOCK.
-- [ ] Для добавленных и изменённых Kotlin declarations написан KDoc.
-- [ ] Focused tests и `./gradlew build` проходят.
+- [x] BLOCK first/middle/last даёт один детерминированный итог.
+- [x] ALLOW не завершает evaluation до результатов остальных policies.
+- [x] Ненужные executions получают cancellation после BLOCK.
+- [x] Decision при BLOCK не содержит исполняемых transformations.
+- [x] Policy results сохраняют результаты, уже сформировавшие BLOCK.
+- [x] Для добавленных и изменённых Kotlin declarations написан KDoc.
+- [x] Focused tests и `./gradlew build` проходят.
 
 ## Не входит
 

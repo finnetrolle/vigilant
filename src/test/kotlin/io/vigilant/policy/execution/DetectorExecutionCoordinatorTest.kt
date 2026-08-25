@@ -4,21 +4,8 @@ import io.vigilant.policy.domain.Detector
 import io.vigilant.policy.domain.DetectorId
 import io.vigilant.policy.domain.DetectorResult
 import io.vigilant.policy.domain.DetectionResult
-import io.vigilant.policy.domain.Disposition
-import io.vigilant.policy.domain.Policy
-import io.vigilant.policy.domain.PolicyId
-import io.vigilant.policy.domain.PolicyMatch
-import io.vigilant.policy.domain.PolicyPhase
-import io.vigilant.policy.domain.PolicyReactions
-import io.vigilant.policy.domain.PolicyReference
-import io.vigilant.policy.domain.PolicySubject
-import io.vigilant.policy.domain.PolicyVersion
-import io.vigilant.policy.domain.Reaction
-import io.vigilant.policy.domain.SubjectId
-import io.vigilant.policy.domain.SubjectType
 import java.time.Duration
 import java.util.concurrent.CancellationException
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -43,9 +30,9 @@ class DetectorExecutionCoordinatorTest {
         val detectorCancelled = CountDownLatch(1)
         val invocations = AtomicInteger()
         val detector = releasableCleanDetector(detectorStarted, releaseDetector, detectorCancelled, invocations)
-        val shortPolicy = policy("short-policy", Duration.ofMillis(20), sharedDetectorId)
-        val longPolicy = policy("long-policy", Duration.ofMillis(100), sharedDetectorId)
-        val scheduler = ManualDeadlineScheduler()
+        val shortPolicy = executionPolicy("short-policy", listOf(sharedDetectorId), Duration.ofMillis(20))
+        val longPolicy = executionPolicy("long-policy", listOf(sharedDetectorId), Duration.ofMillis(100))
+        val scheduler = ManualPolicyDeadlineScheduler()
         val coordinator =
             DetectorExecutionCoordinator(
                 DetectorExecutor(mapOf(sharedDetectorId to detector)),
@@ -95,9 +82,9 @@ class DetectorExecutionCoordinatorTest {
                     error("Blocking detector completed without cancellation")
                 }
             }
-        val shortPolicy = policy("short-policy", Duration.ofMillis(20), sharedDetectorId)
-        val longPolicy = policy("long-policy", Duration.ofMillis(100), sharedDetectorId)
-        val scheduler = ManualDeadlineScheduler()
+        val shortPolicy = executionPolicy("short-policy", listOf(sharedDetectorId), Duration.ofMillis(20))
+        val longPolicy = executionPolicy("long-policy", listOf(sharedDetectorId), Duration.ofMillis(100))
+        val scheduler = ManualPolicyDeadlineScheduler()
         val coordinator =
             DetectorExecutionCoordinator(
                 DetectorExecutor(mapOf(sharedDetectorId to detector)),
@@ -137,13 +124,12 @@ class DetectorExecutionCoordinatorTest {
         val completed = CountDownLatch(1)
         val unfinishedStarted = CountDownLatch(1)
         val unfinishedCancelled = CountDownLatch(1)
-        val scheduler = ManualDeadlineScheduler()
+        val scheduler = ManualPolicyDeadlineScheduler()
         val appliedPolicy =
-            policy(
+            executionPolicy(
                 "partial-policy",
+                listOf(completedDetectorId, unfinishedDetectorId),
                 Duration.ofMillis(20),
-                completedDetectorId,
-                unfinishedDetectorId,
             )
         val coordinator =
             DetectorExecutionCoordinator(
@@ -202,8 +188,8 @@ class DetectorExecutionCoordinatorTest {
                 invocations.incrementAndGet()
                 DetectionResult.Clean
             }
-        val firstPolicy = policy("first-policy", sharedDetectorId)
-        val secondPolicy = policy("second-policy", sharedDetectorId)
+        val firstPolicy = executionPolicy("first-policy", listOf(sharedDetectorId))
+        val secondPolicy = executionPolicy("second-policy", listOf(sharedDetectorId))
         val coordinator = DetectorExecutionCoordinator(DetectorExecutor(mapOf(sharedDetectorId to detector)))
 
         val execution = coordinator.execute(listOf(firstPolicy, secondPolicy), "one payload")
@@ -233,8 +219,8 @@ class DetectorExecutionCoordinatorTest {
             )
         val policies =
             listOf(
-                policy("first-policy", sharedDetectorId),
-                policy("second-policy", sharedDetectorId),
+                executionPolicy("first-policy", listOf(sharedDetectorId)),
+                executionPolicy("second-policy", listOf(sharedDetectorId)),
             )
 
         coordinator.execute(policies, "first payload")
@@ -260,7 +246,10 @@ class DetectorExecutionCoordinatorTest {
 
         val execution =
             coordinator.execute(
-                listOf(policy("z-policy", zDetectorId), policy("a-policy", aDetectorId)),
+                listOf(
+                    executionPolicy("z-policy", listOf(zDetectorId)),
+                    executionPolicy("a-policy", listOf(aDetectorId)),
+                ),
                 "one payload",
             )
 
@@ -279,7 +268,7 @@ class DetectorExecutionCoordinatorTest {
         val completionOrder = CopyOnWriteArrayList<String>()
         val aDetector = ControlledDetector(aDetectorId, bothStarted, completionOrder)
         val zDetector = ControlledDetector(zDetectorId, bothStarted, completionOrder)
-        val appliedPolicy = policy("policy", zDetectorId, aDetectorId)
+        val appliedPolicy = executionPolicy("policy", listOf(zDetectorId, aDetectorId))
         val coordinator =
             DetectorExecutionCoordinator(
                 DetectorExecutor(
@@ -359,7 +348,7 @@ class DetectorExecutionCoordinatorTest {
         val secondDetectorId = DetectorId("second-detector")
         val bothStarted = CountDownLatch(2)
         val bothCancelled = CountDownLatch(2)
-        val scheduler = ManualDeadlineScheduler()
+        val scheduler = ManualPolicyDeadlineScheduler()
         val coordinator =
             DetectorExecutionCoordinator(
                 DetectorExecutor(
@@ -376,7 +365,7 @@ class DetectorExecutionCoordinatorTest {
             Thread.ofVirtual().start {
                 try {
                     coordinator.execute(
-                        listOf(policy("policy", firstDetectorId, secondDetectorId)),
+                        listOf(executionPolicy("policy", listOf(firstDetectorId, secondDetectorId))),
                         "one payload",
                     )
                 } catch (cancellation: CancellationException) {
@@ -485,81 +474,4 @@ class DetectorExecutionCoordinatorTest {
         fun awaitCompletion(): Boolean = completed.await(2, TimeUnit.SECONDS)
     }
 
-    /** Creates one complete applied policy for detector orchestration examples. */
-    private fun policy(
-        id: String,
-        vararg detectorIds: DetectorId,
-    ): Policy = policy(id, Duration.ofMillis(50), *detectorIds)
-
-    /** Creates one complete applied policy with an explicit detector deadline. */
-    private fun policy(
-        id: String,
-        deadline: Duration,
-        vararg detectorIds: DetectorId,
-    ): Policy =
-        Policy(
-            reference = PolicyReference(PolicyId(id), PolicyVersion("1")),
-            enabled = true,
-            match =
-                PolicyMatch(
-                    url = "*",
-                    model = "*",
-                    phase = PolicyPhase.REQUEST,
-                    subject = PolicySubject(SubjectType.ANY, SubjectId("*")),
-                ),
-            detectors = detectorIds.toList(),
-            deadline = deadline,
-            reactions =
-                PolicyReactions(
-                    detected = Reaction(Disposition.ALLOW, emptyList()),
-                    clean = Reaction(Disposition.ALLOW, emptyList()),
-                    error = Reaction(Disposition.BLOCK, emptyList()),
-                ),
-            overrides = emptyList(),
-        )
-
-    /** Deterministic scheduler whose due tasks run only when test time advances. */
-    private class ManualDeadlineScheduler : PolicyDeadlineScheduler {
-        private val tasks = ConcurrentHashMap.newKeySet<ScheduledDeadline>()
-        private var nowNanos: Long = 0L
-
-        /** Records [action] against the current controllable time without using a wall-clock sleep. */
-        override fun schedule(
-            delay: Duration,
-            action: () -> Unit,
-        ): PolicyDeadlineTask {
-            val scheduled =
-                synchronized(this) {
-                    ScheduledDeadline(Math.addExact(nowNanos, delay.toNanos()), action).also(tasks::add)
-                }
-            return PolicyDeadlineTask {
-                scheduled.cancelled = true
-                tasks.remove(scheduled)
-            }
-        }
-
-        /** Advances controllable time and synchronously runs every task whose deadline is now due. */
-        fun advanceBy(duration: Duration) {
-            val due =
-                synchronized(this) {
-                    nowNanos = Math.addExact(nowNanos, duration.toNanos())
-                    tasks
-                        .filter { scheduled -> !scheduled.cancelled && scheduled.deadlineNanos <= nowNanos }
-                        .also { scheduledTasks -> tasks.removeAll(scheduledTasks.toSet()) }
-                }
-            due.forEach { scheduled -> scheduled.action() }
-        }
-
-        /** Returns the number of deadline actions that can still run. */
-        fun pendingTaskCount(): Int = tasks.count { scheduled -> !scheduled.cancelled }
-
-        /** One deadline registered in controllable monotonic test time. */
-        private class ScheduledDeadline(
-            val deadlineNanos: Long,
-            val action: () -> Unit,
-        ) {
-            @Volatile
-            var cancelled: Boolean = false
-        }
-    }
 }
