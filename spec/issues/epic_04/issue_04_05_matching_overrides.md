@@ -1,6 +1,6 @@
 # VIG-04-05: Policy matching и simultaneous overrides
 
-**Статус:** Ready for implementation  
+**Статус:** Done  
 **Epic:** [EPIC-04](../../epics/epic_04_policy_engine.md)  
 **Ветка:** Selection > matching and overrides  
 **Зависит от:** [VIG-04-01](issue_04_01_domain_contracts.md)  
@@ -24,13 +24,13 @@ subject и simultaneous override semantics EPIC-04.
 
 ## Критерии готовности
 
-- [ ] Все matching и override cases EPIC-04 покрыты table-driven tests.
-- [ ] User policy без explicit override не отменяет group policy.
-- [ ] Chain overrides дают нормативный applied set.
-- [ ] No match возвращает empty selection без detector execution.
-- [ ] Output имеет стабильную сортировку по policy ID.
-- [ ] Для добавленных и изменённых Kotlin declarations написан KDoc.
-- [ ] Focused tests и `./gradlew build` проходят.
+- [x] Все matching и override cases EPIC-04 покрыты table-driven tests.
+- [x] User policy без explicit override не отменяет group policy.
+- [x] Chain overrides дают нормативный applied set.
+- [x] No match возвращает empty selection без detector execution.
+- [x] Output имеет стабильную сортировку по policy ID.
+- [x] Для добавленных и изменённых Kotlin declarations написан KDoc.
+- [x] Focused tests и `./gradlew build` проходят.
 
 ## Не входит
 

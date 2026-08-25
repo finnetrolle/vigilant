@@ -92,7 +92,7 @@ Issue является листом mind map, если:
 | [VIG-01A: Benchmark логирования](issues/issue_01A_benchmark.md) | `Ready for implementation` | не начата | 4-7 дней |
 | [EPIC-02: Быстрый PII-detector](epics/epic_02_fast_pii_detector.md) | `Done` | 16/16 | 0 дней осталось |
 | [EPIC-03: Policy context extraction](epics/epic_03_policy_context_extraction.md) | `Draft` | 0/6 | 17-27 дней после решений |
-| [EPIC-04: Policy engine](epics/epic_04_policy_engine.md) | `In progress` | 4/11 | 27-38 дней |
+| [EPIC-04: Policy engine](epics/epic_04_policy_engine.md) | `In progress` | 5/11 | 24-34 дня |
 | [EPIC-05: v0 hardening](epics/epic_05_v0_hardening.md) | `Done` | 9/9 | 0 дней осталось |
 | [EPIC-06: Разбор LLM-сообщений и извлечение payload](epics/epic_06_llm_message_parsing.md) | `Draft` | 0/1 | после закрытия протокольного контракта |
 | [EPIC-07: Windowed payload processing](epics/epic_07_windowed_payload_processing.md) | `Draft` | 0/1 | после закрытия windowing-контракта |

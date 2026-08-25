@@ -34,7 +34,7 @@ EPIC-04 Policy engine
 - [x] [VIG-04-02: Strict HOCON parser](../issues/epic_04/issue_04_02_config_parser.md) - `Done`
 - [x] [VIG-04-03: Semantic policy validation](../issues/epic_04/issue_04_03_policy_validation.md) - `Done`
 - [x] [VIG-04-04: Immutable provider snapshot и startup](../issues/epic_04/issue_04_04_snapshot_provider.md) - `Done`
-- [ ] [VIG-04-05: Matching и overrides](../issues/epic_04/issue_04_05_matching_overrides.md) - `Ready for implementation`
+- [x] [VIG-04-05: Matching и overrides](../issues/epic_04/issue_04_05_matching_overrides.md) - `Done`
 - [ ] [VIG-04-06: Detector executor](../issues/epic_04/issue_04_06_detector_executor.md) - `Ready for implementation`
 - [ ] [VIG-04-07: Deduplicated parallel execution](../issues/epic_04/issue_04_07_parallel_execution.md) - `Ready for implementation`
 - [ ] [VIG-04-08: Policy deadlines и shared cancellation](../issues/epic_04/issue_04_08_deadlines_cancellation.md) - `Ready for implementation`
