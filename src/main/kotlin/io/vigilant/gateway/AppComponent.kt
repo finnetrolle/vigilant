@@ -20,12 +20,19 @@ import io.vigilant.gateway.proxy.BypassProxyService
 import io.vigilant.gateway.proxy.buildUpstreamWebClient
 import io.vigilant.gateway.tracing.TracingService
 import io.vigilant.gateway.tracing.buildSdkTracerProvider
+import io.vigilant.policy.config.loadPolicySnapshot
+import io.vigilant.policy.domain.DetectorId
+import io.vigilant.policy.provider.DummyPolicyProvider
+import io.vigilant.policy.provider.PolicyProvider
 import java.net.URI
 import java.time.Duration
 
+/** Built-in detector metadata available while validating the startup policy snapshot. */
+private val STARTUP_DETECTOR_IDS: Set<DetectorId> = setOf(DetectorId("fast-pii"))
+
 /**
  * Application-wide dependency graph: configuration, the upstream [WebClient],
- * the tracing and metrics SDKs, and the assembled Armeria [Server].
+ * the immutable policy provider, the tracing and metrics SDKs, and the assembled Armeria [Server].
  */
 @DependencyGraph(AppScope::class)
 interface AppComponent {
@@ -34,10 +41,19 @@ interface AppComponent {
     val sdkTracerProvider: SdkTracerProvider
     val sdkMeterProvider: SdkMeterProvider
 
+    /** Complete validated policy snapshot provider resolved eagerly at startup. */
+    val policyProvider: PolicyProvider
+
     companion object {
         @Provides
         @SingleIn(AppScope::class)
         fun appConfig(): AppConfig = loadAppConfig()
+
+        /** Loads and validates the required startup policy snapshot exactly once. */
+        @Provides
+        @SingleIn(AppScope::class)
+        val policyProviderBinding: PolicyProvider
+            get() = DummyPolicyProvider(loadPolicySnapshot(availableDetectorIds = STARTUP_DETECTOR_IDS))
 
         @Provides
         @SingleIn(AppScope::class)

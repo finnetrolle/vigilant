@@ -48,6 +48,12 @@ fi
 
 mkdir -p "$TMP_DIR/upstream"
 printf 'proxied-by-vigilant\n' > "$TMP_DIR/upstream/proxy-smoke"
+printf 'policies = []\n' > "$TMP_DIR/politics.conf"
+chmod 0444 "$TMP_DIR/politics.conf"
+POLICY_CONFIG_ARGS=(
+    --env VIGILANT_POLITICS_CONFIG=/etc/vigilant/politics.conf
+    --mount "type=bind,src=$TMP_DIR/politics.conf,dst=/etc/vigilant/politics.conf,readonly"
+)
 python3 -u -c '
 import functools
 import http.server
@@ -88,6 +94,7 @@ CONTAINER_ID="$(
         --name "$CONTAINER_NAME" \
         --add-host host.docker.internal:host-gateway \
         --env "VIGILANT_UPSTREAM_URL=http://host.docker.internal:$UPSTREAM_PORT" \
+        "${POLICY_CONFIG_ARGS[@]}" \
         --publish 127.0.0.1::8080 \
         "$IMAGE_TAG"
 )"
@@ -129,6 +136,7 @@ CONFIG_CONTAINER_ID="$(
         --name "$CONFIG_CONTAINER_NAME" \
         --add-host host.docker.internal:host-gateway \
         --mount "type=bind,src=$TMP_DIR/vigilant.conf,dst=/etc/vigilant/vigilant.conf,readonly" \
+        "${POLICY_CONFIG_ARGS[@]}" \
         --publish 127.0.0.1::8080 \
         "$IMAGE_TAG"
 )"
@@ -162,6 +170,7 @@ CONFIG_CONTAINER_ID=""
 set +e
 docker run --name "$INVALID_CONTAINER_NAME" \
     --env VIGILANT_UPSTREAM_URL=ftp://invalid.example \
+    "${POLICY_CONFIG_ARGS[@]}" \
     "$IMAGE_TAG" >"$TMP_DIR/invalid-config.log" 2>&1
 INVALID_CONFIG_EXIT="$?"
 set -e

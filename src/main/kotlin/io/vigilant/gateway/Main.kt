@@ -6,16 +6,18 @@ import kotlin.system.exitProcess
 /**
  * Starts the gateway server.
  *
- * Builds the object graph via Metro, registers a shutdown hook for graceful stop,
- * and blocks until the server closes. The shutdown hook first marks readiness as
- * draining, so `GET /readyz` answers `503` while the server is still closing,
- * then stops the server, and finally closes both OpenTelemetry SDK providers so
- * queued spans and metric measurements are flushed to the configured endpoint.
+ * Builds the object graph via Metro, eagerly validates application and policy
+ * configuration, registers a shutdown hook for graceful stop, and blocks until
+ * the server closes. The shutdown hook first marks readiness as draining, so
+ * `GET /readyz` answers `503` while the server is still closing, then stops the
+ * server, and finally closes both OpenTelemetry SDK providers so queued spans
+ * and metric measurements are flushed to the configured endpoint.
  */
 fun main() {
     val graph = try {
         val graph = createGraph<AppComponent>()
         // Resolve eagerly so an invalid configuration fails fast with exit code 2.
+        graph.policyProvider
         graph.server
         graph.readinessService
         graph.sdkTracerProvider

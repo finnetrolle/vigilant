@@ -15,4 +15,5 @@ spec
 *.md
 sonar_problems.md
 vigilant.conf
+politics.conf
 vigilant.test.conf

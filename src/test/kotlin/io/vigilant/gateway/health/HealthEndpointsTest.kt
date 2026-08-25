@@ -7,6 +7,7 @@ import com.linecorp.armeria.common.HttpStatus
 import com.linecorp.armeria.common.MediaType
 import com.linecorp.armeria.server.Server
 import io.vigilant.gateway.AppComponent
+import io.vigilant.gateway.withTestPolicyConfiguration
 import io.vigilant.gateway.proxy.BypassProxyService
 import java.net.URI
 import java.net.ServerSocket
@@ -166,7 +167,8 @@ class HealthEndpointsTest {
             "-cp",
             System.getProperty("java.class.path"),
             "io.vigilant.gateway.MainKt",
-        ).apply {
+        ).withTestPolicyConfiguration()
+            .apply {
             environment().apply {
                 put("VIGILANT_UPSTREAM_URL", upstream.toString())
                 put("VIGILANT_PORT", port.toString())

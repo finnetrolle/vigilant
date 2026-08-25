@@ -16,6 +16,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.AppenderBase
 import com.linecorp.armeria.server.Server
 import com.fasterxml.jackson.databind.ObjectMapper
+import io.vigilant.gateway.withTestPolicyConfiguration
 import java.net.URI
 import java.net.ServerSocket
 import java.time.Duration
@@ -430,7 +431,8 @@ class BypassProxyServiceTest {
             "-cp",
             System.getProperty("java.class.path"),
             "io.vigilant.gateway.MainKt",
-        ).apply {
+        ).withTestPolicyConfiguration()
+            .apply {
             environment().apply {
                 put("VIGILANT_UPSTREAM_URL", upstream.toString())
                 put("VIGILANT_PORT", port.toString())

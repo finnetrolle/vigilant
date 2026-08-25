@@ -280,46 +280,7 @@ class PolicyConfigParserTest {
     /** Canonical HOCON fixtures derived from the normative EPIC-04 example. */
     private companion object {
         /** Complete policy configuration in the documented field order. */
-        val COMPLETE_CONFIG =
-            """
-            policies = [
-              {
-                id = "default-request-pii"
-                version = "1"
-                enabled = true
-
-                match {
-                  url = "*"
-                  model = "*"
-                  phase = "REQUEST"
-                  subject {
-                    type = "*"
-                    id = "*"
-                  }
-                }
-
-                detectors = ["fast-pii"]
-                deadline = 50ms
-
-                reactions {
-                  detected {
-                    disposition = "ALLOW"
-                    transformations = ["MASK"]
-                  }
-                  clean {
-                    disposition = "ALLOW"
-                    transformations = []
-                  }
-                  error {
-                    disposition = "BLOCK"
-                    transformations = []
-                  }
-                }
-
-                overrides = []
-              }
-            ]
-            """.trimIndent()
+        val COMPLETE_CONFIG = completePolicyConfig()
 
         /** The same policy configuration with every object field reordered. */
         val REORDERED_CONFIG =

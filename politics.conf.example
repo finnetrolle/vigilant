@@ -1,0 +1,3 @@
+# Required immutable startup policy snapshot.
+# VIGILANT_POLITICS_CONFIG selects another file; otherwise ./politics.conf is used.
+policies = []

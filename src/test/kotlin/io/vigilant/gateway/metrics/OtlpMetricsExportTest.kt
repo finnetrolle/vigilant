@@ -7,6 +7,7 @@ import com.linecorp.armeria.common.HttpStatus
 import io.opentelemetry.sdk.metrics.SdkMeterProvider
 import io.vigilant.gateway.GatewayTestFixture
 import io.vigilant.gateway.AppComponent
+import io.vigilant.gateway.withTestPolicyConfiguration
 import io.vigilant.gateway.config.OtlpSettings
 import io.vigilant.gateway.proxy.BypassProxyService
 import java.io.IOException
@@ -153,7 +154,9 @@ class OtlpMetricsExportTest {
             "-cp",
             System.getProperty("java.class.path"),
             "io.vigilant.gateway.MainKt",
-        ).redirectErrorStream(true).apply {
+        ).redirectErrorStream(true)
+            .withTestPolicyConfiguration()
+            .apply {
             environment().apply {
                 put("VIGILANT_UPSTREAM_URL", upstream.toString())
                 put("VIGILANT_PORT", port.toString())

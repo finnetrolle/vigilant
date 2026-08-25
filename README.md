@@ -16,8 +16,9 @@ Vigilant — проект системы guardrails для платформы И
 ```bash
 ./gradlew build                 # компиляция + тесты + detekt
 ./gradlew installDist           # дистрибутив в build/install/vigilant/
+cp politics.conf.example politics.conf
 
-# Запуск только на переменных окружения
+# Application config через environment; policy snapshot из ./politics.conf
 VIGILANT_UPSTREAM_URL=http://127.0.0.1:18081 VIGILANT_PORT=18080 ./build/install/vigilant/bin/vigilant
 
 # Запуск с HOCON-файлом (см. vigilant.conf.example; переменные окружения переопределяют файл)
@@ -44,23 +45,27 @@ Multi-stage `Dockerfile` собирает тот же артефакт в чис
 docker build --tag vigilant:0.1.0-SNAPSHOT .
 ```
 
-Запуск с конфигурацией через environment variables:
+Запуск с application configuration через environment variables и policy snapshot через read-only mount:
 
 ```bash
 docker run --rm --name vigilant \
   --publish 8080:8080 \
   --stop-timeout 35 \
   --env VIGILANT_UPSTREAM_URL=https://api.openai.com \
+  --env VIGILANT_POLITICS_CONFIG=/etc/vigilant/politics.conf \
+  --mount type=bind,src="$(pwd)/politics.conf",dst=/etc/vigilant/politics.conf,readonly \
   vigilant:0.1.0-SNAPSHOT
 ```
 
-Запуск с HOCON-файлом, смонтированным read-only в стандартный путь поиска:
+Запуск с application HOCON и policy snapshot, смонтированными read-only:
 
 ```bash
 docker run --rm --name vigilant \
   --publish 8080:8080 \
   --stop-timeout 35 \
   --mount type=bind,src="$(pwd)/vigilant.conf",dst=/etc/vigilant/vigilant.conf,readonly \
+  --env VIGILANT_POLITICS_CONFIG=/etc/vigilant/politics.conf \
+  --mount type=bind,src="$(pwd)/politics.conf",dst=/etc/vigilant/politics.conf,readonly \
   vigilant:0.1.0-SNAPSHOT
 ```
 
@@ -118,9 +123,20 @@ vigilant {
 
 Правило переопределения: любой ключ `vigilant.some-setting` из файла переопределяется переменной `VIGILANT_SOME_SETTING`.
 
+Policy snapshot загружается отдельно из обязательного `politics.conf`. Путь из
+`VIGILANT_POLITICS_CONFIG` имеет приоритет, иначе используется
+`./politics.conf`. Файл читается и валидируется один раз при startup; hot reload
+отсутствует. Явный пустой snapshot разрешён:
+
+```hocon
+policies = []
+```
+
+Минимальный пример находится в `politics.conf.example`.
+
 Формат значений длительностей - строки вида `300ms`, `10s`, `5m` (или ISO-8601 `PT5M`); нулевые и отрицательные значения отклоняются при старте.
 
-Недопустимая или неполная конфигурация: сообщение об ошибке в stderr и код завершения 2.
+Недопустимая или неполная application/policy configuration: сообщение об ошибке в stderr и код завершения 2.
 
 ## Стабильные proxy-ошибки upstream
 

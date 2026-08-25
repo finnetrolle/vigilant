@@ -21,6 +21,7 @@ out/
 
 # Local config (keep .example and .test.conf)
 vigilant.conf
+politics.conf
 
 # macOS
 .DS_Store

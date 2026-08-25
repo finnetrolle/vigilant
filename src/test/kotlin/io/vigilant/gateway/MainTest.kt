@@ -1,31 +1,103 @@
 package io.vigilant.gateway
 
+import java.nio.file.Files
 import java.util.concurrent.TimeUnit
+import kotlin.io.path.writeText
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class MainTest {
+    /** Verifies invalid application configuration uses the stable startup failure contract. */
     @Test
     fun `invalid config exits with code 2 and prints the reason to stderr`() {
-        val process = ProcessBuilder(
-            "${System.getProperty("java.home")}/bin/java",
-            "-cp",
-            System.getProperty("java.class.path"),
-            "io.vigilant.gateway.MainKt",
-        ).apply {
-            environment().apply {
-                put("VIGILANT_UPSTREAM_URL", "ftp://example.com")
-            }
-        }.start()
+        val result =
+            runGateway(
+                mapOf(
+                    "VIGILANT_UPSTREAM_URL" to "ftp://example.com",
+                ),
+            )
 
-        val stderr = process.errorStream.bufferedReader().readText()
-        assertTrue(process.waitFor(30, TimeUnit.SECONDS), "gateway process did not exit within 30 seconds")
-
-        assertEquals(2, process.exitValue())
+        assertEquals(2, result.exitCode)
         assertTrue(
-            stderr.contains("VIGILANT_UPSTREAM_URL must contain an absolute HTTP(S) URL"),
-            "stderr must explain the invalid configuration, was: $stderr",
+            result.stderr.contains("VIGILANT_UPSTREAM_URL must contain an absolute HTTP(S) URL"),
+            "stderr must explain the invalid configuration, was: ${result.stderr}",
         )
     }
+
+    /** Verifies eager policy loading and the stable startup failure contract. */
+    @Test
+    fun `missing policy config exits with code 2 and safe stderr`() {
+        val missingPolicyPath = "/nonexistent/secret-politics.conf"
+        val result =
+            runGateway(
+                mapOf(
+                    "VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081",
+                    "VIGILANT_POLITICS_CONFIG" to missingPolicyPath,
+                ),
+            )
+
+        assertEquals(2, result.exitCode)
+        assertTrue(
+            result.stderr.contains("Required policy configuration file is missing"),
+            "stderr must explain the missing policy configuration, was: ${result.stderr}",
+        )
+        assertFalse(result.stderr.contains(missingPolicyPath), "stderr must not expose the configured path")
+    }
+
+    /** Verifies invalid policy contents use the same safe startup failure contract. */
+    @Test
+    fun `invalid policy config exits with code 2 without exposing values`() {
+        val secret = "secret-startup-policy-value"
+        val invalidPolicyFile =
+            Files.createTempFile("vigilant-invalid-politics", ".conf").also { path ->
+                path.writeText("policies = []\ncredential = \"$secret\"")
+            }
+        val result =
+            runGateway(
+                mapOf(
+                    "VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081",
+                    "VIGILANT_POLITICS_CONFIG" to invalidPolicyFile.toString(),
+                ),
+            )
+
+        assertEquals(2, result.exitCode)
+        assertTrue(
+            result.stderr.contains("Unknown policy configuration field: credential"),
+            "stderr must identify only the invalid policy field, was: ${result.stderr}",
+        )
+        assertFalse(result.stderr.contains(secret), "stderr must not expose policy values")
+    }
+
+    /** Runs the production entry point until its expected startup failure. */
+    private fun runGateway(environment: Map<String, String>): GatewayExit {
+        val process =
+            ProcessBuilder(
+                "${System.getProperty("java.home")}/bin/java",
+                "-cp",
+                System.getProperty("java.class.path"),
+                "io.vigilant.gateway.MainKt",
+            ).withTestPolicyConfiguration()
+                .apply { environment().putAll(environment) }
+                .start()
+
+        try {
+            assertTrue(process.waitFor(10, TimeUnit.SECONDS), "gateway process did not fail within 10 seconds")
+            return GatewayExit(
+                exitCode = process.exitValue(),
+                stderr = process.errorStream.bufferedReader().readText(),
+            )
+        } finally {
+            if (process.isAlive) {
+                process.destroyForcibly().waitFor(10, TimeUnit.SECONDS)
+            }
+        }
+    }
+
+    /** Captured process exit status and safe diagnostic stream. */
+    private data class GatewayExit(
+        val exitCode: Int,
+        val stderr: String,
+    )
 }
