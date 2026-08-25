@@ -1,6 +1,6 @@
 # VIG-04-07: Deduplicated parallel detector execution
 
-**Статус:** Ready for implementation  
+**Статус:** Done
 **Epic:** [EPIC-04](../../epics/epic_04_policy_engine.md)  
 **Ветка:** Detector execution > deduplicated parallel execution  
 **Зависит от:** [VIG-04-05](issue_04_05_matching_overrides.md), [VIG-04-06](issue_04_06_detector_executor.md)  
@@ -28,13 +28,13 @@ Controllable fake detectors с latches/barriers доказывают concurrency
 
 ## Критерии готовности
 
-- [ ] Deduplication key равен stable detector ID для одного payload/evaluation.
-- [ ] Один ID запускается один раз для нескольких consumers.
-- [ ] Независимые IDs достигают barrier до освобождения любого из них.
-- [ ] Results сортируются по detector ID.
-- [ ] Structured cancellation не оставляет orphan tasks.
-- [ ] Для добавленных и изменённых Kotlin declarations написан KDoc.
-- [ ] Focused tests и `./gradlew build` проходят.
+- [x] Deduplication key равен stable detector ID для одного payload/evaluation.
+- [x] Один ID запускается один раз для нескольких consumers.
+- [x] Независимые IDs достигают barrier до освобождения любого из них.
+- [x] Results сортируются по detector ID.
+- [x] Structured cancellation не оставляет orphan tasks.
+- [x] Для добавленных и изменённых Kotlin declarations написан KDoc.
+- [x] Focused tests и `./gradlew build` проходят.
 
 ## Не входит
 

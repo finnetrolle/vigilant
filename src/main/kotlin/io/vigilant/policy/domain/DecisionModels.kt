@@ -39,8 +39,7 @@ class PolicyResult(
     val deadlineExceeded: Boolean,
 ) {
     /** Detector outcomes in deterministic detector-ID order. */
-    val detectorResults: List<DetectorResult> =
-        immutableList(detectorResults.sortedBy { detectorResult -> detectorResult.detectorId.value })
+    val detectorResults: List<DetectorResult> = immutableDetectorResults(detectorResults)
 
     /** Selected reactions in deterministic disposition/transformation order. */
     val appliedReactions: List<Reaction> =
@@ -102,8 +101,7 @@ class PolicyDecision(
         )
 
     /** Deduplicated detector outcomes in deterministic detector-ID order. */
-    val detectorResults: List<DetectorResult> =
-        immutableList(detectorResults.sortedBy { detectorResult -> detectorResult.detectorId.value })
+    val detectorResults: List<DetectorResult> = immutableDetectorResults(detectorResults)
 
     init {
         require(!duration.isNegative) {
@@ -111,6 +109,10 @@ class PolicyDecision(
         }
     }
 }
+
+/** Returns immutable detector outcomes in deterministic detector-ID order. */
+internal fun immutableDetectorResults(results: Collection<DetectorResult>): List<DetectorResult> =
+    immutableList(results.sortedBy { detectorResult -> detectorResult.detectorId.value })
 
 /** Returns immutable policy references in deterministic ID/version order. */
 private fun immutablePolicyReferences(references: Collection<PolicyReference>): List<PolicyReference> =
