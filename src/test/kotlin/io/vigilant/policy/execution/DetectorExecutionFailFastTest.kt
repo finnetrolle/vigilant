@@ -168,6 +168,29 @@ class DetectorExecutionFailFastTest {
         }
     }
 
+    /** Verifies that a detector terminal failure propagates instead of finalizing ALLOW. */
+    @Test
+    fun `detector terminal failure propagates instead of finalizing allow`() {
+        val failingId = DetectorId("failing-detector")
+        val crash = AssertionError("Detector crashed")
+        val appliedPolicy = executionPolicy("failing-policy", listOf(failingId))
+        val observedFailure = AtomicReference<Throwable?>()
+        val evaluationThread =
+            Thread.ofVirtual().start {
+                try {
+                    coordinator(mapOf(failingId to Detector { throw crash }))
+                        .execute(listOf(appliedPolicy), PAYLOAD)
+                } catch (failure: Throwable) {
+                    observedFailure.set(failure)
+                }
+            }
+
+        evaluationThread.join(2_000)
+
+        assertFalse(evaluationThread.isAlive, "Failed evaluation must terminate instead of hanging")
+        assertSame(crash, observedFailure.get())
+    }
+
     /** Verifies that fail-fast retains work needed to explain the blocking policy. */
     @Test
     fun `block keeps execution required by its policy while cancelling unrelated work`() {

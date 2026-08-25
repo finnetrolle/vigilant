@@ -84,7 +84,7 @@ class DetectorExecutionCoordinator @JvmOverloads constructor(
                 cancellation.initCause(interrupted)
             }
         } catch (failure: ExecutionException) {
-            throw failure.unwrapExecutionFailure()
+            rethrowExecutionFailure(failure.cause ?: failure)
         } finally {
             consumers.forEach(PolicyExecutionConsumer::cancel)
             executions.values.forEach(SharedDetectorExecution::cancel)
@@ -151,6 +151,9 @@ class DetectorExecutionCoordinator @JvmOverloads constructor(
         CompletableFuture.anyOf(blockSignal, allConsumersCompleted(consumers)).get()
         val blocked = blockSignal.isDone || consumers.any { consumer -> consumer.isBlocking }
         if (!blocked) {
+            consumers.forEach { consumer ->
+                consumer.completion.completedFailureOrNull()?.let(::rethrowExecutionFailure)
+            }
             return Disposition.ALLOW
         }
         consumers.forEach(PolicyExecutionConsumer::cancelUnlessBlocking)
@@ -396,13 +399,23 @@ class DetectorExecutionResults internal constructor(
     private val policyResults: Map<PolicyReference, PolicyResult> =
         java.util.Map.copyOf(policyResults.associateBy(PolicyResult::policy))
 
-    /** Returns the policy-level result for one participant in this evaluation. */
+    /**
+     * Returns the policy-level result for one participant in this evaluation.
+     *
+     * A policy cancelled by fail-fast BLOCK finalization keeps no result and therefore
+     * reads like a policy that did not participate.
+     *
+     * @throws NoSuchElementException when [policy] did not finish this evaluation.
+     */
     fun policyResultFor(policy: PolicyReference): PolicyResult = policyResults.getValue(policy)
 
     /**
      * Returns the detector outcomes consumed by [policy].
      *
-     * @return an empty list when [policy] did not participate in this evaluation.
+     * A policy cancelled by fail-fast BLOCK finalization keeps no result and therefore
+     * reads like a policy that did not participate.
+     *
+     * @return an empty list when [policy] did not finish this evaluation.
      */
     fun resultsFor(policy: PolicyReference): List<DetectorResult> =
         policyResults[policy]?.detectorResults.orEmpty()
@@ -424,6 +437,16 @@ private fun CompletableFuture<PolicyResult>.completedResultOrNull(): PolicyResul
     } else {
         null
     }
+
+/** Returns the raw terminal failure of an exceptionally completed future, or `null`. */
+private fun CompletableFuture<PolicyResult>.completedFailureOrNull(): Throwable? {
+    if (!isCompletedExceptionally) {
+        return null
+    }
+    val failure = CompletableFuture<Throwable>()
+    whenComplete { _, terminalFailure -> failure.complete(terminalFailure) }
+    return failure.getNow(null)
+}
 
 /** Schedules one policy deadline independently from detector execution threads. */
 fun interface PolicyDeadlineScheduler {
@@ -475,11 +498,10 @@ private fun joinUninterruptibly(thread: Thread) {
     }
 }
 
-/** Returns the original unchecked task failure without leaking an execution wrapper. */
-private fun ExecutionException.unwrapExecutionFailure(): RuntimeException {
-    val original = cause
-    if (original is Error) {
-        throw original
+/** Rethrows the original unchecked task failure without leaking an execution wrapper. */
+private fun rethrowExecutionFailure(failure: Throwable): Nothing =
+    throw when (failure) {
+        is Error -> failure
+        is RuntimeException -> failure
+        else -> IllegalStateException("Detector task failed", failure)
     }
-    return original as? RuntimeException ?: IllegalStateException("Detector task failed", original)
-}
