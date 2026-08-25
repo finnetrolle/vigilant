@@ -1,6 +1,6 @@
 # VIG-04-08: Per-policy deadlines и shared cancellation
 
-**Статус:** Ready for implementation  
+**Статус:** Done
 **Epic:** [EPIC-04](../../epics/epic_04_policy_engine.md)  
 **Ветка:** Detector execution > policy deadlines  
 **Зависит от:** [VIG-04-07](issue_04_07_parallel_execution.md)  
@@ -28,13 +28,13 @@ Controllable clock/test scheduler и cancellable fake detectors. Не испол
 
 ## Критерии готовности
 
-- [ ] Пример `20ms/100ms` из epic воспроизведён deterministic test-ом.
-- [ ] Timeout одного consumer не отменяет execution, нужный другому.
-- [ ] Последний ушедший consumer отменяет unfinished execution.
-- [ ] External cancellation отменяет все ожидания и executions.
-- [ ] Partial detector results не выдаются как successful clean result.
-- [ ] Для добавленных и изменённых Kotlin declarations написан KDoc.
-- [ ] Focused tests и `./gradlew build` проходят.
+- [x] Пример `20ms/100ms` из epic воспроизведён deterministic test-ом.
+- [x] Timeout одного consumer не отменяет execution, нужный другому.
+- [x] Последний ушедший consumer отменяет unfinished execution.
+- [x] External cancellation отменяет все ожидания и executions.
+- [x] Partial detector results не выдаются как successful clean result.
+- [x] Для добавленных и изменённых Kotlin declarations написан KDoc.
+- [x] Focused tests и `./gradlew build` проходят.
 
 ## Не входит
 

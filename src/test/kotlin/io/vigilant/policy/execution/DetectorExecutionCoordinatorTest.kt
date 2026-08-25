@@ -2,6 +2,7 @@ package io.vigilant.policy.execution
 
 import io.vigilant.policy.domain.Detector
 import io.vigilant.policy.domain.DetectorId
+import io.vigilant.policy.domain.DetectorResult
 import io.vigilant.policy.domain.DetectionResult
 import io.vigilant.policy.domain.Disposition
 import io.vigilant.policy.domain.Policy
@@ -17,6 +18,7 @@ import io.vigilant.policy.domain.SubjectId
 import io.vigilant.policy.domain.SubjectType
 import java.time.Duration
 import java.util.concurrent.CancellationException
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -32,6 +34,164 @@ import kotlin.test.assertTrue
 
 /** Behavior tests for deduplicated parallel detector orchestration. */
 class DetectorExecutionCoordinatorTest {
+    /** Verifies independent 20ms/100ms policy deadlines over one shared detector execution. */
+    @Test
+    fun `short policy times out while long policy receives their shared detector result`() {
+        val sharedDetectorId = DetectorId("shared-detector")
+        val detectorStarted = CountDownLatch(1)
+        val releaseDetector = CountDownLatch(1)
+        val detectorCancelled = CountDownLatch(1)
+        val invocations = AtomicInteger()
+        val detector = releasableCleanDetector(detectorStarted, releaseDetector, detectorCancelled, invocations)
+        val shortPolicy = policy("short-policy", Duration.ofMillis(20), sharedDetectorId)
+        val longPolicy = policy("long-policy", Duration.ofMillis(100), sharedDetectorId)
+        val scheduler = ManualDeadlineScheduler()
+        val coordinator =
+            DetectorExecutionCoordinator(
+                DetectorExecutor(mapOf(sharedDetectorId to detector)),
+                scheduler,
+            )
+
+        Executors.newVirtualThreadPerTaskExecutor().use { caller ->
+            val executionFuture =
+                caller.submit<DetectorExecutionResults> {
+                    coordinator.execute(listOf(shortPolicy, longPolicy), "one payload")
+                }
+            try {
+                assertTrue(detectorStarted.await(2, TimeUnit.SECONDS), "Shared detector must start")
+
+                scheduler.advanceBy(Duration.ofMillis(20))
+
+                assertFalse(executionFuture.isDone, "Long policy must continue waiting")
+                assertFalse(detectorCancelled.await(0, TimeUnit.SECONDS), "Short timeout must not cancel shared work")
+                releaseDetector.countDown()
+                val execution = executionFuture.get(2, TimeUnit.SECONDS)
+
+                val shortResult = execution.policyResultFor(shortPolicy.reference)
+                assertTrue(shortResult.deadlineExceeded)
+                assertDeadlineError(shortResult.detectorResults.single())
+                val longResult = execution.policyResultFor(longPolicy.reference)
+                assertFalse(longResult.deadlineExceeded)
+                assertSame(execution.detectorResults.single(), longResult.detectorResults.single())
+                assertEquals(1, invocations.get())
+            } finally {
+                releaseDetector.countDown()
+                executionFuture.cancel(true)
+            }
+        }
+    }
+
+    /** Verifies that shared unfinished work is cancelled only after its final policy times out. */
+    @Test
+    fun `last timed out consumer cancels unfinished shared detector execution`() {
+        val sharedDetectorId = DetectorId("shared-detector")
+        val detectorStarted = CountDownLatch(1)
+        val detectorCancelled = CountDownLatch(1)
+        val detector =
+            Detector {
+                detectorStarted.countDown()
+                runCancellableDetectorOperation(detectorCancelled, "Shared detector was cancelled") {
+                    CountDownLatch(1).await()
+                    error("Blocking detector completed without cancellation")
+                }
+            }
+        val shortPolicy = policy("short-policy", Duration.ofMillis(20), sharedDetectorId)
+        val longPolicy = policy("long-policy", Duration.ofMillis(100), sharedDetectorId)
+        val scheduler = ManualDeadlineScheduler()
+        val coordinator =
+            DetectorExecutionCoordinator(
+                DetectorExecutor(mapOf(sharedDetectorId to detector)),
+                scheduler,
+            )
+
+        Executors.newVirtualThreadPerTaskExecutor().use { caller ->
+            val executionFuture =
+                caller.submit<DetectorExecutionResults> {
+                    coordinator.execute(listOf(shortPolicy, longPolicy), "one payload")
+                }
+            try {
+                assertTrue(detectorStarted.await(2, TimeUnit.SECONDS), "Shared detector must start")
+
+                scheduler.advanceBy(Duration.ofMillis(20))
+
+                assertFalse(detectorCancelled.await(0, TimeUnit.SECONDS), "First consumer must retain shared work")
+
+                scheduler.advanceBy(Duration.ofMillis(80))
+
+                val execution = executionFuture.get(2, TimeUnit.SECONDS)
+                assertTrue(detectorCancelled.await(0, TimeUnit.SECONDS), "Final consumer must cancel shared work")
+                assertTrue(execution.policyResultFor(shortPolicy.reference).deadlineExceeded)
+                assertTrue(execution.policyResultFor(longPolicy.reference).deadlineExceeded)
+                assertEquals(emptyList(), execution.detectorResults)
+            } finally {
+                executionFuture.cancel(true)
+            }
+        }
+    }
+
+    /** Verifies exact completed and unfinished detector outcomes for a partially completed policy. */
+    @Test
+    fun `policy deadline preserves completed result and errors only unfinished detectors`() {
+        val completedDetectorId = DetectorId("a-completed-detector")
+        val unfinishedDetectorId = DetectorId("z-unfinished-detector")
+        val completed = CountDownLatch(1)
+        val unfinishedStarted = CountDownLatch(1)
+        val unfinishedCancelled = CountDownLatch(1)
+        val scheduler = ManualDeadlineScheduler()
+        val appliedPolicy =
+            policy(
+                "partial-policy",
+                Duration.ofMillis(20),
+                completedDetectorId,
+                unfinishedDetectorId,
+            )
+        val coordinator =
+            DetectorExecutionCoordinator(
+                DetectorExecutor(
+                    mapOf(
+                        completedDetectorId to
+                            Detector {
+                                completed.countDown()
+                                DetectionResult.Clean
+                            },
+                        unfinishedDetectorId to blockingDetector(unfinishedStarted, unfinishedCancelled),
+                    ),
+                ),
+                scheduler,
+            )
+
+        Executors.newVirtualThreadPerTaskExecutor().use { caller ->
+            val executionFuture =
+                caller.submit<DetectorExecutionResults> {
+                    coordinator.execute(listOf(appliedPolicy), "one payload")
+                }
+            try {
+                assertTrue(completed.await(2, TimeUnit.SECONDS), "Completed detector must finish")
+                assertTrue(unfinishedStarted.await(2, TimeUnit.SECONDS), "Unfinished detector must start")
+
+                scheduler.advanceBy(Duration.ofMillis(20))
+
+                val execution = executionFuture.get(2, TimeUnit.SECONDS)
+                val policyResult = execution.policyResultFor(appliedPolicy.reference)
+                assertTrue(policyResult.deadlineExceeded)
+                assertEquals(
+                    listOf(completedDetectorId, unfinishedDetectorId),
+                    policyResult.detectorResults.map(DetectorResult::detectorId),
+                )
+                assertSame(DetectionResult.Clean, policyResult.detectorResults.first().result)
+                assertDeadlineError(policyResult.detectorResults.last())
+                assertEquals(listOf(completedDetectorId), execution.detectorResults.map(DetectorResult::detectorId))
+                assertSame(appliedPolicy.reactions.error, policyResult.appliedReactions.single())
+                assertTrue(
+                    unfinishedCancelled.await(0, TimeUnit.SECONDS),
+                    "Final consumer must cancel unfinished detector",
+                )
+            } finally {
+                executionFuture.cancel(true)
+            }
+        }
+    }
+
     /** Verifies that multiple policy consumers share one normalized detector invocation result. */
     @Test
     fun `shared detector executes once and supplies the same result to every policy`() {
@@ -199,6 +359,7 @@ class DetectorExecutionCoordinatorTest {
         val secondDetectorId = DetectorId("second-detector")
         val bothStarted = CountDownLatch(2)
         val bothCancelled = CountDownLatch(2)
+        val scheduler = ManualDeadlineScheduler()
         val coordinator =
             DetectorExecutionCoordinator(
                 DetectorExecutor(
@@ -207,6 +368,7 @@ class DetectorExecutionCoordinatorTest {
                         secondDetectorId to blockingDetector(bothStarted, bothCancelled),
                     ),
                 ),
+                scheduler,
             )
         val observedCancellation = AtomicReference<CancellationException?>()
         val interruptionPreserved = AtomicReference(false)
@@ -230,6 +392,7 @@ class DetectorExecutionCoordinatorTest {
 
             assertFalse(evaluationThread.isAlive, "Cancelled evaluation must join every detector task")
             assertTrue(bothCancelled.await(0, TimeUnit.SECONDS), "Every active detector must observe cancellation")
+            assertEquals(0, scheduler.pendingTaskCount(), "Every policy deadline wait must be cancelled")
             assertIs<CancellationException>(observedCancellation.get())
             assertTrue(interruptionPreserved.get(), "The evaluation thread interruption must be preserved")
         } finally {
@@ -240,19 +403,56 @@ class DetectorExecutionCoordinatorTest {
 
     /** Creates a detector that blocks until its virtual thread is interrupted. */
     private fun blockingDetector(
-        bothStarted: CountDownLatch,
-        bothCancelled: CountDownLatch,
+        started: CountDownLatch,
+        cancelled: CountDownLatch,
     ): Detector =
         Detector {
-            bothStarted.countDown()
-            try {
+            started.countDown()
+            runCancellableDetectorOperation(cancelled, "Detector task was cancelled") {
                 CountDownLatch(1).await()
                 error("Blocking detector completed without cancellation")
-            } catch (interrupted: InterruptedException) {
-                bothCancelled.countDown()
-                throw CancellationException("Detector task was cancelled").also { cancellation ->
-                    cancellation.initCause(interrupted)
+            }
+        }
+
+    /** Runs [operation], signaling [cancelled] and translating interruption into detector cancellation. */
+    private fun <Result> runCancellableDetectorOperation(
+        cancelled: CountDownLatch,
+        cancellationMessage: String,
+        operation: () -> Result,
+    ): Result =
+        try {
+            operation()
+        } catch (interrupted: InterruptedException) {
+            cancelled.countDown()
+            throw CancellationException(cancellationMessage).also { cancellation ->
+                cancellation.initCause(interrupted)
+            }
+        }
+
+    /** Verifies the stable policy-level timeout error for one unfinished detector result. */
+    private fun assertDeadlineError(detectorResult: DetectorResult) {
+        val deadlineError = assertIs<DetectionResult.Error>(detectorResult.result)
+        assertEquals(
+            DetectorExecutionCoordinator.POLICY_DEADLINE_EXCEEDED_ERROR_CODE,
+            deadlineError.error.code,
+        )
+    }
+
+    /** Creates an interruptible detector that completes cleanly after [release] opens. */
+    private fun releasableCleanDetector(
+        started: CountDownLatch,
+        release: CountDownLatch,
+        cancelled: CountDownLatch,
+        invocations: AtomicInteger,
+    ): Detector =
+        Detector {
+            invocations.incrementAndGet()
+            started.countDown()
+            runCancellableDetectorOperation(cancelled, "Shared detector was cancelled") {
+                check(release.await(2, TimeUnit.SECONDS)) {
+                    "Shared detector was not released"
                 }
+                DetectionResult.Clean
             }
         }
 
@@ -289,6 +489,13 @@ class DetectorExecutionCoordinatorTest {
     private fun policy(
         id: String,
         vararg detectorIds: DetectorId,
+    ): Policy = policy(id, Duration.ofMillis(50), *detectorIds)
+
+    /** Creates one complete applied policy with an explicit detector deadline. */
+    private fun policy(
+        id: String,
+        deadline: Duration,
+        vararg detectorIds: DetectorId,
     ): Policy =
         Policy(
             reference = PolicyReference(PolicyId(id), PolicyVersion("1")),
@@ -301,7 +508,7 @@ class DetectorExecutionCoordinatorTest {
                     subject = PolicySubject(SubjectType.ANY, SubjectId("*")),
                 ),
             detectors = detectorIds.toList(),
-            deadline = Duration.ofMillis(50),
+            deadline = deadline,
             reactions =
                 PolicyReactions(
                     detected = Reaction(Disposition.ALLOW, emptyList()),
@@ -310,4 +517,49 @@ class DetectorExecutionCoordinatorTest {
                 ),
             overrides = emptyList(),
         )
+
+    /** Deterministic scheduler whose due tasks run only when test time advances. */
+    private class ManualDeadlineScheduler : PolicyDeadlineScheduler {
+        private val tasks = ConcurrentHashMap.newKeySet<ScheduledDeadline>()
+        private var nowNanos: Long = 0L
+
+        /** Records [action] against the current controllable time without using a wall-clock sleep. */
+        override fun schedule(
+            delay: Duration,
+            action: () -> Unit,
+        ): PolicyDeadlineTask {
+            val scheduled =
+                synchronized(this) {
+                    ScheduledDeadline(Math.addExact(nowNanos, delay.toNanos()), action).also(tasks::add)
+                }
+            return PolicyDeadlineTask {
+                scheduled.cancelled = true
+                tasks.remove(scheduled)
+            }
+        }
+
+        /** Advances controllable time and synchronously runs every task whose deadline is now due. */
+        fun advanceBy(duration: Duration) {
+            val due =
+                synchronized(this) {
+                    nowNanos = Math.addExact(nowNanos, duration.toNanos())
+                    tasks
+                        .filter { scheduled -> !scheduled.cancelled && scheduled.deadlineNanos <= nowNanos }
+                        .also { scheduledTasks -> tasks.removeAll(scheduledTasks.toSet()) }
+                }
+            due.forEach { scheduled -> scheduled.action() }
+        }
+
+        /** Returns the number of deadline actions that can still run. */
+        fun pendingTaskCount(): Int = tasks.count { scheduled -> !scheduled.cancelled }
+
+        /** One deadline registered in controllable monotonic test time. */
+        private class ScheduledDeadline(
+            val deadlineNanos: Long,
+            val action: () -> Unit,
+        ) {
+            @Volatile
+            var cancelled: Boolean = false
+        }
+    }
 }
