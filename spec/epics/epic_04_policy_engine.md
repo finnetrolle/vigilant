@@ -2,7 +2,7 @@
 
 **ID:** `EPIC-04`  
 **Тип:** Epic  
-**Статус:** In progress  
+**Статус:** Done  
 **Приоритет:** High  
 **Суммарная оценка:** 36-51 инженерных дней  
 **Связанные требования:** `MVP-01`, `MVP-02`, `MVP-13`, `MVP-14`, `PERF-03`, `PERF-04`, `CONC-04`
@@ -40,7 +40,7 @@ EPIC-04 Policy engine
 - [x] [VIG-04-08: Policy deadlines и shared cancellation](../issues/epic_04/issue_04_08_deadlines_cancellation.md) - `Done`
 - [x] [VIG-04-09: Fail-fast BLOCK](../issues/epic_04/issue_04_09_fail_fast.md) - `Done`
 - [x] [VIG-04-10: Reaction и span aggregation](../issues/epic_04/issue_04_10_reaction_aggregation.md) - `Done`
-- [ ] [VIG-04-11: Deterministic decision и safe logs](../issues/epic_04/issue_04_11_decision_observability.md) - `Ready for implementation`
+- [x] [VIG-04-11: Deterministic decision и safe logs](../issues/epic_04/issue_04_11_decision_observability.md) - `Done`
 
 ## Принятое решение
 
@@ -498,7 +498,7 @@ ReactionPlan
 
 ### Агрегация нескольких policies
 
-Если хотя бы одна applied policy возвращает `BLOCK`, итоговый disposition равен `BLOCK`. Исполняемые transformations при этом отсутствуют, но исходные policy results сохраняются для объяснения решения.
+Если хотя бы одна applied policy возвращает `BLOCK`, итоговый disposition равен `BLOCK`. Исполняемые transformations при этом отсутствуют. Для completion-order-independent explanation сохраняются policy results, фактически сформировавшие `BLOCK`, и соответствующие detector results. Отменённые policy results и завершённые только с `ALLOW` outcomes не включаются в нормализованный `BLOCK` decision.
 
 Если `BLOCK` отсутствует, итоговый disposition равен `ALLOW`, а transformations всех applied policies объединяются.
 
@@ -539,9 +539,15 @@ Result должен объяснять:
 - какие policies совпали;
 - какие были отменены через overrides;
 - какие реально применились;
-- какие detectors были запущены;
-- какой result вернул каждый detector;
+- какие policy results фактически сформировали итоговый plan;
+- какие detector results входят в эти policy results;
 - какие reactions сформировали итоговый plan.
+
+При итоговом `ALLOW` decision содержит все завершённые policy и detector
+results. При fail-fast `BLOCK` decision содержит только policy results с
+применённой `BLOCK` reaction и соответствующие detector results. Outcomes
+отменённых policies и policies, завершившихся только с `ALLOW`, исключаются,
+чтобы момент конкурентного завершения не менял serialized decision.
 
 Списки в result сортируются по policy ID и detector ID. Порядок конфигурации и параллельного завершения не меняет сериализованное решение.
 
