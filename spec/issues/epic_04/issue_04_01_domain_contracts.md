@@ -1,6 +1,6 @@
 # VIG-04-01: Immutable domain contracts policy engine
 
-**Статус:** Ready for implementation  
+**Статус:** Done  
 **Epic:** [EPIC-04](../../epics/epic_04_policy_engine.md)  
 **Ветка:** Domain contracts  
 **Зависит от:** нет  
@@ -28,13 +28,13 @@ Focused constructor/invariant tests из Kotlin и Java caller perspective.
 
 ## Критерии готовности
 
-- [ ] Все перечисленные domain contracts имеют immutable collections.
-- [ ] Invalid mixed statuses, spans, confidence и reaction combinations
+- [x] Все перечисленные domain contracts имеют immutable collections.
+- [x] Invalid mixed statuses, spans, confidence и reaction combinations
   отклоняются safe exception без payload.
-- [ ] `CLEAN`, `DETECTED`, `ERROR` являются явными mutually exclusive states.
-- [ ] Result models поддерживают deterministic sorting без transport types.
-- [ ] Для добавленных и изменённых Kotlin declarations написан KDoc.
-- [ ] Focused tests и `./gradlew build` проходят.
+- [x] `CLEAN`, `DETECTED`, `ERROR` являются явными mutually exclusive states.
+- [x] Result models поддерживают deterministic sorting без transport types.
+- [x] Для добавленных и изменённых Kotlin declarations написан KDoc.
+- [x] Focused tests и `./gradlew build` проходят.
 
 ## Не входит
 
