@@ -77,14 +77,7 @@ sealed class DetectionResult(
         /** Findings reported by the detector in deterministic byte-span order. */
         val findings: List<Finding> =
             immutableList(
-                findings.sortedWith(
-                    compareBy<Finding>(
-                        { finding -> finding.span.startUtf8 },
-                        { finding -> finding.span.endUtf8 },
-                        { finding -> finding.type.value },
-                        Finding::confidence,
-                    ),
-                ),
+                findings.sortedWith(deterministicFindingOrder),
             )
 
         init {
@@ -100,3 +93,12 @@ sealed class DetectionResult(
         val error: DetectionError,
     ) : DetectionResult(DetectionStatus.ERROR)
 }
+
+/** Canonical ordering for detector findings in normalized results. */
+internal val deterministicFindingOrder: Comparator<Finding> =
+    compareBy(
+        { finding -> finding.span.startUtf8 },
+        { finding -> finding.span.endUtf8 },
+        { finding -> finding.type.value },
+        Finding::confidence,
+    )

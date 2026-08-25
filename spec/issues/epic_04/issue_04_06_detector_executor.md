@@ -1,6 +1,6 @@
 # VIG-04-06: Detector executor и result validation
 
-**Статус:** Ready for implementation  
+**Статус:** Done  
 **Epic:** [EPIC-04](../../epics/epic_04_policy_engine.md)  
 **Ветка:** Detector execution > result validation  
 **Зависит от:** [VIG-04-01](issue_04_01_domain_contracts.md)  
@@ -23,12 +23,12 @@ stable safe `ERROR` для invalid result или unexpected exception.
 
 ## Критерии готовности
 
-- [ ] Detector получает только payload, без `PolicyContext`.
-- [ ] Все `DetectionResult` invariants проверены через fake detectors.
-- [ ] UTF-8 span boundaries валидируются относительно исходного payload.
-- [ ] Один фактический invocation возвращает один normalized result.
-- [ ] Для добавленных и изменённых Kotlin declarations написан KDoc.
-- [ ] Focused tests и `./gradlew build` проходят.
+- [x] Detector получает только payload, без `PolicyContext`.
+- [x] Все `DetectionResult` invariants проверены через fake detectors.
+- [x] UTF-8 span boundaries валидируются относительно исходного payload.
+- [x] Один фактический invocation возвращает один normalized result.
+- [x] Для добавленных и изменённых Kotlin declarations написан KDoc.
+- [x] Focused tests и `./gradlew build` проходят.
 
 ## Не входит
 
