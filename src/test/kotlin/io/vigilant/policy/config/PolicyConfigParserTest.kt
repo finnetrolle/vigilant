@@ -132,6 +132,27 @@ class PolicyConfigParserTest {
                 COMPLETE_CONFIG.replaceFirst("id = \"*\"", "") to
                     "policies[0].match.subject.id",
                 COMPLETE_CONFIG.replaceFirst("detectors = [\"fast-pii\"]", "") to "policies[0].detectors",
+                COMPLETE_CONFIG.replaceFirst(
+                    "      detected {\n" +
+                        "        disposition = \"ALLOW\"\n" +
+                        "        transformations = [\"MASK\"]\n" +
+                        "      }",
+                    "",
+                ) to "policies[0].reactions.detected",
+                COMPLETE_CONFIG.replaceFirst(
+                    "      clean {\n" +
+                        "        disposition = \"ALLOW\"\n" +
+                        "        transformations = []\n" +
+                        "      }",
+                    "",
+                ) to "policies[0].reactions.clean",
+                COMPLETE_CONFIG.replaceFirst(
+                    "      error {\n" +
+                        "        disposition = \"BLOCK\"\n" +
+                        "        transformations = []\n" +
+                        "      }",
+                    "",
+                ) to "policies[0].reactions.error",
                 COMPLETE_CONFIG.replaceFirst("disposition = \"ALLOW\"", "") to
                     "policies[0].reactions.detected.disposition",
                 COMPLETE_CONFIG.replaceFirst("transformations = [\"MASK\"]", "") to
