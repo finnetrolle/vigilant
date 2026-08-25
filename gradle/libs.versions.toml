@@ -4,6 +4,7 @@ hoplite = "2.9.0"
 opentelemetry = "1.64.0"
 slf4j = "2.0.18"
 logback = "1.6.3"
+typesafe-config = "1.4.3"
 
 [libraries]
 armeria = { module = "com.linecorp.armeria:armeria", version.ref = "armeria" }
@@ -14,3 +15,4 @@ opentelemetry-sdk = { module = "io.opentelemetry:opentelemetry-sdk" }
 opentelemetry-exporter-otlp = { module = "io.opentelemetry:opentelemetry-exporter-otlp" }
 slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
 logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
+typesafe-config = { module = "com.typesafe:config", version.ref = "typesafe-config" }

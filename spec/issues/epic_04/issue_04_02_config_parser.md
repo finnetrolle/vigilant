@@ -1,6 +1,7 @@
 # VIG-04-02: Strict HOCON parser для `politics.conf`
 
-**Статус:** Ready for implementation  
+**Статус:** Done
+
 **Epic:** [EPIC-04](../../epics/epic_04_policy_engine.md)  
 **Ветка:** Policy source > strict parser  
 **Зависит от:** [VIG-04-01](issue_04_01_domain_contracts.md)  
@@ -22,12 +23,12 @@
 
 ## Критерии готовности
 
-- [ ] Parser имеет одну ответственность и не читает environment variables.
-- [ ] Все nested unknown fields отклоняются.
-- [ ] Parsed result не зависит от порядка HOCON fields.
-- [ ] Errors не содержат config body или потенциальные secret values.
-- [ ] Для добавленных и изменённых Kotlin declarations написан KDoc.
-- [ ] Focused parser tests и `./gradlew build` проходят.
+- [x] Parser имеет одну ответственность и не читает environment variables.
+- [x] Все nested unknown fields отклоняются.
+- [x] Parsed result не зависит от порядка HOCON fields.
+- [x] Errors не содержат config body или потенциальные secret values.
+- [x] Для добавленных и изменённых Kotlin declarations написан KDoc.
+- [x] Focused parser tests и `./gradlew build` проходят.
 
 ## Не входит
 

@@ -49,6 +49,7 @@ dependencies {
     implementation(libs.opentelemetry.exporter.otlp)
     implementation(libs.slf4j.api)
     implementation(libs.logback.classic)
+    implementation(libs.typesafe.config)
 
     testImplementation(kotlin("test"))
     add("gatlingImplementation", libs.armeria)
