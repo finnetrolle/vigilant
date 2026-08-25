@@ -39,7 +39,7 @@ EPIC-04 Policy engine
 - [x] [VIG-04-07: Deduplicated parallel execution](../issues/epic_04/issue_04_07_parallel_execution.md) - `Done`
 - [x] [VIG-04-08: Policy deadlines и shared cancellation](../issues/epic_04/issue_04_08_deadlines_cancellation.md) - `Done`
 - [x] [VIG-04-09: Fail-fast BLOCK](../issues/epic_04/issue_04_09_fail_fast.md) - `Done`
-- [ ] [VIG-04-10: Reaction и span aggregation](../issues/epic_04/issue_04_10_reaction_aggregation.md) - `Ready for implementation`
+- [x] [VIG-04-10: Reaction и span aggregation](../issues/epic_04/issue_04_10_reaction_aggregation.md) - `Done`
 - [ ] [VIG-04-11: Deterministic decision и safe logs](../issues/epic_04/issue_04_11_decision_observability.md) - `Ready for implementation`
 
 ## Принятое решение

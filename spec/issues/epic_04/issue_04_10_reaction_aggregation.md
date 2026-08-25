@@ -1,6 +1,6 @@
 # VIG-04-10: Reaction и transformation span aggregation
 
-**Статус:** Ready for implementation  
+**Статус:** Done
 **Epic:** [EPIC-04](../../epics/epic_04_policy_engine.md)  
 **Ветка:** Decision > reaction aggregation  
 **Зависит от:** [VIG-04-01](issue_04_01_domain_contracts.md), [VIG-04-05](issue_04_05_matching_overrides.md), [VIG-04-06](issue_04_06_detector_executor.md)  
@@ -28,13 +28,13 @@ Table-driven pure tests на ASCII и mixed-Unicode byte spans.
 
 ## Критерии готовности
 
-- [ ] Все reaction aggregation cases EPIC-04 покрыты.
-- [ ] Merge не создаёт boundaries внутри UTF-8 code point.
-- [ ] Input order не влияет на plan.
-- [ ] Empty findings/transformations обрабатываются явно.
-- [ ] Output collections immutable и стабильно отсортированы.
-- [ ] Для добавленных и изменённых Kotlin declarations написан KDoc.
-- [ ] Focused tests и `./gradlew build` проходят.
+- [x] Все reaction aggregation cases EPIC-04 покрыты.
+- [x] Merge не создаёт boundaries внутри UTF-8 code point.
+- [x] Input order не влияет на plan.
+- [x] Empty findings/transformations обрабатываются явно.
+- [x] Output collections immutable и стабильно отсортированы.
+- [x] Для добавленных и изменённых Kotlin declarations написан KDoc.
+- [x] Focused tests и `./gradlew build` проходят.
 
 ## Не входит
 
