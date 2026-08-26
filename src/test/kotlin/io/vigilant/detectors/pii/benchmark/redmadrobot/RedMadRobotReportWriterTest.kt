@@ -12,6 +12,130 @@ import kotlin.test.assertTrue
 
 /** Artifact contract tests for the external benchmark report writer. */
 class RedMadRobotReportWriterTest {
+    /** Verifies safe aggregate mismatch reports and privacy-filtered type details. */
+    @Test
+    fun `writer publishes reason coded diagnostics without scored case data`(@TempDir output: Path) {
+        val commonCases =
+            (1..5).map { index ->
+                RedMadRobotCase(
+                    caseId = "privacy-common-$index",
+                    text = "PRIVATE-COMMON-$index",
+                    goldSpans = listOf(RedMadRobotGoldSpan(PiiType.EMAIL_ADDRESS, 0, 7)),
+                )
+            }
+        val rareCase =
+            RedMadRobotCase(
+                caseId = "privacy-rare",
+                text = "PRIVATE-RARE",
+                goldSpans = listOf(RedMadRobotGoldSpan(PiiType.PHONE_NUMBER, 0, 7)),
+            )
+        val processedCases = commonCases + rareCase
+        val corpus =
+            RedMadRobotCorpus(
+                processedCases = processedCases,
+                totalCases = processedCases.size,
+                totalEntitySpans = processedCases.size,
+                mappedEntitySpans = processedCases.size,
+                scoredMappedEntitySpans = processedCases.size,
+            )
+        val scores =
+            RedMadRobotScorer().score(
+                processedCases.map { benchmarkCase ->
+                    RedMadRobotScoringCase(
+                        expected = benchmarkCase.goldSpans,
+                        predicted = emptyList(),
+                        caseId = benchmarkCase.caseId,
+                    )
+                },
+            )
+
+        val reports = RedMadRobotReportWriter().write(output, corpus, scores)
+
+        val jsonText = Files.readString(reports.json)
+        val markdown = Files.readString(reports.markdown)
+        val json = ObjectMapper().readTree(jsonText)
+        assertEquals(5, json.at("/diagnostics/privacyFloor").intValue())
+        assertEquals(
+            6,
+            json
+                .at("/partitions/full/diagnostics/exact/totals/NO_OVERLAPPING_FINDING")
+                .intValue(),
+        )
+        assertEquals(1, json.at("/partitions/full/diagnostics/exact/byType").size())
+        assertEquals(
+            "EMAIL_ADDRESS",
+            json.at("/partitions/full/diagnostics/exact/byType/0/type").textValue(),
+        )
+        assertEquals(5, json.at("/partitions/full/diagnostics/exact/byType/0/count").intValue())
+        assertTrue(markdown.contains("NO_OVERLAPPING_FINDING"))
+        assertTrue(markdown.contains("Privacy floor: `5`"))
+        processedCases.forEach { benchmarkCase ->
+            assertFalse((jsonText + markdown).contains(benchmarkCase.caseId))
+            assertFalse((jsonText + markdown).contains(benchmarkCase.text))
+        }
+    }
+
+    /** Verifies reproducible split metadata and complete metrics for all scored partitions. */
+    @Test
+    fun `writer publishes full tuning and evaluation coverage and metrics`(@TempDir output: Path) {
+        val tuningCase =
+            RedMadRobotCase(
+                caseId = "rmm-test-000002",
+                text = "tuning-private",
+                goldSpans = listOf(RedMadRobotGoldSpan(PiiType.EMAIL_ADDRESS, 0, 7)),
+            )
+        val evaluationCase =
+            RedMadRobotCase(
+                caseId = "rmm-test-000003",
+                text = "evaluation-private",
+                goldSpans = listOf(RedMadRobotGoldSpan(PiiType.PHONE_NUMBER, 0, 7)),
+            )
+        val corpus =
+            RedMadRobotCorpus(
+                processedCases = listOf(tuningCase, evaluationCase),
+                totalCases = 2,
+                totalEntitySpans = 2,
+                mappedEntitySpans = 2,
+                scoredMappedEntitySpans = 2,
+            )
+        val scores =
+            RedMadRobotScorer().score(
+                listOf(
+                    RedMadRobotScoringCase(
+                        expected = tuningCase.goldSpans,
+                        predicted = listOf(RedMadRobotPredictedSpan(PiiType.EMAIL_ADDRESS, 0, 7)),
+                        caseId = tuningCase.caseId,
+                    ),
+                    RedMadRobotScoringCase(
+                        expected = evaluationCase.goldSpans,
+                        predicted = emptyList(),
+                        caseId = evaluationCase.caseId,
+                    ),
+                ),
+            )
+
+        val reports = RedMadRobotReportWriter().write(output, corpus, scores)
+
+        val json = ObjectMapper().readTree(Files.readString(reports.json))
+        val markdown = Files.readString(reports.markdown)
+        assertEquals("SHA-256", json.at("/split/algorithm").textValue())
+        assertEquals(1, json.at("/split/version").intValue())
+        assertEquals(64, json.at("/split/evaluationBoundary").intValue())
+        assertEquals(2, json.at("/partitions/full/coverage/processedCases").intValue())
+        assertEquals(2, json.at("/partitions/full/coverage/scoredMappedEntitySpans").intValue())
+        assertEquals(1, json.at("/partitions/tuning/coverage/processedCases").intValue())
+        assertEquals(1, json.at("/partitions/evaluation/coverage/processedCases").intValue())
+        assertEquals(
+            1,
+            json.at("/partitions/tuning/metrics/aggregate/exact/truePositives").intValue(),
+        )
+        assertEquals(
+            1,
+            json.at("/partitions/evaluation/metrics/aggregate/exact/falseNegatives").intValue(),
+        )
+        assertTrue(markdown.contains("Frozen tuning/evaluation split"))
+    }
+
     /** Verifies complete provenance and metrics without any source or matched values. */
     @Test
     fun `writer creates isolated payload-free JSON and Markdown reports`(@TempDir output: Path) {
@@ -44,6 +168,7 @@ class RedMadRobotReportWriterTest {
                     RedMadRobotScoringCase(
                         expected = corpus.processedCases.single().goldSpans,
                         predicted = listOf(RedMadRobotPredictedSpan(PiiType.EMAIL_ADDRESS, 0, 7)),
+                        caseId = corpus.processedCases.single().caseId,
                     ),
                 ),
             )

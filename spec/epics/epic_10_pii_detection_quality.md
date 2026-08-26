@@ -2,7 +2,7 @@
 
 **ID:** `EPIC-10`
 **Тип:** Epic
-**Статус:** Ready for implementation
+**Статус:** In progress
 **Приоритет:** High
 **Суммарная оценка:** 21-29 инженерных дней
 **Связанные требования:** `MVP-15`, `MVP-19`
@@ -52,7 +52,7 @@ EPIC-10 PII detection quality
 
 ## Дочерние issues
 
-- [ ] [VIG-10-01: Safe quality diagnostics и frozen evaluation split](../issues/epic_10/issue_10_01_quality_diagnostics.md) - `Ready for implementation`
+- [x] [VIG-10-01: Safe quality diagnostics и frozen evaluation split](../issues/epic_10/issue_10_01_quality_diagnostics.md) - `Done`
 - [ ] [VIG-10-02: IP перед завершающей пунктуацией](../issues/epic_10/issue_10_02_ip_candidate_boundaries.md) - `Ready for implementation`
 - [ ] [VIG-10-03: Product-aligned external quality report](../issues/epic_10/issue_10_03_product_aligned_report.md) - `Ready for implementation`
 - [ ] [VIG-10-04: Whitespace-обфускация email](../issues/epic_10/issue_10_04_email_obfuscation.md) - `Ready for implementation`
@@ -61,9 +61,8 @@ EPIC-10 PII detection quality
 - [ ] [VIG-10-07: Contextual fallback для ОМС](../issues/epic_10/issue_10_07_oms_contextual.md) - `Ready for implementation`
 - [ ] [VIG-10-08: Итоговая quality и performance qualification](../issues/epic_10/issue_10_08_quality_qualification.md) - `Ready for implementation`
 
-VIG-10-01 и VIG-10-02 образуют начальный frontier. VIG-10-03..07 зависят от
-VIG-10-01, потому что их realistic-corpus acceptance требует frozen split и
-safe diagnostics до настройки production behavior. VIG-10-08 зависит от всех
+VIG-10-01 завершена; VIG-10-02 остаётся в начальном frontier, а VIG-10-03..07
+разблокированы её frozen split и safe diagnostics. VIG-10-08 зависит от всех
 предыдущих issues и от JMH baseline VIG-02-15.
 
 Предпочтительный порядок после VIG-10-01, не являющийся блокировкой:

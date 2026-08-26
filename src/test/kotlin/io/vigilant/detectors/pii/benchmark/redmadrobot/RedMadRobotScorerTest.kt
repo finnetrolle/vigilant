@@ -6,6 +6,152 @@ import kotlin.test.assertEquals
 
 /** Focused behavior tests for source-span benchmark scoring. */
 class RedMadRobotScorerTest {
+    /** Verifies exact pinned case counts independently of iteration order. */
+    @Test
+    fun `frozen split has pinned full tuning and evaluation case counts`() {
+        val rejected = setOf("rmm-test-000001", "rmm-test-001629")
+        val processedCaseIds =
+            (1..2_841)
+                .map { index -> "rmm-test-${index.toString().padStart(6, '0')}" }
+                .filterNot(rejected::contains)
+                .reversed()
+
+        val partitionCounts = processedCaseIds.groupingBy(RedMadRobotFrozenSplit::partition).eachCount()
+
+        assertEquals(RedMadRobotBenchmarkMetadata.EXPECTED_FULL_PROCESSED_CASES, processedCaseIds.size)
+        assertEquals(
+            RedMadRobotBenchmarkMetadata.EXPECTED_TUNING_PROCESSED_CASES,
+            partitionCounts.getValue(RedMadRobotPartition.TUNING),
+        )
+        assertEquals(
+            RedMadRobotBenchmarkMetadata.EXPECTED_EVALUATION_PROCESSED_CASES,
+            partitionCounts.getValue(RedMadRobotPartition.EVALUATION),
+        )
+    }
+
+    /** Verifies that fine-grained aggregate categories below the pinned floor stay private. */
+    @Test
+    fun `diagnostic type breakdown suppresses rare aggregate categories`() {
+        val common =
+            (1..5).map { index ->
+                scoringCase(
+                    caseId = "privacy-common-$index",
+                    expected = listOf(gold(PiiType.EMAIL_ADDRESS, 0, 10)),
+                    predicted = emptyList(),
+                )
+            }
+        val rare =
+            scoringCase(
+                caseId = "privacy-rare",
+                expected = listOf(gold(PiiType.PHONE_NUMBER, 0, 10)),
+                predicted = emptyList(),
+            )
+
+        val exact = RedMadRobotScorer().score(common + rare).fullDiagnostics.exact
+
+        assertEquals(6, exact.totals.getValue(RedMadRobotMismatchBucket.NO_OVERLAPPING_FINDING))
+        assertEquals(
+            listOf(
+                RedMadRobotMismatchTypeCount(
+                    bucket = RedMadRobotMismatchBucket.NO_OVERLAPPING_FINDING,
+                    type = PiiType.EMAIL_ADDRESS,
+                    count = 5,
+                ),
+            ),
+            exact.byType,
+        )
+    }
+
+    /** Verifies safe reason codes against exact and relaxed one-to-one matching. */
+    @Test
+    fun `scoring classifies unmatched gold and predicted spans without values`() {
+        val cases =
+            listOf(
+                scoringCase(
+                    "rmm-test-000002",
+                    expected = listOf(gold(PiiType.EMAIL_ADDRESS, 0, 10)),
+                    predicted = emptyList(),
+                ),
+                scoringCase(
+                    "rmm-test-000003",
+                    expected = listOf(gold(PiiType.PHONE_NUMBER, 20, 30)),
+                    predicted = listOf(predicted(PiiType.EMAIL_ADDRESS, 20, 30)),
+                ),
+                scoringCase(
+                    "rmm-test-000004",
+                    expected = listOf(gold(PiiType.IP_ADDRESS, 40, 50)),
+                    predicted = listOf(predicted(PiiType.IP_ADDRESS, 40, 49)),
+                ),
+                scoringCase(
+                    "rmm-test-000005",
+                    expected = emptyList(),
+                    predicted = listOf(predicted(PiiType.PAYMENT_CARD, 60, 70)),
+                ),
+                scoringCase(
+                    "rmm-test-000006",
+                    expected =
+                        listOf(
+                            gold(PiiType.RU_PASSPORT, 80, 90),
+                            gold(PiiType.RU_PASSPORT, 85, 95),
+                        ),
+                    predicted = listOf(predicted(PiiType.RU_PASSPORT, 85, 90)),
+                ),
+            )
+
+        val diagnostics = RedMadRobotScorer().score(cases).fullDiagnostics
+
+        assertEquals(
+            mapOf(
+                RedMadRobotMismatchBucket.NO_OVERLAPPING_FINDING to 1,
+                RedMadRobotMismatchBucket.SPAN_MISMATCH to 3,
+                RedMadRobotMismatchBucket.TYPE_MISMATCH to 1,
+                RedMadRobotMismatchBucket.EXTRA_PREDICTION to 4,
+            ),
+            diagnostics.exact.totals,
+        )
+        assertEquals(
+            mapOf(
+                RedMadRobotMismatchBucket.NO_OVERLAPPING_FINDING to 1,
+                RedMadRobotMismatchBucket.SPAN_MISMATCH to 1,
+                RedMadRobotMismatchBucket.TYPE_MISMATCH to 1,
+                RedMadRobotMismatchBucket.EXTRA_PREDICTION to 2,
+            ),
+            diagnostics.relaxed.totals,
+        )
+    }
+
+    /** Verifies the pinned split while preserving the complete source-aligned score. */
+    @Test
+    fun `scoring publishes disjoint frozen tuning and evaluation partitions`() {
+        val tuningCase =
+            RedMadRobotScoringCase(
+                expected = listOf(gold(PiiType.EMAIL_ADDRESS, 0, 10)),
+                predicted = listOf(predicted(PiiType.EMAIL_ADDRESS, 0, 10)),
+                caseId = "rmm-test-000002",
+            )
+        val evaluationCase =
+            RedMadRobotScoringCase(
+                expected = listOf(gold(PiiType.PHONE_NUMBER, 20, 30)),
+                predicted = emptyList(),
+                caseId = "rmm-test-000003",
+            )
+
+        val report = RedMadRobotScorer().score(listOf(tuningCase, evaluationCase))
+
+        assertEquals(
+            ScoreCounts(truePositives = 1, falsePositives = 0, falseNegatives = 1),
+            report.full.aggregate.exact.counts,
+        )
+        assertEquals(
+            ScoreCounts(truePositives = 1, falsePositives = 0, falseNegatives = 0),
+            report.tuning.aggregate.exact.counts,
+        )
+        assertEquals(
+            ScoreCounts(truePositives = 0, falsePositives = 0, falseNegatives = 1),
+            report.evaluation.aggregate.exact.counts,
+        )
+    }
+
     /** Verifies maximum-cardinality relaxed matching and independent exact aggregation. */
     @Test
     fun `scoring uses one-to-one maximum matches per type and case`() {
@@ -23,6 +169,7 @@ class RedMadRobotScorerTest {
                         predicted(PiiType.EMAIL_ADDRESS, 0, 5),
                         predicted(PiiType.PHONE_NUMBER, 30, 40),
                     ),
+                caseId = "one-to-one-synthetic",
             )
 
         val report = RedMadRobotScorer().score(listOf(benchmarkCase))
@@ -66,4 +213,11 @@ class RedMadRobotScorerTest {
         start: Long,
         end: Long,
     ): RedMadRobotPredictedSpan = RedMadRobotPredictedSpan(type, start, end)
+
+    /** Creates one identified case so diagnostics never cross payload boundaries. */
+    private fun scoringCase(
+        caseId: String,
+        expected: List<RedMadRobotGoldSpan>,
+        predicted: List<RedMadRobotPredictedSpan>,
+    ): RedMadRobotScoringCase = RedMadRobotScoringCase(expected, predicted, caseId)
 }

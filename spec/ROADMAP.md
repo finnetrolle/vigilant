@@ -249,11 +249,12 @@ request.
 
 ### Stage 5: улучшать quality после первого deploy
 
-После production milestone приоритет переходит к
-[VIG-10-01](issues/epic_10/issue_10_01_quality_diagnostics.md), затем к
-quality leaves EPIC-10. Текущий RedMadRobot exact recall `0.225263` делает
-shadow deployment полезным для наблюдения, но недостаточным основанием для
-PII enforcement.
+После production milestone приоритет переходит к quality leaves EPIC-10.
+[VIG-10-01](issues/epic_10/issue_10_01_quality_diagnostics.md) уже зафиксировала
+frozen evaluation split и safe diagnostics; следующий boundary leaf -
+[VIG-10-02](issues/epic_10/issue_10_02_ip_candidate_boundaries.md). Текущий
+RedMadRobot exact recall `0.225263` делает shadow deployment полезным для
+наблюдения, но недостаточным основанием для PII enforcement.
 
 ## Delivery graph
 
@@ -309,10 +310,10 @@ horizontal logging subsystem.
 
 Все implementation issues Stage 0 завершены: VIG-09-01..08 имеют status
 `Done`. EPIC-09 сохраняет status `In progress` только из-за отсутствующего
-project work-item validator, обязательного его критериями готовности. Полный
-repository frontier содержит VIG-01A, VIG-10-01 и VIG-10-02. VIG-01A
-проверяет logging-specific PERF-01, а VIG-10-01 и VIG-10-02 roadmap относит к
-Stage 5: они не создают отсутствующий HTTP integration path.
+project work-item validator, обязательного его критериями готовности. VIG-10-01
+имеет status `Done`; полный repository frontier содержит VIG-01A и
+VIG-10-02..07. VIG-01A проверяет logging-specific PERF-01, а VIG-10-02..07
+roadmap относит к Stage 5: они не создают отсутствующий HTTP integration path.
 
 Roadmap recommendation: опубликовать work item для project work-item validator,
 закрыть completion gate EPIC-09 и затем перейти к contract decisions Stage 1.

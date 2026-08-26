@@ -1,6 +1,6 @@
 # VIG-10-01: Safe quality diagnostics и frozen evaluation split
 
-**Статус:** Ready for implementation
+**Статус:** Done
 **Epic:** [EPIC-10](../../epics/epic_10_pii_detection_quality.md)
 **Ветка:** Evidence > safe diagnostics and frozen split
 **Зависит от:** нет
@@ -37,18 +37,18 @@ partitions. Команда показывает, какой класс несо�
 
 ## Критерии готовности
 
-- [ ] Existing baseline full metrics и coverage counts остаются byte-for-byte
+- [x] Existing baseline full metrics и coverage counts остаются byte-for-byte
       эквивалентны прежнему source-aligned report по числовым значениям.
-- [ ] Frozen split воспроизводим на pinned dataset, не зависит от порядка
+- [x] Frozen split воспроизводим на pinned dataset, не зависит от порядка
       filesystem, locale, timezone или JVM random seed.
-- [ ] Tuning и evaluation coverage в сумме точно равны full processed/scored
+- [x] Tuning и evaluation coverage в сумме точно равны full processed/scored
       coverage без пересечения case IDs.
-- [ ] Exact/relaxed one-to-one matching независимо проверен synthetic examples
+- [x] Exact/relaxed one-to-one matching независимо проверен synthetic examples
       для каждого safe mismatch bucket.
-- [ ] Privacy floor агрегатов проверяется тестами на редких категориях.
-- [ ] JSON и Markdown reports не содержат raw payload, tokens, candidates,
+- [x] Privacy floor агрегатов проверяется тестами на редких категориях.
+- [x] JSON и Markdown reports не содержат raw payload, tokens, candidates,
       matched values, reversible previews или value hashes.
-- [ ] `./gradlew redMadRobotPiiBenchmark`, focused tests и `./gradlew build`
+- [x] `./gradlew redMadRobotPiiBenchmark`, focused tests и `./gradlew build`
       проходят.
 
 ## Test/demo seam

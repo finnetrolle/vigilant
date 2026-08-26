@@ -3,6 +3,7 @@ package io.vigilant.detectors.pii.benchmark.redmadrobot
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.node.ArrayNode
 import com.fasterxml.jackson.databind.node.ObjectNode
+import io.vigilant.detectors.pii.quality.PiiQualityScoreReport
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.Locale
@@ -38,6 +39,16 @@ private data class ReportMatching(
     val tieBreak: String,
 )
 
+/** Reproducible frozen-split metadata shared by every report renderer. */
+private data class ReportSplit(
+    val algorithm: String,
+    val version: Int,
+    val salt: String,
+    val inputFormat: String,
+    val evaluationBoundary: Int,
+    val bucketCount: Int,
+)
+
 /** One payload-free rejected-case diagnostic. */
 private data class ReportRejection(
     val caseId: String,
@@ -68,13 +79,36 @@ private data class ReportMetrics(
     val perType: List<ReportTypeMetrics>,
 )
 
+/** Scored coverage counters for one full or frozen benchmark partition. */
+private data class ReportPartitionCoverage(
+    val processedCases: Int,
+    val scoredMappedEntitySpans: Int,
+)
+
+/** Coverage and metrics rendered with the same schema for every partition. */
+private data class ReportPartition(
+    val coverage: ReportPartitionCoverage,
+    val metrics: ReportMetrics,
+    val diagnostics: RedMadRobotMismatchDiagnostics,
+)
+
+/** Complete source-aligned views for the full, tuning, and evaluation subsets. */
+private data class ReportPartitions(
+    val full: ReportPartition,
+    val tuning: ReportPartition,
+    val evaluation: ReportPartition,
+)
+
 /** Complete payload-free content consumed by both report renderers. */
 private data class ReportContent(
     val dataset: ReportDataset,
     val mapping: List<ReportMapping>,
     val matching: ReportMatching,
+    val split: ReportSplit,
     val coverage: ReportCoverage,
     val metrics: ReportMetrics,
+    val partitions: ReportPartitions,
+    val diagnosticPrivacyFloor: Int,
     val notes: List<String>,
 )
 
@@ -129,6 +163,15 @@ class RedMadRobotReportWriter {
                     cardinality = "one-to-one maximum-cardinality",
                     tieBreak = "expected offsets, predicted offsets, then stable source indices",
                 ),
+            split =
+                ReportSplit(
+                    algorithm = RedMadRobotBenchmarkMetadata.SPLIT_ALGORITHM,
+                    version = RedMadRobotBenchmarkMetadata.SPLIT_VERSION,
+                    salt = RedMadRobotBenchmarkMetadata.SPLIT_SALT,
+                    inputFormat = "UTF-8(salt + NUL + datasetRevision + NUL + caseId)",
+                    evaluationBoundary = RedMadRobotBenchmarkMetadata.SPLIT_EVALUATION_BOUNDARY,
+                    bucketCount = RedMadRobotBenchmarkMetadata.SPLIT_BUCKET_COUNT,
+                ),
             coverage =
                 ReportCoverage(
                     totalCases = corpus.totalCases,
@@ -142,14 +185,9 @@ class RedMadRobotReportWriter {
                             ReportRejection(rejected.caseId, rejected.reason.name)
                         },
                 ),
-            metrics =
-                ReportMetrics(
-                    aggregate = scores.aggregate,
-                    perType =
-                        scores.perType.map { score ->
-                            ReportTypeMetrics(score.type.name, score.exact, score.relaxed)
-                        },
-                ),
+            metrics = reportMetrics(scores.full),
+            partitions = reportPartitions(corpus, scores),
+            diagnosticPrivacyFloor = RedMadRobotBenchmarkMetadata.DIAGNOSTIC_PRIVACY_FLOOR,
             notes =
                 listOf(
                     "External metrics are evidence only and are not a release gate.",
@@ -168,8 +206,17 @@ class RedMadRobotReportWriter {
         root.set<ObjectNode>("dataset", datasetJson(content.dataset))
         root.set<ObjectNode>("mapping", mappingJson(content.mapping))
         root.set<ObjectNode>("matching", matchingJson(content.matching))
+        root.set<ObjectNode>("split", splitJson(content.split))
         root.set<ObjectNode>("coverage", coverageJson(content.coverage))
         root.set<ObjectNode>("metrics", metricsJson(content.metrics))
+        root.set<ObjectNode>(
+            "diagnostics",
+            OBJECT_MAPPER.createObjectNode().apply {
+                put("privacyFloor", content.diagnosticPrivacyFloor)
+                put("granularity", "aggregate_only")
+            },
+        )
+        root.set<ObjectNode>("partitions", partitionsJson(content.partitions))
         root.putArray("notes").apply {
             content.notes.forEach(::add)
         }
@@ -203,6 +250,17 @@ class RedMadRobotReportWriter {
             put("relaxed", matching.relaxed)
             put("cardinality", matching.cardinality)
             put("tieBreak", matching.tieBreak)
+        }
+
+    /** Builds the pinned split function, input encoding, and evaluation boundary. */
+    private fun splitJson(split: ReportSplit): ObjectNode =
+        OBJECT_MAPPER.createObjectNode().apply {
+            put("algorithm", split.algorithm)
+            put("version", split.version)
+            put("salt", split.salt)
+            put("inputFormat", split.inputFormat)
+            put("evaluationBoundary", split.evaluationBoundary)
+            put("bucketCount", split.bucketCount)
         }
 
     /** Builds coverage counters and payload-free rejected case diagnostics. */
@@ -241,6 +299,60 @@ class RedMadRobotReportWriter {
         return node
     }
 
+    /** Builds identical coverage and metrics shapes for all scored partitions. */
+    private fun partitionsJson(partitions: ReportPartitions): ObjectNode =
+        OBJECT_MAPPER.createObjectNode().apply {
+            set<ObjectNode>("full", partitionJson(partitions.full))
+            set<ObjectNode>("tuning", partitionJson(partitions.tuning))
+            set<ObjectNode>("evaluation", partitionJson(partitions.evaluation))
+        }
+
+    /** Builds one scored partition without exposing its case IDs. */
+    private fun partitionJson(partition: ReportPartition): ObjectNode =
+        OBJECT_MAPPER.createObjectNode().apply {
+            set<ObjectNode>(
+                "coverage",
+                OBJECT_MAPPER.createObjectNode().apply {
+                    put("processedCases", partition.coverage.processedCases)
+                    put("scoredMappedEntitySpans", partition.coverage.scoredMappedEntitySpans)
+                },
+            )
+            set<ObjectNode>("metrics", metricsJson(partition.metrics))
+            set<ObjectNode>("diagnostics", diagnosticsJson(partition.diagnostics))
+        }
+
+    /** Builds exact and relaxed safe mismatch aggregates without case-level data. */
+    private fun diagnosticsJson(diagnostics: RedMadRobotMismatchDiagnostics): ObjectNode =
+        OBJECT_MAPPER.createObjectNode().apply {
+            set<ObjectNode>("exact", diagnosticModeJson(diagnostics.exact))
+            set<ObjectNode>("relaxed", diagnosticModeJson(diagnostics.relaxed))
+        }
+
+    /** Builds complete bucket totals and privacy-filtered per-type details for one mode. */
+    private fun diagnosticModeJson(diagnostics: RedMadRobotMismatchModeDiagnostics): ObjectNode =
+        OBJECT_MAPPER.createObjectNode().apply {
+            set<ObjectNode>(
+                "totals",
+                OBJECT_MAPPER.createObjectNode().apply {
+                    diagnostics.totals.forEach { (bucket, count) -> put(bucket.name, count) }
+                },
+            )
+            set<ArrayNode>(
+                "byType",
+                OBJECT_MAPPER.createArrayNode().apply {
+                    diagnostics.byType.forEach { count ->
+                        add(
+                            OBJECT_MAPPER.createObjectNode().apply {
+                                put("bucket", count.bucket.name)
+                                put("type", count.type.name)
+                                put("count", count.count)
+                            },
+                        )
+                    }
+                },
+            )
+        }
+
     /** Builds one exact/relaxed metric object per mapped detector type. */
     private fun perTypeJson(metrics: List<ReportTypeMetrics>): ArrayNode {
         val perType = OBJECT_MAPPER.createArrayNode()
@@ -278,48 +390,140 @@ class RedMadRobotReportWriter {
     /** Builds the human-readable external evidence report from aggregate-only data. */
     private fun markdown(content: ReportContent): String =
         buildString {
-            appendLine("# RedMadRobot PII benchmark")
-            appendLine()
-            appendLine("> External, non-gating evidence. Not comparable with the dataset headline leaderboard.")
-            appendLine()
-            appendLine("## Provenance")
-            appendLine()
-            appendLine("- Dataset URL: `${content.dataset.url}`")
-            appendLine("- Immutable revision: `${content.dataset.revision}`")
-            appendLine("- Size: `${content.dataset.sizeBytes}` bytes")
-            appendLine("- SHA-256: `${content.dataset.sha256}`")
-            appendLine(
-                "- License declaration: `${content.dataset.licenseDeclaration}` " +
-                    "(upstream metadata, not legal advice)",
-            )
-            appendLine("- Attribution: ${content.dataset.attribution}")
-            appendLine()
-            appendLine("## Scope and matching")
-            appendLine()
-            appendLine("Mapping: ${mappingDescription(content.mapping)}.")
-            appendLine("IBAN is not covered by this dataset revision.")
-            appendLine("Exact: ${content.matching.exact}. Relaxed: ${content.matching.relaxed}.")
-            appendLine("Both modes use ${content.matching.cardinality} matching with ${content.matching.tieBreak}.")
-            appendLine()
-            appendLine("## Coverage")
-            appendLine()
-            appendLine("| Total cases | Processed | Rejected | Total spans | Mapped spans | Scored mapped spans |")
-            appendLine("|---:|---:|---:|---:|---:|---:|")
-            appendLine(coverageRow(content.coverage))
-            appendLine()
-            appendLine("Rejected case IDs: ${rejectionSummary(content.coverage.rejections)}.")
-            appendLine()
-            appendLine("## Metrics")
-            appendLine()
-            appendLine("| Type | Mode | TP | FP | FN | Precision | Recall | F1 |")
-            appendLine("|---|---|---:|---:|---:|---:|---:|---:|")
-            appendMetricRows("ALL", content.metrics.aggregate.exact, content.metrics.aggregate.relaxed)
-            content.metrics.perType.forEach { score ->
-                appendMetricRows(score.type, score.exact, score.relaxed)
-            }
-            appendLine()
+            appendIntroduction(content)
+            appendFrozenSplit(content)
+            appendCoverageAndMetrics(content)
+            appendSafeDiagnostics(content)
             content.notes.forEach(::appendLine)
         }
+
+    /** Appends report identity, provenance, and matching semantics. */
+    private fun StringBuilder.appendIntroduction(content: ReportContent) {
+        appendLine("# RedMadRobot PII benchmark")
+        appendLine()
+        appendLine("> External, non-gating evidence. Not comparable with the dataset headline leaderboard.")
+        appendLine()
+        appendLine("## Provenance")
+        appendLine()
+        appendLine("- Dataset URL: `${content.dataset.url}`")
+        appendLine("- Immutable revision: `${content.dataset.revision}`")
+        appendLine("- Size: `${content.dataset.sizeBytes}` bytes")
+        appendLine("- SHA-256: `${content.dataset.sha256}`")
+        appendLine(
+            "- License declaration: `${content.dataset.licenseDeclaration}` " +
+                "(upstream metadata, not legal advice)",
+        )
+        appendLine("- Attribution: ${content.dataset.attribution}")
+        appendLine()
+        appendLine("## Scope and matching")
+        appendLine()
+        appendLine("Mapping: ${mappingDescription(content.mapping)}.")
+        appendLine("IBAN is not covered by this dataset revision.")
+        appendLine("Exact: ${content.matching.exact}. Relaxed: ${content.matching.relaxed}.")
+        appendLine("Both modes use ${content.matching.cardinality} matching with ${content.matching.tieBreak}.")
+        appendLine()
+    }
+
+    /** Appends the pinned hash split and its aggregate coverage. */
+    private fun StringBuilder.appendFrozenSplit(content: ReportContent) {
+        appendLine("## Frozen tuning/evaluation split")
+        appendLine()
+        appendLine(
+            "`${content.split.algorithm}` version `${content.split.version}` over " +
+                "`${content.split.inputFormat}` with pinned salt `${content.split.salt}`.",
+        )
+        appendLine(
+            "Digest byte zero below `${content.split.evaluationBoundary}` of " +
+                "`${content.split.bucketCount}` selects evaluation; all other cases select tuning.",
+        )
+        appendLine()
+        appendLine("| Partition | Processed cases | Scored mapped spans |")
+        appendLine("|---|---:|---:|")
+        appendPartitionCoverageRow("full", content.partitions.full.coverage)
+        appendPartitionCoverageRow("tuning", content.partitions.tuning.coverage)
+        appendPartitionCoverageRow("evaluation", content.partitions.evaluation.coverage)
+        appendLine()
+    }
+
+    /** Appends unchanged source coverage and every partition metric table. */
+    private fun StringBuilder.appendCoverageAndMetrics(content: ReportContent) {
+        appendLine("## Coverage")
+        appendLine()
+        appendLine("| Total cases | Processed | Rejected | Total spans | Mapped spans | Scored mapped spans |")
+        appendLine("|---:|---:|---:|---:|---:|---:|")
+        appendLine(coverageRow(content.coverage))
+        appendLine()
+        appendLine("Rejected case IDs: ${rejectionSummary(content.coverage.rejections)}.")
+        appendLine()
+        appendLine("## Metrics")
+        appendLine()
+        appendPartitionMetrics("full", content.partitions.full.metrics)
+        appendPartitionMetrics("tuning", content.partitions.tuning.metrics)
+        appendPartitionMetrics("evaluation", content.partitions.evaluation.metrics)
+        appendLine()
+    }
+
+    /** Appends aggregate mismatch buckets and privacy-filtered type details. */
+    private fun StringBuilder.appendSafeDiagnostics(content: ReportContent) {
+        appendLine("## Safe mismatch diagnostics")
+        appendLine()
+        appendLine(
+            "Privacy floor: `${content.diagnosticPrivacyFloor}` for per-type aggregate categories; " +
+                "bucket totals remain complete.",
+        )
+        appendLine()
+        appendPartitionDiagnostics("full", content.partitions.full.diagnostics)
+        appendPartitionDiagnostics("tuning", content.partitions.tuning.diagnostics)
+        appendPartitionDiagnostics("evaluation", content.partitions.evaluation.diagnostics)
+        appendLine()
+    }
+
+    /** Extracts renderer-independent metrics from one scored subset. */
+    private fun reportMetrics(scores: PiiQualityScoreReport): ReportMetrics =
+        ReportMetrics(
+            aggregate = scores.aggregate,
+            perType =
+                scores.perType.map { score ->
+                    ReportTypeMetrics(score.type.name, score.exact, score.relaxed)
+                },
+        )
+
+    /** Creates full and disjoint partition evidence from stable case IDs. */
+    private fun reportPartitions(
+        corpus: RedMadRobotCorpus,
+        scores: RedMadRobotScoreReport,
+    ): ReportPartitions {
+        val tuningCases =
+            corpus.processedCases.filter { benchmarkCase ->
+                RedMadRobotFrozenSplit.partition(benchmarkCase.caseId) == RedMadRobotPartition.TUNING
+            }
+        val evaluationCases =
+            corpus.processedCases.filter { benchmarkCase ->
+                RedMadRobotFrozenSplit.partition(benchmarkCase.caseId) == RedMadRobotPartition.EVALUATION
+            }
+        return ReportPartitions(
+            full = reportPartition(corpus.processedCases, scores.full, scores.fullDiagnostics),
+            tuning = reportPartition(tuningCases, scores.tuning, scores.tuningDiagnostics),
+            evaluation =
+                reportPartition(evaluationCases, scores.evaluation, scores.evaluationDiagnostics),
+        )
+    }
+
+    /** Counts one partition and attaches its already computed metrics. */
+    private fun reportPartition(
+        cases: List<RedMadRobotCase>,
+        scores: PiiQualityScoreReport,
+        diagnostics: RedMadRobotMismatchDiagnostics,
+    ): ReportPartition =
+        ReportPartition(
+            coverage =
+                ReportPartitionCoverage(
+                    processedCases = cases.size,
+                    scoredMappedEntitySpans = cases.sumOf { benchmarkCase -> benchmarkCase.goldSpans.size },
+                ),
+            metrics = reportMetrics(scores),
+            diagnostics = diagnostics,
+        )
 
     /** Formats the explicit label mapping in deterministic source order. */
     private fun mappingDescription(mapping: List<ReportMapping>): String =
@@ -332,6 +536,14 @@ class RedMadRobotReportWriter {
         "| ${coverage.totalCases} | ${coverage.processedCases} | " +
             "${coverage.rejectedCases} | ${coverage.totalEntitySpans} | " +
             "${coverage.mappedEntitySpans} | ${coverage.scoredMappedEntitySpans} |"
+
+    /** Appends one partition coverage row without enumerating case IDs. */
+    private fun StringBuilder.appendPartitionCoverageRow(
+        name: String,
+        coverage: ReportPartitionCoverage,
+    ) {
+        appendLine("| $name | ${coverage.processedCases} | ${coverage.scoredMappedEntitySpans} |")
+    }
 
     /** Formats only safe rejected case IDs and reason codes. */
     private fun rejectionSummary(rejections: List<ReportRejection>): String =
@@ -347,6 +559,63 @@ class RedMadRobotReportWriter {
     ) {
         appendMetricRow(type, "exact", exact)
         appendMetricRow(type, "relaxed", relaxed)
+    }
+
+    /** Appends the complete aggregate and per-type table for one scored partition. */
+    private fun StringBuilder.appendPartitionMetrics(
+        name: String,
+        metrics: ReportMetrics,
+    ) {
+        appendLine("### $name")
+        appendLine()
+        appendLine("| Type | Mode | TP | FP | FN | Precision | Recall | F1 |")
+        appendLine("|---|---|---:|---:|---:|---:|---:|---:|")
+        appendMetricRows("ALL", metrics.aggregate.exact, metrics.aggregate.relaxed)
+        metrics.perType.forEach { score ->
+            appendMetricRows(score.type, score.exact, score.relaxed)
+        }
+        appendLine()
+    }
+
+    /** Appends aggregate-only reason codes for both matching modes in one partition. */
+    private fun StringBuilder.appendPartitionDiagnostics(
+        name: String,
+        diagnostics: RedMadRobotMismatchDiagnostics,
+    ) {
+        appendLine("### $name")
+        appendLine()
+        appendLine("| Mode | Bucket | Count |")
+        appendLine("|---|---|---:|")
+        appendDiagnosticRows("exact", diagnostics.exact)
+        appendDiagnosticRows("relaxed", diagnostics.relaxed)
+        appendLine()
+        appendLine("Per-type categories at or above the privacy floor:")
+        appendLine()
+        appendLine("| Mode | Bucket | Type | Count |")
+        appendLine("|---|---|---|---:|")
+        appendDiagnosticTypeRows("exact", diagnostics.exact.byType)
+        appendDiagnosticTypeRows("relaxed", diagnostics.relaxed.byType)
+        appendLine()
+    }
+
+    /** Appends all required stable bucket totals for one matching mode. */
+    private fun StringBuilder.appendDiagnosticRows(
+        mode: String,
+        diagnostics: RedMadRobotMismatchModeDiagnostics,
+    ) {
+        diagnostics.totals.forEach { (bucket, count) ->
+            appendLine("| $mode | ${bucket.name} | $count |")
+        }
+    }
+
+    /** Appends only privacy-filtered per-type categories for one matching mode. */
+    private fun StringBuilder.appendDiagnosticTypeRows(
+        mode: String,
+        counts: List<RedMadRobotMismatchTypeCount>,
+    ) {
+        counts.forEach { count ->
+            appendLine("| $mode | ${count.bucket.name} | ${count.type.name} | ${count.count} |")
+        }
     }
 
     /** Appends one Markdown metric row using locale-independent decimal formatting. */
