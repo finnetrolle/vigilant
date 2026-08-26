@@ -28,7 +28,7 @@ METADATA = {
     "EMAIL_ADDRESS": Metadata("FORMAT_ONLY", "fast.email_address", "1.0.0"),
     "PHONE_NUMBER": Metadata("FORMAT_ONLY", "fast.phone_number.ru", "1.0.0"),
     "PAYMENT_CARD": Metadata("VALIDATED", "fast.payment_card.luhn", "1.0.0"),
-    "IP_ADDRESS": Metadata("VALIDATED", "fast.ip_address", "1.0.0"),
+    "IP_ADDRESS": Metadata("VALIDATED", "fast.ip_address", "1.1.0"),
     "IBAN": Metadata("VALIDATED", "fast.iban", "1.0.0+iban-registry.102"),
     "RU_INN": Metadata("VALIDATED", "fast.ru_inn", "1.0.0"),
     "RU_SNILS": Metadata("VALIDATED", "fast.ru_snils", "1.0.0"),
@@ -257,7 +257,18 @@ def ip_corpora() -> tuple[list[str], list[str]]:
         value = values[variant]
         display = f"[{value}]" if index % 3 == 0 and ":" in value else value
         invalid = invalid_forms[variant]
-        payload, _ = wrapped(index, display)
+        if index == 0:
+            payload = f"{value}."
+        elif index == 1:
+            payload = f"Value {index}: {value}:1"
+        elif index == 2:
+            payload = f"Значение {index}: {value}."
+        elif index == 3:
+            payload = f"😀 тест {index}: {value}:"
+        elif index == 9:
+            payload = f"Value {index}: {value}:65535"
+        else:
+            payload, _ = wrapped(index, display)
         negative_payload, _ = wrapped(index, invalid)
         positives.append(positive_record(f"ip-positive-{index + 1:03d}", "IP_ADDRESS", payload, value))
         negatives.append(record(f"ip-hard-negative-{index + 1:03d}", "IP_ADDRESS", negative_payload))

@@ -8,6 +8,139 @@ import kotlin.test.assertEquals
 
 /** Behavioral tests for the built-in IP_ADDRESS recognizer. */
 class IpAddressRecognizerTest {
+    /** Verifies that sentence punctuation is not treated as part of a valid IPv4 literal. */
+    @Test
+    fun `ipv4 before a terminal dot excludes the delimiter`() {
+        assertEquals(
+            listOf(
+                PiiFinding(
+                    type = PiiType.IP_ADDRESS,
+                    startUtf8 = 8,
+                    endUtf8 = 17,
+                    confidence = null,
+                    evidenceStrength = EvidenceStrength.VALIDATED,
+                    recognizerId = "fast.ip_address",
+                    recognizerVersion = "1.1.0",
+                ),
+            ),
+            FastPiiDetector().detect(
+                payload = "Address 127.0.0.1.",
+                enabledTypes = setOf(PiiType.IP_ADDRESS),
+            ),
+        )
+    }
+
+    /** Verifies terminal punctuation handling for IPv6 after a multibyte prefix. */
+    @Test
+    fun `ipv6 before a terminal dot preserves utf8 offsets`() {
+        assertEquals(
+            listOf(
+                PiiFinding(
+                    type = PiiType.IP_ADDRESS,
+                    startUtf8 = 10,
+                    endUtf8 = 21,
+                    confidence = null,
+                    evidenceStrength = EvidenceStrength.VALIDATED,
+                    recognizerId = "fast.ip_address",
+                    recognizerVersion = "1.1.0",
+                ),
+            ),
+            FastPiiDetector().detect(
+                payload = "😀 IPv6 2001:db8::1.",
+                enabledTypes = setOf(PiiType.IP_ADDRESS),
+            ),
+        )
+    }
+
+    /** Verifies that decimal ports at both valid range edges are excluded from IPv4 spans. */
+    @Test
+    fun `ipv4 before a valid decimal port excludes the port`() {
+        val cases =
+            listOf(
+                "IPv4 192.0.2.1:1" to (5L to 14L),
+                "IPv4 198.51.100.2:65535" to (5L to 17L),
+            )
+
+        cases.forEach { (payload, expectedSpan) ->
+            assertEquals(
+                listOf(expectedSpan),
+                FastPiiDetector()
+                    .detect(payload, enabledTypes = setOf(PiiType.IP_ADDRESS))
+                    .map { finding -> finding.startUtf8 to finding.endUtf8 },
+            )
+        }
+    }
+
+    /** Verifies that invalid or token-continued port suffixes cannot expose a valid IPv4 prefix. */
+    @Test
+    fun `malformed ipv4 port continuations are rejected`() {
+        val malformedContinuations =
+            listOf(
+                "192.0.2.1:0",
+                "192.0.2.1:65536",
+                "192.0.2.1:443g",
+            )
+
+        malformedContinuations.forEachIndexed { caseIndex, payload ->
+            assertEquals(
+                emptyList(),
+                FastPiiDetector().detect(payload, enabledTypes = setOf(PiiType.IP_ADDRESS)),
+                "Unexpected finding for malformed port continuation $caseIndex",
+            )
+        }
+    }
+
+    /** Verifies that a terminal colon is excluded from strict IPv4 and IPv6 spans. */
+    @Test
+    fun `ip addresses before a terminal colon exclude the delimiter`() {
+        assertEquals(
+            listOf(5L to 14L, 21L to 32L),
+            FastPiiDetector()
+                .detect(
+                    payload = "IPv4 192.0.2.1: IPv6 2001:db8::1:",
+                    stopOnFirst = false,
+                    enabledTypes = setOf(PiiType.IP_ADDRESS),
+                ).map { finding -> finding.startUtf8 to finding.endUtf8 },
+        )
+    }
+
+    /** Verifies that terminal punctuation handling never truncates malformed address continuations. */
+    @Test
+    fun `malformed address continuations cannot expose a valid prefix`() {
+        val malformedContinuations =
+            listOf(
+                "1.2.3.4.5.",
+                "1.2.3.4.5:",
+                "1:2:3:4:5:6:7:8:9.",
+                "2001:db8::1::.",
+                "192.0.2.1.f",
+                "2001:db8::1ffff",
+            )
+
+        malformedContinuations.forEachIndexed { caseIndex, payload ->
+            assertEquals(
+                emptyList(),
+                FastPiiDetector().detect(payload, enabledTypes = setOf(PiiType.IP_ADDRESS)),
+                "Unexpected finding for malformed address continuation $caseIndex",
+            )
+        }
+    }
+
+    /** Verifies that an unbracketed decimal-looking suffix remains part of strict IPv6 syntax. */
+    @Test
+    fun `unbracketed ipv6 suffix is never interpreted as a port`() {
+        assertEquals(
+            listOf(0L to 15L),
+            FastPiiDetector()
+                .detect("2001:db8::1:443", enabledTypes = setOf(PiiType.IP_ADDRESS))
+                .map { finding -> finding.startUtf8 to finding.endUtf8 },
+        )
+        assertEquals(
+            emptyList(),
+            FastPiiDetector().detect("2001:db8::1:65535", enabledTypes = setOf(PiiType.IP_ADDRESS)),
+        )
+    }
+
     /** Verifies strict IPv4 and bracketed compressed IPv6 spans and stable validated metadata. */
     @Test
     fun `supported ipv4 and ipv6 forms produce validated findings`() {
@@ -27,7 +160,7 @@ class IpAddressRecognizerTest {
                     confidence = null,
                     evidenceStrength = EvidenceStrength.VALIDATED,
                     recognizerId = "fast.ip_address",
-                    recognizerVersion = "1.0.0",
+                    recognizerVersion = "1.1.0",
                 ),
                 PiiFinding(
                     type = PiiType.IP_ADDRESS,
@@ -36,7 +169,7 @@ class IpAddressRecognizerTest {
                     confidence = null,
                     evidenceStrength = EvidenceStrength.VALIDATED,
                     recognizerId = "fast.ip_address",
-                    recognizerVersion = "1.0.0",
+                    recognizerVersion = "1.1.0",
                 ),
             ),
             findings,
@@ -84,12 +217,10 @@ class IpAddressRecognizerTest {
                 "1.2.3.",
                 "1.2.3.4.5",
                 "1..2.3.4",
-                "1.2.3.4.",
                 "a1.2.3.4",
                 "g1.2.3.4",
                 "1.2.3.4a",
                 "1.2.3.4g",
-                "1.2.3.4:5",
             )
 
         hardNegatives.forEachIndexed { caseIndex, payload ->
@@ -142,7 +273,6 @@ class IpAddressRecognizerTest {
                 "1:2:3:4:5:6:7::8",
                 "12345::1",
                 ":2001:db8::1",
-                "2001:db8::1:",
                 "::ffff:192.168.001.1",
                 "::ffff:192.168.1.999",
                 "::192.0.2.1:1",

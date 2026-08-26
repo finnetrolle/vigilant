@@ -24,14 +24,19 @@ internal object IpAddressRecognizer : PiiRecognizer {
             }
             cancellationCheckpoint()
 
-            val endCharacter = findCandidateEnd(payload, startCharacter)
-            if (IpAddressCandidateValidator.isValid(payload, startCharacter, endCharacter)) {
-                recognitions += recognizedIpAddress(startCharacter, endCharacter)
+            val candidateEnd = findCandidateEnd(payload, startCharacter)
+            val recognitionEnd = IpAddressCandidateBoundaryResolver.findRecognitionEnd(
+                payload,
+                startCharacter,
+                candidateEnd,
+            )
+            if (recognitionEnd >= 0) {
+                recognitions += recognizedIpAddress(startCharacter, recognitionEnd)
                 if (stopOnFirst) {
                     return recognitions
                 }
             }
-            searchFrom = endCharacter
+            searchFrom = candidateEnd
         }
 
         return recognitions
@@ -86,8 +91,150 @@ internal object IpAddressRecognizer : PiiRecognizer {
     /** Stable rule identifier. */
     private const val RECOGNIZER_ID = "fast.ip_address"
 
-    /** Initial rule version. */
-    private const val RECOGNIZER_VERSION = "1.0.0"
+    /** Rule version with terminal punctuation and IPv4 port boundary support. */
+    private const val RECOGNIZER_VERSION = "1.1.0"
+
+}
+
+/** Resolves exact address bounds inside scanner-delimited candidates. */
+private object IpAddressCandidateBoundaryResolver {
+    /** Returns the whole or delimiter-trimmed valid address end. */
+    fun findRecognitionEnd(
+        payload: String,
+        startCharacter: Int,
+        candidateEnd: Int,
+    ): Int {
+        val wholeCandidateIsValid =
+            IpAddressCandidateValidator.isValid(payload, startCharacter, candidateEnd)
+        val terminalPortEnd = findIpv4EndBeforeTerminalPort(payload, startCharacter, candidateEnd)
+        return when {
+            wholeCandidateIsValid -> candidateEnd
+            terminalPortEnd >= 0 -> terminalPortEnd
+            else -> findEndBeforeTerminalDelimiter(payload, startCharacter, candidateEnd)
+        }
+    }
+
+    /** Returns the valid address end before one terminal dot or colon, or `-1`. */
+    private fun findEndBeforeTerminalDelimiter(
+        payload: String,
+        startCharacter: Int,
+        candidateEnd: Int,
+    ): Int {
+        val addressEnd = candidateEnd - 1
+        val delimiter = payload[addressEnd]
+        val validDelimiter =
+            isUnambiguousTerminalDelimiter(payload, startCharacter, addressEnd) &&
+                hasTokenBoundary(payload, candidateEnd)
+        val validAddress =
+            validDelimiter &&
+                IpAddressCandidateValidator.isValid(
+                    payload,
+                    startCharacter,
+                    addressEnd,
+                    allowedRightDelimiter = delimiter,
+                )
+        return if (validAddress) addressEnd else -1
+    }
+
+    /** Rejects an absent delimiter and a colon that extends an existing colon run. */
+    private fun isUnambiguousTerminalDelimiter(
+        payload: String,
+        startCharacter: Int,
+        addressEnd: Int,
+    ): Boolean {
+        if (addressEnd <= startCharacter) {
+            return false
+        }
+        val delimiter = payload[addressEnd]
+        return delimiter.isTerminalIpDelimiter() &&
+            (delimiter != ':' || payload[addressEnd - 1] != ':')
+    }
+
+    /** Returns the IPv4 end before one terminal in-range decimal port, or `-1`. */
+    private fun findIpv4EndBeforeTerminalPort(
+        payload: String,
+        startCharacter: Int,
+        candidateEnd: Int,
+    ): Int {
+        val separator = findSingleColon(payload, startCharacter, candidateEnd)
+        val validPort =
+            separator > startCharacter &&
+                candidateEnd == payload.length &&
+                isValidDecimalPort(payload, separator + 1, candidateEnd)
+        val validAddress =
+            validPort &&
+                IpAddressCandidateValidator.isValid(
+                    payload,
+                    startCharacter,
+                    separator,
+                    allowedRightDelimiter = ':',
+                )
+        return if (validAddress) separator else -1
+    }
+
+    /** Finds exactly one colon in the candidate, or `-1` for zero or multiple. */
+    private fun findSingleColon(
+        payload: String,
+        startCharacter: Int,
+        candidateEnd: Int,
+    ): Int {
+        var separator = -1
+        var index = startCharacter
+        while (index < candidateEnd) {
+            if (payload[index] == ':') {
+                if (separator >= 0) {
+                    return -1
+                }
+                separator = index
+            }
+            index += 1
+        }
+        return separator
+    }
+
+    /** Validates a one-to-five digit decimal port in the inclusive TCP/UDP range. */
+    private fun isValidDecimalPort(
+        payload: String,
+        startCharacter: Int,
+        endCharacter: Int,
+    ): Boolean {
+        val length = endCharacter - startCharacter
+        if (length !in 1..MAX_DECIMAL_PORT_DIGITS) {
+            return false
+        }
+        var value = 0
+        var index = startCharacter
+        while (index < endCharacter && payload[index] in '0'..'9') {
+            value = value * DECIMAL_RADIX + (payload[index] - '0')
+            index += 1
+        }
+        return index == endCharacter && value in MIN_DECIMAL_PORT..MAX_DECIMAL_PORT
+    }
+
+    /** Returns whether the candidate is followed by a token-separating boundary. */
+    private fun hasTokenBoundary(
+        payload: String,
+        candidateEnd: Int,
+    ): Boolean =
+        candidateEnd == payload.length ||
+            (!payload[candidateEnd].isLetterOrDigit() &&
+                payload[candidateEnd] != '_' &&
+                payload[candidateEnd] != '%')
+
+    /** Returns whether this character can terminate an address as punctuation. */
+    private fun Char.isTerminalIpDelimiter(): Boolean = this == '.' || this == ':'
+
+    /** Decimal radix used by port parsing. */
+    private const val DECIMAL_RADIX = 10
+
+    /** Lowest valid decimal port. */
+    private const val MIN_DECIMAL_PORT = 1
+
+    /** Highest valid decimal port. */
+    private const val MAX_DECIMAL_PORT = 65_535
+
+    /** Maximum digits needed to encode a valid decimal port. */
+    private const val MAX_DECIMAL_PORT_DIGITS = 5
 }
 
 /** Strict local parser and boundary validator for scanner-delimited IP candidates. */
@@ -97,13 +244,14 @@ private object IpAddressCandidateValidator {
         payload: String,
         startCharacter: Int,
         endCharacter: Int,
+        allowedRightDelimiter: Char? = null,
     ): Boolean =
         when {
             rangeContains(payload, startCharacter, endCharacter, ':') ->
-                hasIpv6Boundaries(payload, startCharacter, endCharacter) &&
+                hasIpv6Boundaries(payload, startCharacter, endCharacter, allowedRightDelimiter) &&
                     Ipv6Parser.isValid(payload, startCharacter, endCharacter)
             rangeContains(payload, startCharacter, endCharacter, '.') ->
-                hasIpv4Boundaries(payload, startCharacter, endCharacter) &&
+                hasIpv4Boundaries(payload, startCharacter, endCharacter, allowedRightDelimiter) &&
                     Ipv4Parser.isValid(payload, startCharacter, endCharacter)
             else -> false
         }
@@ -113,22 +261,38 @@ private object IpAddressCandidateValidator {
         payload: String,
         startCharacter: Int,
         endCharacter: Int,
+        allowedRightDelimiter: Char?,
     ): Boolean =
         (startCharacter == 0 || !payload[startCharacter - 1].blocksIpv4Boundary()) &&
-            (endCharacter == payload.length || !payload[endCharacter].blocksIpv4Boundary())
+            hasRightBoundary(payload, endCharacter, allowedRightDelimiter) { character ->
+                character.blocksIpv4Boundary()
+            }
 
     /** Applies hexadecimal/colon boundaries and rejects a following zone identifier. */
     private fun hasIpv6Boundaries(
         payload: String,
         startCharacter: Int,
         endCharacter: Int,
+        allowedRightDelimiter: Char?,
     ): Boolean {
         val validLeft = startCharacter == 0 || !payload[startCharacter - 1].blocksIpv6Boundary()
         val validRight =
-            endCharacter == payload.length ||
-                (!payload[endCharacter].blocksIpv6Boundary() && payload[endCharacter] != '%')
+            hasRightBoundary(payload, endCharacter, allowedRightDelimiter) { character ->
+                character.blocksIpv6Boundary() || character == '%'
+            }
         return validLeft && validRight
     }
+
+    /** Applies the normal right boundary rule or one explicitly accepted delimiter. */
+    private fun hasRightBoundary(
+        payload: String,
+        endCharacter: Int,
+        allowedRightDelimiter: Char?,
+        blocksBoundary: (Char) -> Boolean,
+    ): Boolean =
+        endCharacter == payload.length ||
+            payload[endCharacter] == allowedRightDelimiter ||
+            !blocksBoundary(payload[endCharacter])
 
     /** Returns whether [this] prevents an IPv4 candidate boundary. */
     private fun Char.blocksIpv4Boundary(): Boolean = isAsciiLetterOrDigit() || this == '.' || this == ':'
