@@ -16,6 +16,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.AppenderBase
 import com.linecorp.armeria.server.Server
 import com.fasterxml.jackson.databind.ObjectMapper
+import io.vigilant.gateway.GatewayProcessFixture
 import io.vigilant.gateway.withTestPolicyConfiguration
 import java.net.URI
 import java.net.ServerSocket
@@ -509,11 +510,11 @@ class BypassProxyServiceTest {
             .startAndTrack()
 
     /**
-     * Reserves a local port and releases it again, so the returned URI points at a
-     * port with no listener and any connection attempt to it is refused.
+     * Reserves a non-ephemeral local port and releases it again, so concurrent
+     * fixture servers cannot claim the dead endpoint through `http(0)` allocation.
      */
     private fun deadUpstreamUri(): URI =
-        URI.create("http://127.0.0.1:${ServerSocket(0).use { it.localPort }}")
+        URI.create("http://127.0.0.1:${GatewayProcessFixture.reserveNonEphemeralPort()}")
 
     private fun startServer(service: (HttpRequest) -> HttpResponse): Server =
         Server.builder()
@@ -530,4 +531,5 @@ class BypassProxyServiceTest {
 
     private fun serverUri(server: Server): URI =
         URI.create("http://127.0.0.1:${server.activeLocalPort()}")
+
 }

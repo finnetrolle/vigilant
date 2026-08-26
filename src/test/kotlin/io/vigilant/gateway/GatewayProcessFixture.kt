@@ -64,7 +64,7 @@ internal class GatewayProcessFixture private constructor(
             jvmArguments: List<String> = emptyList(),
             environment: Map<String, String> = emptyMap(),
         ): GatewayProcessFixture {
-            val port = reserveGatewayPort()
+            val port = reserveNonEphemeralPort()
             val command = buildList {
                 add("${System.getProperty("java.home")}/bin/java")
                 addAll(jvmArguments)
@@ -92,10 +92,11 @@ internal class GatewayProcessFixture private constructor(
         }
 
         /**
-         * Reserves a free non-ephemeral port that fixture servers cannot take
-         * from the OS ephemeral allocation range before the child binds it.
+         * Reserves and releases a free port outside the OS ephemeral allocation range.
+         *
+         * @return a currently unused local TCP port suitable for test fixtures.
          */
-        private fun reserveGatewayPort(): Int {
+        fun reserveNonEphemeralPort(): Int {
             while (true) {
                 val candidate = Random.nextInt(MIN_GATEWAY_PORT, MAX_GATEWAY_PORT)
                 try {
