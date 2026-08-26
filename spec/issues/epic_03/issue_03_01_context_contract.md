@@ -1,11 +1,11 @@
 # VIG-03-01: PolicyContext contract и trust boundary
 
-**Статус:** Draft  
+**Статус:** Done  
 **Epic:** [EPIC-03](../../epics/epic_03_policy_context_extraction.md)  
 **Ветка:** Context contract and trust boundary  
 **Зависит от:** нет  
 **Блокирует:** все остальные issues EPIC-03  
-**Оценка после уточнения:** 2-3 инженерных дня
+**Оценка:** 2-3 инженерных дня
 
 ## Результат
 
@@ -15,15 +15,32 @@ handoff можно реализовать независимо без разны
 записываются обратно в EPIC-03, после чего сам epic и зависимые issues проходят
 повторный ambiguity gate.
 
-## Решения, которые нужно закрыть
+## Закрытые решения
 
-1. URL match key и правила normalization.
-2. Provider-neutral contract приёма protocol-derived attributes из EPIC-06.
-3. Представление отсутствующих `model`, `user` и `groups`.
-4. Разрешённые identity sources, их precedence и формат groups.
-5. Кто имеет право устанавливать identity headers и где проходит trusted
-   proxy boundary.
-6. Точный immutable Kotlin contract и способ request-to-response handoff.
+1. URL match key является canonical effective upstream URL: lowercase scheme
+   и IDNA ASCII host, default port удалён, non-default port сохранён, effective
+   path нормализует dot segments и percent encoding. Query, fragment и
+   user-info не входят; malformed input даёт typed `INVALID_POLICY_URL`.
+2. EPIC-06 передаёт versioned immutable
+   `NormalizedProtocolAttributes(model)`. Произвольной map нет; protocol
+   family/operation/transport и fragments не входят в `PolicyContext`.
+3. `model` обязателен и непуст после successful parse. Missing/invalid model
+   даёт typed assembly failure. Anonymous identity представлена `user=null` и
+   immutable empty `groups`; missing identity не является ошибкой в режиме
+   `ANONYMOUS` и совпадает с policy subject `ANY`.
+4. Identity config выбирает ровно один mode: `ANONYMOUS`, `TRUSTED_HEADERS`
+   или `BASIC`, поэтому cross-source precedence отсутствует. Header names
+   configurable. User/group IDs используют bounded ASCII token grammar,
+   Locale.ROOT lowercase; groups передаются comma-separated с optional OWS.
+5. `TRUSTED_HEADERS` принимает identity только когда immediate peer входит в
+   configured trusted CIDR. Forwarded address headers не расширяют boundary.
+   Supplied identity header от untrusted peer даёт `UNTRUSTED_IDENTITY`; все
+   Vigilant identity headers и consumed Basic credentials strip-ятся upstream.
+6. Existing immutable `PolicyContext(url, model, phase, user, groups)` является
+   engine contract. Request context создаётся один раз, сохраняется typed
+   attribute в Armeria `ServiceRequestContext`, response context меняет только
+   phase. Thread-local и повторный parse запрещены; request completion,
+   cancellation и error завершают lifetime ссылки.
 
 ## Рекомендованный baseline
 
@@ -35,18 +52,30 @@ handoff можно реализовать независимо без разны
   иначе удалять supplied values или отклонять запрос согласно принятой модели.
 - Не сохранять password/token/raw credential в `PolicyContext`.
 
-## Критерии готовности draft
+## Критерии готовности
 
-- [ ] Все шесть решений имеют один выбранный вариант и rationale.
-- [ ] EPIC-03 не содержит конфликтующих open decisions.
-- [ ] Public contract согласован с matching semantics EPIC-04.
-- [ ] Граница с EPIC-06 не содержит повторного protocol parsing и согласована
+- [x] Все шесть решений имеют один выбранный вариант и rationale.
+- [x] EPIC-03 не содержит конфликтующих open decisions.
+- [x] Public contract согласован с matching semantics EPIC-04.
+- [x] Граница с EPIC-06 не содержит повторного protocol parsing и согласована
   с его normalized attributes contract.
-- [ ] Обновлён Ambiguity Report EPIC-03 с aggregate не выше `0.2`.
-- [ ] Зависимые issues переведены в `Ready for implementation` только после
+- [x] Обновлён Ambiguity Report EPIC-03 с aggregate не выше `0.2`.
+- [x] Зависимые issues переведены в `Ready for implementation` только после
   обновления их acceptance criteria.
 
 ## Не входит
 
 Production implementation extractors, protocol parsing, policy matching и
 detector execution.
+
+## Ambiguity Report
+
+```text
+Ambiguity Report:
+  Goals:        0.0   ✓ exact context result fixed
+  Acceptance:   0.05  ✓ normalization and identity outcomes testable
+  Boundaries:   0.05  ✓ protocol and transport ownership explicit
+  Alternatives: 0.10  ✓ identity modes and trust boundary selected
+  Assumptions:  0.15  ✓ request-scoped Armeria handoff is established seam
+  Aggregate:    0.07  ✓ below threshold (0.2 spec issue)
+```

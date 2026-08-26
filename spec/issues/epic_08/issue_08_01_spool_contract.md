@@ -1,6 +1,6 @@
 # VIG-08-01: Контракт source, spool и replay
 
-**Статус:** Draft  
+**Статус:** Done  
 **Epic:** [EPIC-08](../../epics/epic_08_message_spooling_replay.md)  
 **Ветка:** Source/spool contract  
 **Зависит от:** [VIG-06-01](../epic_06/issue_06_01_protocol_contract.md)  
@@ -9,9 +9,10 @@
 
 ## Результат
 
-Source ownership, spool lifecycle, replay semantics и resource boundaries
-определены настолько точно, что memory path, spill path, cleanup и E2E tests
-можно декомпозировать в независимо исполняемые issues.
+Request source ownership, in-memory lifecycle, replay semantics и resource
+boundaries определены настолько точно, что первый implementation leaf можно
+выполнить независимо. Response/SSE source и disk spill сохранены как future
+contract scope без скрытых defaults.
 
 Это documentation-only issue. Production spool и integration не добавляются.
 
@@ -21,36 +22,56 @@ Source ownership, spool lifecycle, replay semantics и resource boundaries
 - Parser читает source в read-only режиме и не возвращает raw body.
 - Unmodified forwarding replay-ит original source без DTO serialization.
 - Spooling оформляется отдельным EPIC-08.
-- SSE response является атомарной policy-транзакцией MVP: до terminal event и
-  итогового decision клиент не получает upstream status, headers или body.
-  Полный `ALLOW` replay-ит original SSE, любой `BLOCK` даёт safe proxy error
-  без partial forwarding.
+- Для future response-inspection increment SSE остаётся атомарной
+  policy-транзакцией: до terminal event и итогового decision клиент не получает
+  upstream bytes. В первом production increment response/SSE storage не
+  активно, а существующий response path остаётся streaming pass-through.
 
-## Решения, которые нужно закрыть
+## Закрытые решения первого production increment
 
-1. Source abstractions и ownership readers.
-2. Memory-to-spill transition без двойной полной копии.
-3. Storage security и cleanup lifecycle.
-4. Quotas, exhaustion и stable outcomes.
-5. Ingest/replay backpressure и blocking I/O isolation.
-6. Request и ordinary response semantics, а также bounded mechanics уже
-   принятого atomic SSE lifecycle.
-7. Contract с parser и future rewriter.
+1. Integration layer создаёт один request source owner. После complete ingest
+   owner выдаёт последовательные read-only views parser-у и replay publisher-у;
+   views не владеют quota. Только idempotent owner close освобождает bytes.
+2. Первый increment является in-memory only. Memory-to-spill transition,
+   temporary files и disk quota не имеют скрытого default и остаются future
+   scope.
+3. Source хранится только в process-private memory, не сериализуется и не
+   попадает в logs/errors. Cleanup matrix покрывает complete success, parse и
+   detector failure, capacity rejection, timeout, cancellation и shutdown.
+4. Configurable defaults: per-request `8 MiB`, global retained `64 MiB`, `128`
+   concurrent request owners и `128` retained segments на owner. Per-request
+   overflow имеет precedence и даёт `REQUEST_TOO_LARGE` -> HTTP
+   `413 {"error":"request_too_large"}`. Owner-slot или global-byte reservation
+   failure даёт `INSPECTION_CAPACITY_EXHAUSTED` -> HTTP
+   `503 {"error":"inspection_capacity_exhausted"}`.
+5. Owner slot резервируется до body demand. Ingest coalesce/split-ит transport
+   chunks до configured segment-count bound, резервирует global bytes до retain
+   и запрашивает следующий chunk только после успешного accounting. Exact
+   bookkeeping bound равен concurrent-owner limit, умноженному на per-owner
+   segment limit. Replay запрашивает source bytes только по downstream demand.
+   Blocking I/O отсутствует.
+6. Активный lifecycle только request direction: весь body принят и проверен до
+   первого upstream byte. Ordinary response и SSE не spool-ятся и остаются
+   существующим pass-through первого increment.
+7. Parser получает complete immutable segmented byte view без ownership и
+   второй полной копии. Replay сохраняет exact byte sequence, но не обязан
+   сохранять transport chunk boundaries. Future rewriter требует отдельного
+   mutable-patch contract и не входит в source API.
 
-## Критерии готовности draft
+## Критерии готовности
 
-- [ ] Все семь решений имеют один выбранный вариант и rationale.
-- [ ] Request и response lifecycle не смешаны неявно.
-- [ ] SSE tests подтверждают отсутствие client-visible upstream bytes до
-  decision, lossless replay при `ALLOW` и отсутствие partial forwarding при
-  `BLOCK`.
-- [ ] Byte-for-byte replay проверяем для memory и spill paths.
-- [ ] Все resource classes имеют bounds либо baseline issue для их выбора.
-- [ ] Cleanup matrix покрывает success, block, failures, timeout, cancellation
+- [x] Все семь решений имеют один выбранный вариант и rationale.
+- [x] Request и response lifecycle разделены явно.
+- [x] Response/SSE source lifecycle сохранён как future Draft и не создаёт
+  требований к request-only first increment.
+- [x] Byte-for-byte replay проверяем для in-memory path; spill path не входит.
+- [x] Все активные resource classes имеют exact configurable bounds.
+- [x] Cleanup matrix покрывает success, block, failures, timeout, cancellation
   и shutdown.
-- [ ] Temporary source не раскрывается через logs или safe errors.
-- [ ] Созданы implementation issues размером не более пяти инженерных дней.
-- [ ] EPIC-08 и готовые issues имеют ambiguity aggregate не выше `0.3`.
+- [x] Source не раскрывается через logs или safe errors.
+- [x] Создана [VIG-08-02](issue_08_02_bounded_request_source.md) размером не
+  более пяти инженерных дней.
+- [x] EPIC-08 и готовая issue имеют ambiguity aggregate не выше `0.3`.
 
 ## Не входит
 
@@ -60,12 +81,10 @@ Production spool, protocol parsing, policy execution, windowing и rewriting.
 
 ```text
 Ambiguity Report:
-  Goals:        0.10
-  Acceptance:   0.50
-  Boundaries:   0.35
-  Alternatives: 0.60
-  Assumptions:  0.60
-  Aggregate:    0.43
+  Goals:        0.0   ✓ request source outcome fixed
+  Acceptance:   0.10  ✓ byte replay, quotas and cleanup observable
+  Boundaries:   0.05  ✓ future response/disk scope explicit
+  Alternatives: 0.10  ✓ in-memory lifecycle selected
+  Assumptions:  0.20  ✓ defaults are profiling baselines
+  Aggregate:    0.09  ✓ below threshold (0.3 issue)
 ```
-
-Оставить `Draft` до закрытия перечисленных решений.

@@ -2,9 +2,9 @@
 
 **ID:** `EPIC-06`  
 **Тип:** Epic  
-**Статус:** Draft  
+**Статус:** In progress  
 **Приоритет:** High  
-**Предварительная оценка:** после закрытия протокольного контракта  
+**Предварительная оценка:** 3-5 инженерных дней до request parser первого increment; future response surfaces не оценены  
 **Связанные требования:** `MVP-14`, `MVP-20`, `PROXY-01`, `PROXY-02`
 
 ## Подтверждённое решение
@@ -20,7 +20,7 @@ epic. EPIC-03 не расширяется этой ответственност�
 OpenAI API surface, transport и direction декомпозируются в отдельные
 небольшие листья.
 
-В активный MVP scope входят следующие OpenAI API surfaces:
+В полном scope epic остаются следующие OpenAI API surfaces:
 
 - OpenAI Responses API;
 - OpenAI Chat Completions API.
@@ -28,6 +28,18 @@ OpenAI API surface, transport и direction декомпозируются в о�
 OpenAI Realtime API и OpenAI Batch API остаются post-MVP placeholders внутри
 EPIC-06. До отдельного решения об их активации для них не уточняются field
 maps, terminal semantics, transport contracts и implementation issues.
+
+Первый production increment из [ROADMAP.md](../ROADMAP.md) уже и намеренно:
+
+- поддерживается только JSON request `POST /v1/chat/completions`;
+- request полностью проверяется до первого upstream byte;
+- Chat Completions response, включая SSE при `stream=true`, остаётся
+  существующим streaming pass-through без content inspection;
+- любой другой method/path/media type получает stable `UNSUPPORTED_SCHEMA` и
+  не проходит через молчаливый bypass guardrail-enabled route.
+
+Этот independently deliverable slice не объявляет response/Responses scope
+реализованным и не задаёт для него невыбранные terminal semantics.
 
 Парсер возвращает payload как упорядоченную immutable-коллекцию независимых
 текстовых фрагментов. Каждый фрагмент относится ровно к одному логическому
@@ -202,13 +214,12 @@ field-specific done event и последующих item/response snapshots ос
 canonical terminal snapshot либо adapter-specific правило. До выбора parser
 не имеет default mismatch behavior, а SSE adapter issues остаются `Draft`.
 
-SSE response является одной атомарной policy-транзакцией MVP. Parser может
-возвращать завершённые fragments внутреннему evaluation flow по мере разбора,
-но integration layer не отправляет клиенту upstream status, headers или body
-до terminal event и итогового policy decision. Если хотя бы один fragment
-даёт `BLOCK`, клиент получает stable safe proxy error без единого upstream SSE
-byte. Если все fragments разрешены, integration replay-ит original SSE; при
-наличии разрешённых transformations сначала применяется адресный rewrite.
+В future response-inspection increment SSE является одной атомарной
+policy-транзакцией. Parser может возвращать завершённые fragments внутреннему
+evaluation flow по мере разбора, но integration layer не отправляет клиенту
+upstream status, headers или body до terminal event и итогового policy
+decision. Это решение не активно в первом production increment, где response
+остаётся streaming pass-through без inspection.
 
 Атомарное удержание source, bounded spill, replay, cleanup и backpressure
 принадлежат EPIC-08. Sliding window решает detector payload limit, но само по
@@ -218,8 +229,8 @@ byte. Если все fragments разрешены, integration replay-ит orig
 Parser отвечает за protocol structure, но не за mapping upstream outcome в
 HTTP proxy error. Raw provider error message не попадает в parser logs.
 
-Protocol parsing реализуется независимыми adapters для следующих пар family и
-transport:
+Полный future scope предусматривает независимые adapters для следующих пар
+family и transport:
 
 ```text
 OpenAI Responses          + JSON
@@ -228,7 +239,11 @@ OpenAI Chat Completions   + JSON
 OpenAI Chat Completions   + SSE
 ```
 
-Точная operation surface:
+В первом production increment публикуется только adapter
+`OpenAI Chat Completions + JSON request`. Остальные пары не имеют
+implementation-ready issue и сохраняют draft status.
+
+Полная future operation surface:
 
 - `POST /v1/responses` с обычным JSON response или SSE при streaming;
 - `POST /v1/chat/completions` с обычным JSON response или SSE при streaming.
@@ -240,8 +255,11 @@ MVP parser. Их placeholders не создают требований к тек
 OpenAI API mode передаётся через operation descriptor. Version selection
 является частью adapter routing и не требует чтения body:
 
-- OpenAI adapters поддерживают стабильную `/v1` surface и имеют внутреннюю
-  версию contract snapshot с датой использованной primary documentation;
+- Первый request adapter поддерживает `/v1/chat/completions` и использует
+  snapshot `openai-openapi 2.3.0`, commit
+  `1665a18fe20217c989c66dd73888345c6e4eb63c`, проверенный `2026-08-26`;
+- будущие OpenAI adapters обязаны отдельно закрепить свою `/v1` surface,
+  commit и дату primary documentation;
 - parser не выбирает `latest` schema во время выполнения и не определяет
   version эвристически по body.
 
@@ -251,8 +269,8 @@ OpenAI API mode передаётся через operation descriptor. Version se
 Schema evolution обрабатывается по месту неизвестного элемента:
 
 - неизвестное additional property внутри известного object сохраняется в
-  original source и игнорируется normalized view, кроме пока не решённого
-  случая unknown keyword внутри model-visible JSON Schema;
+  original source и игнорируется normalized view; внутри model-visible JSON
+  Schema применяется normative scalar-versus-textual-subtree rule ниже;
 - неизвестное значение явно non-content metadata сохраняется без parse
   failure;
 - неизвестный discriminator внутри content-bearing union возвращает
@@ -304,12 +322,14 @@ runtime structured arguments: object keys в tool arguments не являютс�
 payload, а пользовательские property names в передаваемой модели schema
 являются model-visible payload.
 
-Поведение unknown keyword внутри tool или structured-output JSON Schema
-осознанно отложено. Рассматриваются как минимум три варианта: игнорировать его
-как additive field, всегда возвращать typed failure либо различать scalar и
-potentially textual subtree. Ни один вариант не является default до отдельного
-решения. Implementation issue schema walker остаётся `Draft`, пока вариант и
-contract tests не утверждены.
+Unknown keyword внутри tool или structured-output JSON Schema обрабатывается
+по типу значения. `null`, boolean и number не могут скрывать text и
+игнорируются как additive constraint с сохранением original source. String,
+object или array могут содержать model-visible text и возвращают
+`AMBIGUOUS_CONTENT`. Известные vocabulary containers обходятся только по
+явной карте. External `$ref` возвращает `UNRESOLVED_CONTEXT`; local reference
+может быть разрешён только внутри того же bounded schema document без network
+lookup и cycles.
 
 Normalized structured view не используется для пересборки forwarded body и не
 передаётся EPIC-03 как policy attribute.
@@ -345,30 +365,33 @@ Windowing capability описана отдельным
 spooling исходного request до policy decision и hard resource exhaustion не
 считаются решёнными одним sliding window и требуют отдельных контрактов.
 
-## Предварительная карта декомпозиции
+## Карта декомпозиции
 
 ```text
 EPIC-06 LLM message parsing
-├── protocol contract and supported surface
+├── protocol contract and supported surface (Done)
+├── first production increment
+│   └── Chat Completions JSON request parser (Ready)
 ├── OpenAI Responses
-│   ├── request and non-streaming response
-│   └── SSE response stream
+│   ├── request and non-streaming response (future Draft)
+│   └── SSE response stream (future Draft)
 ├── OpenAI Chat Completions
-│   ├── request and non-streaming response
-│   └── SSE response stream
+│   ├── non-streaming response (future Draft)
+│   └── SSE response stream (future Draft)
 ├── lossless and security behavior
 └── post-MVP placeholders
     ├── OpenAI Realtime events
     └── OpenAI Batch JSONL input and output
 ```
 
-Карта является предварительной. Исполняемые issues, кроме контрактной,
-создаются после определения точной поверхности каждой protocol family и
-единицы payload, чтобы не закреплять неподтверждённую архитектуру.
+Future leaves создаются после определения точной поверхности соответствующей
+protocol family и единицы payload, чтобы не закреплять неподтверждённую
+архитектуру.
 
 ## Дочерние issues
 
-- [ ] [VIG-06-01: Контракт разбора LLM-сообщений](../issues/epic_06/issue_06_01_protocol_contract.md) - `Draft`
+- [x] [VIG-06-01: Контракт разбора LLM-сообщений](../issues/epic_06/issue_06_01_protocol_contract.md) - `Done`
+- [ ] [VIG-06-02: Chat Completions JSON request parser](../issues/epic_06/issue_06_02_chat_completions_request_parser.md) - `Ready for implementation`
 
 ## Контекст
 
@@ -393,9 +416,9 @@ OpenAI formats.
 - позволяет сохранить исходное представление без потери неизвестных полей и
   без пересборки разрешённого сообщения из typed DTO.
 
-Набор schema-derived данных, точная структура provenance и SSE contracts для
-Responses и Chat Completions пока не выбраны и перечислены как открытые
-решения.
+Для Chat Completions JSON request schema-derived data и provenance
+зафиксированы ниже. Response, SSE и Responses API contracts перечислены как
+отложенные решения полного epic.
 
 ## Нормативные ограничения проекта
 
@@ -461,25 +484,136 @@ Responses и Chat Completions пока не выбраны и перечисле
   и [Responses streaming events](https://platform.openai.com/docs/api-reference/responses-streaming/response/refusal/delta).
 - [OpenAI Chat Completions API](https://platform.openai.com/docs/api-reference/chat/create).
 - [OpenAI API backwards compatibility](https://platform.openai.com/docs/api-reference/backward-compatibility).
+- [Pinned OpenAI OpenAPI 2.3.0 snapshot](https://github.com/openai/openai-openapi/blob/1665a18fe20217c989c66dd73888345c6e4eb63c/openapi.yaml),
+  проверенный `2026-08-26`.
 
 Protocol-specific issue обязана зафиксировать дату или версию использованной
 схемы. Добавление optional properties и новых event types считается обычной
 эволюцией upstream schema и не должно автоматически ломать lossless parser.
 
-## Открытые решения
+## Нормативный Chat Completions JSON request contract
 
-1. Точная карта request content fields для каждой выбранной OpenAI surface и
+### Routing и единица parse
+
+Request adapter выбирается до чтения body по exact descriptor:
+
+```text
+family=OPENAI
+operation=CHAT_COMPLETIONS
+method=POST
+normalized_path=/v1/chat/completions
+media_type=application/json
+direction=REQUEST
+contract=openai-chat-completions-request@2026-08-26
+```
+
+Media type сравнивается case-insensitive по type/subtype; parameters, включая
+`charset`, не участвуют в выборе. `application/*+json`, другой path или method
+не получают fallback и возвращают `UNSUPPORTED_SCHEMA`. Complete bounded
+request source является одной единицей parse. `stream=true` влияет только на
+upstream response transport и не меняет request result.
+
+Root обязан быть JSON object с непустым string `model` и непустым array
+`messages`. `model` становится единственным normalized attribute и никогда не
+становится payload fragment. Duplicate object keys на любом уровне дают
+`AMBIGUOUS_CONTENT`, потому что выбор first/last value был бы schema guessing.
+
+### Semantic field map
+
+Fragments следуют порядку начала соответствующих values в original JSON.
+Empty known text field считается полностью inspectable, но не создаёт
+zero-length fragment. Один array content part или scalar field создаёт не
+более одного fragment. JSON Pointer может использоваться внутри opaque
+protocol locator, но locator не является public offset contract.
+
+| Source | Semantic kind | Role | Правило |
+|---|---|---|---|
+| `messages[*].content` у `developer`/`system` | `INSTRUCTION` | explicit role | String или каждый `type=text` part отдельно |
+| `messages[*].content` у `user`/`assistant` | `MESSAGE_TEXT` | explicit role | String или каждый text/refusal part отдельно; refusal использует `REFUSAL` |
+| `messages[*].content` у `tool`/`function` | `TOOL_RESULT` | explicit role | String или каждый разрешённый text part отдельно |
+| `messages[*].name` и function/tool/custom names | `LABEL` | message role, если есть | OpenAI IDs и call IDs исключаются |
+| assistant `tool_calls[*].function.arguments` и deprecated `function_call.arguments` | `TOOL_ARGUMENT` | `assistant` | Весь decoded string, без обязательного inner JSON parse |
+| custom tool-call textual input | `TOOL_ARGUMENT` | `assistant` | Весь decoded string |
+| `tools[*].function.description` и `tools[*].custom.description` | `TOOL_DESCRIPTION` | absent | Name идёт отдельным `LABEL` |
+| named `tool_choice`, `allowed_tools` и deprecated `function_call.name` | `LABEL` | absent | Только user-supplied tool/function/custom names; fixed modes исключаются |
+| custom tool grammar `definition` | `SCHEMA_TEXT` | absent | `syntax` является fixed discriminator и исключается |
+| deprecated root `functions[*]` | как function tool | absent | Та же семантика name, description и parameters |
+| `web_search_options.user_location.approximate.{country,region,city,timezone}` | `TOOL_ARGUMENT` | absent | Каждый present string отдельно; `type` и search size исключаются |
+| `prediction.content` | `OUTPUT_TEXT` | absent | String или каждый `type=text` part отдельно |
+| `response_format.json_schema` и function `parameters` | `SCHEMA_TEXT`/`LABEL` | absent | Только явный schema vocabulary ниже |
+
+Assistant `audio.id`, user `image_url`, `input_audio` и `file` являются
+schema-recognized non-text/provider-opaque content. Они не передаются text
+detector и создают соответственно gaps `OPAQUE_AUDIO_REFERENCE`, `IMAGE`,
+`AUDIO` и `FILE`. Доступный `file.filename` создаёт `LABEL`, но file data,
+file ID, media URL и filename не попадают в safe errors или audit events.
+
+Control и metadata fields, включая `model`, `store`, `metadata`, `user`,
+`safety_identifier`, sampling parameters, token limits, `stop`, `seed`,
+`stream`, `stream_options`, `modalities`, output audio settings,
+`service_tier`, `verbosity`, `reasoning_effort`, moderation options,
+web-search context size, fixed tool-choice modes и `parallel_tool_calls`, не
+являются detector payload. Их unknown siblings сохраняются только в original
+source.
+
+### JSON Schema walker
+
+Walker принимает только bounded in-document schema и не делает recursive
+all-string traversal. Text fragments создают:
+
+- property names из `properties`, `patternProperties` и `dependentSchemas`;
+- `title`, `description`, string `enum`, `const`, `default`, `examples` и
+  regex `pattern`;
+- те же значения внутри известных containers `$defs`, `definitions`,
+  `items`, `prefixItems`, `contains`, `additionalProperties`, `allOf`, `anyOf`,
+  `oneOf`, `not`, `if`, `then`, `else`, `propertyNames` и schema-valued
+  dependency keywords.
+
+Fixed keywords, `$id`, `$anchor`, local `$ref`, `type`, `required`, format
+names, boolean/numeric constraints и protocol discriminator values не
+становятся fragments. External `$ref` даёт `UNRESOLVED_CONTEXT`; cyclic или
+unresolvable local `$ref` даёт `AMBIGUOUS_CONTENT`.
+
+Unknown schema keyword с `null`, boolean или number сохраняется и
+игнорируется. Unknown keyword со string, object или array даёт
+`AMBIGUOUS_CONTENT`, потому что может скрывать model-visible text.
+
+### Coverage, failures и resource boundary
+
+- Text-only request без gaps возвращает `FULLY_INSPECTABLE`.
+- Text вместе хотя бы с одним gap возвращает `PARTIALLY_INSPECTABLE`.
+- Только recognized non-text/provider-opaque content возвращает
+  `UNINSPECTABLE`.
+- Отсутствие непустых text values в корректной text-only schema остаётся
+  `FULLY_INSPECTABLE`, а не становится gap.
+- Invalid UTF-8/JSON, missing required fields или неверный JSON type даёт
+  `MALFORMED_MESSAGE`.
+- Unknown role/content/tool discriminator и duplicate key дают
+  `AMBIGUOUS_CONTENT`.
+- Structural nesting глубже `128` уровней или больше `16 384` normalized
+  fragments даёт `UNSUPPORTED_SCHEMA` без частичного result.
+- Per-request/global source exhaustion происходит до parser и принадлежит
+  EPIC-08; parser не переводит его в parse failure.
+- Cancellation остаётся cancellation и отбрасывает partial normalized state.
+
+Parser читает immutable source, но не закрывает, не replay-ит и не копирует
+его в result. Fragment длиннее detector limit передаётся EPIC-07 целиком.
+Первый increment имеет только `ALLOW`, поэтому encoded reverse mapping не
+публикуется: opaque locator связывает fragment с logical field, но decoded
+UTF-8 offsets не объявляются JSON byte offsets. Любой будущий rewriter должен
+получить отдельный contract и патчить только targeted field original source.
+
+## Отложенные решения полного epic
+
+Эти решения не имеют default и не входят в готовый request slice:
+
+1. Точная карта request content fields для OpenAI Responses API.
+2. Точная карта response content fields для Responses и Chat Completions и
    contract snapshot в соответствии с принятой semantic field selection.
-2. Точная карта response content fields для каждой выбранной OpenAI surface и
-   contract snapshot в соответствии с принятой semantic field selection.
-3. Поведение unknown keyword внутри model-visible JSON Schema и stable result
-   для выбранного варианта.
-4. Точные result boundaries и terminal event names для Responses и Chat
+3. Точные result boundaries и terminal event names для Responses и Chat
    Completions в non-streaming и SSE режимах, включая canonical source,
    deduplication и mismatch result для повторных final snapshots.
-5. Контракт передачи больших fragments в отдельную windowing capability, а
-   также bounded parsing state, spooling и hard resource exhaustion.
-6. Контракт отдельного rewriter: как detector UTF-8 offsets в decoded fragment
+4. Контракт отдельного rewriter: как detector UTF-8 offsets в decoded fragment
    отображаются обратно в encoded original source при `MASK` или `REMOVE`.
 
 ## Предварительные критерии готовности epic
@@ -528,8 +662,9 @@ Protocol-specific issue обязана зафиксировать дату ил�
   schemas создают отдельные `LABEL` и `SCHEMA_TEXT` fragments через явный
   schema walker. Schema property names включаются; fixed keywords, IDs и
   numeric/boolean constraints исключаются.
-- Unknown schema keyword остаётся явным open decision без default behavior;
-  зависящая от него implementation issue не переводится в Ready.
+- Unknown schema keyword использует scalar-versus-textual-subtree rule:
+  безопасный scalar сохраняется, потенциально текстовое subtree даёт
+  `AMBIGUOUS_CONTENT`.
 - Original source принадлежит integration spool, parse result не содержит raw
   или reconstructed body, unmodified forwarding использует original source.
 - Malformed, unknown-discriminator и ambiguous content имеют явную fail-closed
@@ -556,12 +691,10 @@ Protocol-specific issue обязана зафиксировать дату ил�
 
 ```text
 Ambiguity Report:
-  Goals:        0.10  цель и adapter decomposition понятны
-  Acceptance:   0.20  schema и SSE canonical source отложены явно
-  Boundaries:   0.15  adapters, windowing и spooling отделены явно
-  Alternatives: 0.35  schema, SSE, resource и reverse-mapping варианты открыты
-  Assumptions:  0.35  field maps и resource contracts требуют дочерних issues
-  Aggregate:    0.23  ниже порога, но protocol-specific details ещё открыты
+  Goals:        0.05  ✓ first request slice and future scope are explicit
+  Acceptance:   0.15  ✓ pinned field map and stable outcomes are testable
+  Boundaries:   0.05  ✓ parser, source, windowing and integration separated
+  Alternatives: 0.20  ✓ future SSE/rewriter decisions deliberately deferred
+  Assumptions:  0.20  ✓ upstream evolution is bounded by pinned snapshot
+  Aggregate:    0.13  ✓ below threshold (0.3 epic)
 ```
-
-Оставить `Draft` до закрытия оставшихся protocol-specific решений.

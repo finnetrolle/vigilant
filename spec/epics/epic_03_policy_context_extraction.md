@@ -2,40 +2,37 @@
 
 **ID:** `EPIC-03`  
 **Тип:** Epic  
-**Статус:** Draft  
+**Статус:** In progress  
 **Приоритет:** High  
-**Предварительная оценка:** 17-27 инженерных дней после закрытия решений  
+**Предварительная оценка:** 15-23 инженерных дня осталось  
 **Связанные требования:** `MVP-14`, `MVP-20`, `MVP-21`
 
 ## Карта декомпозиции
 
 ```text
 EPIC-03 Policy context extraction
-├── Context contract and trust boundary
-├── URL normalization
+├── Context contract and trust boundary (Done)
+├── URL normalization (Ready)
+├── Anonymous request context (Ready, first increment)
 ├── Identity
-│   ├── configurable extraction
-│   └── secret-safe upstream stripping
+│   ├── configurable extraction (Ready, future)
+│   └── secret-safe upstream stripping (Ready, future)
 ├── Context assembly
-│   └── HTTP-derived + protocol-derived attributes
+│   └── HTTP-derived + protocol-derived attributes (Ready, future identity)
 └── Lifecycle
-    ├── request-to-response handoff
-    └── end-to-end security behavior
+    ├── request-to-response handoff (Ready, future response inspection)
+    └── end-to-end security behavior (Ready)
 ```
-
-Epic остаётся `Draft`, потому что перечисленные ниже issues зависят от решений
-из раздела «Открытые решения». Первая дочерняя issue фиксирует эти решения и
-обновляет нормативный контракт epic; только после этого зависимые issues могут
-быть переведены в `Ready for implementation`.
 
 ## Дочерние issues
 
-- [ ] [VIG-03-01: Контракт и trust boundary](../issues/epic_03/issue_03_01_context_contract.md) - `Draft`
-- [ ] [VIG-03-02: Нормализация URL](../issues/epic_03/issue_03_02_url_normalization.md) - `Draft`
-- [ ] [VIG-03-03: Настраиваемое identity extraction](../issues/epic_03/issue_03_03_identity_extraction.md) - `Draft`
-- [ ] [VIG-03-04: Сборка PolicyContext из нормализованных данных](../issues/epic_03/issue_03_04_model_extraction.md) - `Draft`
-- [ ] [VIG-03-05: Перенос контекста в response phase](../issues/epic_03/issue_03_05_response_handoff.md) - `Draft`
-- [ ] [VIG-03-06: E2E security и upstream stripping](../issues/epic_03/issue_03_06_security_e2e.md) - `Draft`
+- [x] [VIG-03-01: Контракт и trust boundary](../issues/epic_03/issue_03_01_context_contract.md) - `Done`
+- [ ] [VIG-03-02: Нормализация URL](../issues/epic_03/issue_03_02_url_normalization.md) - `Ready for implementation`
+- [ ] [VIG-03-03: Настраиваемое identity extraction](../issues/epic_03/issue_03_03_identity_extraction.md) - `Ready for implementation`
+- [ ] [VIG-03-04: Сборка PolicyContext из нормализованных данных](../issues/epic_03/issue_03_04_model_extraction.md) - `Ready for implementation`
+- [ ] [VIG-03-05: Перенос контекста в response phase](../issues/epic_03/issue_03_05_response_handoff.md) - `Ready for implementation`
+- [ ] [VIG-03-06: E2E security и upstream stripping](../issues/epic_03/issue_03_06_security_e2e.md) - `Ready for implementation`
+- [ ] [VIG-03-07: Anonymous request PolicyContext](../issues/epic_03/issue_03_07_anonymous_request_context.md) - `Ready for implementation`
 
 ## Контекст
 
@@ -64,7 +61,7 @@ HTTP-заголовок. Названия служебных заголовко�
 и protocol-derived данные, строит `PolicyContext` и сохраняет необходимые
 значения для последующей проверки ответа.
 
-Предварительный состав контекста:
+Нормативный engine contract:
 
 ```text
 PolicyContext
@@ -87,7 +84,94 @@ RESPONSE
 переопределяет request model. Policy engine и EPIC-03 не восстанавливают эти
 значения по телу ответа.
 
-## Предварительные требования
+## URL match key
+
+Policy URL является canonical effective upstream URL, а не inbound gateway
+address:
+
+```text
+lowercase-scheme://lowercase-idna-host[:non-default-port]/normalized-path
+```
+
+Configured upstream base path сначала объединяется с inbound request path.
+Scheme/host lowercase; terminal DNS dot и default port удаляются. Empty path
+становится `/`, dot segments удаляются, percent escapes получают uppercase
+hex, percent-encoded unreserved ASCII декодируется. Repeated slash, trailing
+slash, path case и encoded reserved characters сохраняются. EPIC-04 применяет
+свой существующий case-insensitive exact matcher ко всему key.
+
+Query, fragment и user-info не участвуют в matching и не попадают в context,
+errors или logs. Unsupported scheme, absent host, malformed percent encoding,
+IDNA или port возвращают typed `INVALID_POLICY_URL` без partial context.
+
+## Protocol attributes и missing values
+
+EPIC-06 передаёт immutable versioned input:
+
+```text
+NormalizedProtocolAttributes
+  model: String
+```
+
+Arbitrary attributes map отсутствует. `model` является exact decoded
+non-blank request model; normalization model ID не дублируется в EPIC-03.
+Missing/invalid model даёт typed assembly failure. Protocol family, operation,
+transport, fragments, provenance и inspection gaps не входят в
+`PolicyContext`.
+
+Отсутствующая identity представлена явно: `user=null`, `groups=empty immutable
+set`. Это valid anonymous context, который совпадает с subject `ANY` и не
+совпадает с USER/GROUP по contract EPIC-04.
+
+## Identity modes и trust boundary
+
+Strict config выбирает ровно один mode:
+
+```text
+ANONYMOUS
+TRUSTED_HEADERS(userHeader?, groupsHeader?, trustedCidrs[])
+BASIC
+```
+
+Modes взаимоисключающие, поэтому cross-source precedence отсутствует.
+`TRUSTED_HEADERS` принимает values только от immediate socket peer внутри
+configured CIDR. `Forwarded`, `X-Forwarded-For` и подобные client-controlled
+headers не расширяют boundary. Supplied configured identity header от
+untrusted peer даёт `UNTRUSTED_IDENTITY` и запрещает forwarding.
+
+User/group IDs используют ASCII grammar
+`[A-Za-z0-9][A-Za-z0-9._:@/\-]{0,127}` и Locale.ROOT lowercase. Groups
+передаются comma-separated с optional OWS, допускают repeated header lines,
+deduplicate-ятся и ограничены 128 values. User имеет максимум одно value.
+
+`BASIC` strict-decodes Base64 bytes, берёт ASCII username до первого `:` и
+никогда не преобразует password bytes в retained String. Отсутствие identity
+value даёт anonymous identity; duplicate, malformed или contradictory values
+дают typed safe failure. Configured Vigilant-only identity headers всегда
+strip-ятся upstream. `Authorization` strip-ится этой capability только когда
+consumed как BASIC identity; upstream authentication остаётся отдельной
+integration responsibility.
+
+## Immutable assembly и handoff
+
+Assembler получает только normalized URL, explicit phase, normalized identity
+и `NormalizedProtocolAttributes` и возвращает existing immutable
+`PolicyContext` EPIC-04. Он не зависит от `PolicyProvider`, не принимает raw
+HTTP/body types и не выполняет parsing или matching.
+
+Request snapshot создаётся один раз и сохраняется typed attribute внутри
+соответствующего Armeria `ServiceRequestContext`. Future response inspection
+читает тот же snapshot и создаёт context, меняя только `phase=RESPONSE`.
+Thread-local/global maps и повторное extraction запрещены. Completion, error,
+timeout и cancellation завершают request scope и не оставляют retained
+context reference.
+
+Первый production increment использует отдельную VIG-03-07: anonymous
+`REQUEST` context из normalized URL и Chat Completions request model. Он не
+ждёт identity leaves и не переиспользует VIG-03-04, которая сохраняет hard
+dependency на VIG-03-03.
+
+## Нормативные требования
 
 - URL назначения приводится к согласованному нормализованному виду.
 - Модель и любые другие body-derived attributes принимаются из результата
@@ -112,21 +196,16 @@ RESPONSE
 - Разбор JSON, SSE, Realtime events или Batch JSONL.
 - Извлечение payload fragments или любых attributes из protocol message.
 
-## Открытые решения
+## Отложенные решения
 
-- Какой URL участвует в сопоставлении: полный URL, origin, path или их комбинация.
-- Правила нормализации URL.
-- Точный provider-neutral input contract для attributes из EPIC-06.
-- Допустимые источники пользователя: произвольный header, Basic Authentication или оба варианта.
-- Формат списка групп и правила экранирования значений.
-- Поведение при отсутствии пользователя, группы или обязательного
-  protocol-derived attribute.
-- Может ли один запрос одновременно сопоставляться с пользователем и несколькими группами.
-- Модель доверия к identity-заголовкам и защита от их подмены клиентом.
-- Точная структура конфигурации источников identity.
-- Способ переноса контекста от запроса к streaming/non-streaming ответу.
+- Поддержка нескольких одновременных identity modes требует отдельного
+  precedence contract и не добавляется скрыто.
+- Trusted proxy chains требуют verified proxy protocol или отдельной
+  forwarded-header trust model; immediate peer остаётся единственным authority.
+- Response handoff реализуется только при активации response inspection, но
+  immutable request-scoped contract уже зафиксирован.
 
-## Предварительные критерии приёмки
+## Критерии приёмки epic
 
 - Policy engine получает единый нормализованный контекст без доступа к HTTP headers или сырому request body.
 - EPIC-03 не получает raw body, protocol events или protocol-specific document
@@ -135,19 +214,17 @@ RESPONSE
 - Контекст ответа содержит URL, модель, пользователя и группы исходного запроса.
 - Названия служебных identity-заголовков не зашиты в коде.
 - Чувствительные authentication-данные не передаются upstream и не попадают в логи.
-- Все открытые решения выше закрыты до перевода epic в `Ready for implementation`.
+- Каждый active leaf использует выбранные contracts без скрытого fallback.
 
 ## Ambiguity Report
 
 ```text
 Ambiguity Report:
-  Goals:        0.25  ✓ общий результат понятен
-  Acceptance:   0.45  ⚠ зависит от input contract и identity decisions
-  Boundaries:   0.25  ✓ основные non-goals перечислены
-  Alternatives: 0.4   ⚠ варианты identity extraction и handoff не выбраны
-  Assumptions:  0.4   ⚠ input contract и trust boundary не подтверждены
+  Goals:        0.0   ✓ exact context and first anonymous slice fixed
+  Acceptance:   0.10  ✓ URL, identity and handoff outcomes observable
+  Boundaries:   0.05  ✓ protocol parsing and matching excluded
+  Alternatives: 0.10  ✓ identity modes and immediate-peer trust selected
+  Assumptions:  0.15  ✓ future response uses established request scope
   ──────────────────────────────
-  Aggregate:    0.35  ⚠ above threshold (0.2 spec)
-
-Keep as Draft. Push on: VIG-03-01 contract and trust-boundary decisions.
+  Aggregate:    0.08  ✓ below threshold (0.2 spec)
 ```

@@ -1,6 +1,6 @@
 # VIG-07-01: Контракт windowed payload processing
 
-**Статус:** Draft  
+**Статус:** Done  
 **Epic:** [EPIC-07](../../epics/epic_07_windowed_payload_processing.md)  
 **Ветка:** Windowing contract and detector capabilities  
 **Зависит от:** [VIG-06-01](../epic_06/issue_06_01_protocol_contract.md)  
@@ -25,27 +25,49 @@ detector execution, offset translation, deduplication и resource bounds мож�
 - Итоговые findings используют UTF-8 offsets исходного fragment.
 - Windowing оформляется отдельным EPIC-07, а не частью protocol parser.
 
-## Решения, которые нужно закрыть
+## Закрытые решения
 
-1. Ownership window generation, detector invocation и aggregation.
-2. Detector capability contract для safe window size и overlap.
-3. Exact boundary semantics и гарантия отсутствия false negatives.
-4. Offset translation и deduplication.
-5. Ordering, parallelism, cancellation и detector errors.
-6. Memory, backpressure и hard resource exhaustion.
-7. Reaction mapping через EPIC-06 provenance.
+1. Public windowed executor владеет window generation, invocation одного
+   detector для одного complete logical fragment, offset translation,
+   validation, deduplication и aggregation. Parser, policy matching и
+   protocol rewriting остаются за границей.
+2. Detector capability публикует `maxWindowUtf8Bytes` и nullable
+   `maximumEvidenceSpanUtf8Bytes`. Evidence span включает весь finding и
+   обязательный left/right lookaround recognizer-а. Для bounded detector
+   overlap равен `maximumEvidenceSpanUtf8Bytes - 1`; отсутствие finite proof
+   запрещает windowing большого fragment и даёт `WINDOWING_UNSUPPORTED`.
+3. Window start/end всегда являются UTF-8 code-point boundaries. Следующий
+   start выбирается на последней boundary не правее `previousEnd - overlap`,
+   поэтому фактический overlap не меньше required. Capability обязана
+   оставлять progress минимум на один maximum-width UTF-8 code point.
+4. Local finding offsets проверяются относительно window и переводятся через
+   `windowStartUtf8 + localOffset`. Duplicate identity состоит из type,
+   translated span и recognizer ID; metadata duplicates обязаны совпасть,
+   иначе result равен safe `INCONSISTENT_WINDOW_RESULT`.
+5. Первый increment выполняет окна последовательно и exhaustive
+   (`stopOnFirst=false`) на bounded CPU executor. Первый detector error
+   прекращает новые calls и возвращает единый error result без partial
+   findings. Cancellation остаётся cancellation и прекращает новые calls.
+6. Executor удерживает original fragment и не более одного window/result
+   batch, не создаёт queue и не управляет HTTP demand. Fragment ограничен
+   EPIC-08 request source; собственный invalid capability/resource state даёт
+   typed safe error без truncation.
+7. Aggregated findings сохраняют original fragment provenance без window ID.
+   Reaction видит offsets decoded fragment; mapping в encoded JSON остаётся
+   будущим contract EPIC-06 rewriter.
 
-## Критерии готовности draft
+## Критерии готовности
 
-- [ ] Все семь решений имеют один выбранный вариант и rationale.
-- [ ] EPIC-07 не дублирует parser, policy matcher или detector recognizers.
-- [ ] Для detectors без bounded match length задана честная поддерживаемая
+- [x] Все семь решений имеют один выбранный вариант и rationale.
+- [x] EPIC-07 не дублирует parser, policy matcher или detector recognizers.
+- [x] Для detectors без bounded match length задана честная поддерживаемая
   стратегия, а не необоснованный фиксированный overlap.
-- [ ] Все window-local results однозначно переводятся в original-fragment
+- [x] Все window-local results однозначно переводятся в original-fragment
   coordinates и дедуплицируются.
-- [ ] Созданы implementation issues размером не более пяти инженерных дней.
-- [ ] Для каждой issue заданы test seam, cancellation и non-goals.
-- [ ] EPIC-07 и готовые дочерние issues имеют ambiguity aggregate не выше
+- [x] Создана [VIG-07-02](issue_07_02_windowed_fast_pii_execution.md) размером
+  не более пяти инженерных дней.
+- [x] Для issue заданы test seam, cancellation и non-goals.
+- [x] EPIC-07 и готовая дочерняя issue имеют ambiguity aggregate не выше
   `0.3`.
 
 ## Не входит
@@ -57,12 +79,10 @@ integration и применение reaction к encoded message.
 
 ```text
 Ambiguity Report:
-  Goals:        0.10
-  Acceptance:   0.50
-  Boundaries:   0.45
-  Alternatives: 0.60
-  Assumptions:  0.55
-  Aggregate:    0.44
+  Goals:        0.0   ✓ one fragment-to-findings capability
+  Acceptance:   0.10  ✓ boundary corpus and exact offsets fixed
+  Boundaries:   0.05  ✓ executor ownership explicit
+  Alternatives: 0.10  ✓ overlap and unbounded-detector behavior selected
+  Assumptions:  0.20  ✓ Fast PII capability proof remains implementation evidence
+  Aggregate:    0.09  ✓ below threshold (0.3 issue)
 ```
-
-Оставить `Draft` до закрытия перечисленных решений.

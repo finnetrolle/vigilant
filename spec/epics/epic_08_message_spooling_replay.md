@@ -2,9 +2,9 @@
 
 **ID:** `EPIC-08`  
 **Тип:** Epic  
-**Статус:** Draft  
+**Статус:** In progress  
 **Приоритет:** High  
-**Предварительная оценка:** после закрытия spool-контракта  
+**Предварительная оценка:** 3-5 инженерных дней осталось до request source первого increment  
 **Связанные требования:** `PROXY-01`, `PROXY-02`, `CONC-01`, `CONC-02`, `CONC-03`, `SEC-01`, `SEC-02`
 
 ## Подтверждённое решение
@@ -17,30 +17,32 @@ bytes/events и предоставляет lossless replay после policy dec
 Capability оформляется отдельным epic, потому что объединяет memory и disk
 resource management, backpressure, security, cancellation, cleanup и replay.
 
-SSE response в OpenAI MVP является одной атомарной policy-транзакцией. Spool
-принимает весь upstream stream с backpressure и не раскрывает клиенту status,
-headers или body до terminal event и итогового decision. При полном `ALLOW`
-original SSE replay-ится lossless, при любом `BLOCK` исходные upstream bytes
-не отправляются клиенту и integration формирует stable safe proxy error.
+В future response-inspection increment SSE является одной атомарной
+policy-транзакцией: spool принимает весь upstream stream с backpressure и не
+раскрывает клиенту status, headers или body до terminal event и итогового
+decision. Это решение не активно в первом production increment, где response,
+включая SSE, остаётся существующим streaming pass-through без inspection.
 
-## Предварительная карта декомпозиции
+## Карта декомпозиции
 
 ```text
 EPIC-08 Lossless spooling and replay
-├── source/spool contract
-├── bounded in-memory buffering
-├── secure spill storage
-├── replay with backpressure
-├── quotas and hard exhaustion
-├── completion, error and cancellation cleanup
-└── lossless E2E behavior
+├── source/spool contract (Done)
+├── first production increment
+│   └── bounded in-memory request source (Ready)
+│       ├── ingest and global quota
+│       ├── read-only parser view
+│       ├── replay with backpressure
+│       └── cancellation and cleanup
+└── future Draft
+    ├── response/SSE source lifecycle
+    └── secure disk spill
 ```
-
-Исполняемые issues создаются после выбора source lifecycle и spill strategy.
 
 ## Дочерние issues
 
-- [ ] [VIG-08-01: Контракт source, spool и replay](../issues/epic_08/issue_08_01_spool_contract.md) - `Draft`
+- [x] [VIG-08-01: Контракт source, spool и replay](../issues/epic_08/issue_08_01_spool_contract.md) - `Done`
+- [ ] [VIG-08-02: Bounded in-memory request source](../issues/epic_08/issue_08_02_bounded_request_source.md) - `Ready for implementation`
 
 ## Контекст
 
@@ -49,11 +51,10 @@ source. Если request guardrail должен принять решение д
 bytes нельзя отправить upstream заранее, но их нужно сохранить без
 ресериализации. Большие сообщения нельзя безусловно удерживать целиком в heap.
 
-Для response phase требования отличаются: ordinary response и SSE используют
-разные lifecycle, но оба сохраняют source до policy decision. Для SSE принято
-атомарное enforcement-поведение: TTFB ожидает terminal event и итоговый
-decision. Это осознанный MVP tradeoff, а не разрешение на unbounded heap;
-ingest и последующий replay сохраняют backpressure и bounded spill.
+Для будущей response phase ordinary response и SSE используют отдельные
+lifecycle. Для SSE уже принято атомарное enforcement-поведение, но mechanics,
+bounds и implementation issue остаются Draft. Первый production increment не
+изменяет response path.
 
 ## Цель
 
@@ -66,6 +67,95 @@ ingest и последующий replay сохраняют backpressure и bound
 - предоставляет future rewriter доступ к original source и locators;
 - гарантированно освобождает memory, file handles и temporary storage при
   success, error, timeout и cancellation.
+
+Первый production increment реализует только request direction и только
+in-memory storage. Response, SSE и file handles относятся к future scope и не
+являются acceptance готовой VIG-08-02.
+
+## Нормативный request source contract
+
+### Lifecycle и ownership
+
+Integration layer создаёт ровно одного owner на supported request:
+
+```text
+NEW -> INGESTING -> COMPLETE -> CLOSED
+          |             |
+          +-> REJECTED <-+
+```
+
+Создание owner-а atomically резервирует один concurrent-source slot до первого
+body demand. Отсутствие slot даёт `INSPECTION_CAPACITY_EXHAUSTED`; idempotent
+owner close освобождает slot вместе с остальными reservations ровно один раз.
+
+`COMPLETE` source предоставляет последовательные read-only segmented views:
+parser сначала читает source, затем integration после полного `ALLOW` создаёт
+replay publisher. View/reader не владеет retained bytes и не освобождает quota.
+Только idempotent `close` owner-а переводит terminal state в `CLOSED` и
+освобождает все reservations. Concurrent parse и replay запрещены первым
+contract, потому что первый upstream byte появляется только после inspection.
+
+Source сохраняет exact concatenated byte sequence. Transport chunk boundaries
+не являются lossless contract и могут отличаться при replay. Parser result не
+содержит source; future rewriter не получает mutable access без отдельного
+contract.
+
+### Bounds и stable exhaustion
+
+Configurable profiling defaults:
+
+```text
+perRequestLimitBytes = 8_388_608
+globalRetainedLimitBytes = 67_108_864
+maxConcurrentRequestSources = 128
+maxRetainedSegmentsPerRequest = 128
+```
+
+Все значения положительны, global byte limit не меньше per-request byte limit.
+Global byte quota считает только retained payload bytes всех non-closed
+sources. Source coalesce/split-ит transport chunks в собственные segments и не
+сохраняет отдельный bookkeeping node на каждый transport chunk. Поэтому число
+retained segment nodes ограничено
+`maxConcurrentRequestSources * maxRetainedSegmentsPerRequest` (`16_384` при
+defaults), а одновременно удерживаемых demanded transport chunks и writable
+segments - не более одного каждого на active owner. Object-size overhead
+измеряется baseline-ом отдельно, но число объектов имеет exact contract bound.
+
+После успешной owner-slot reservation source перед retain каждого chunk сначала
+проверяет prospective per-request size и segment-count bound, затем atomically
+резервирует exact retained bytes в global quota. Transport chunks coalesce-ятся
+до segment limit без изменения byte sequence. Такой порядок даёт deterministic
+precedence, если нарушены оба byte limit:
+
+- per-request overflow: `REQUEST_TOO_LARGE`, HTTP integration отображает в
+  `413 {"error":"request_too_large"}`;
+- global reservation failure: `INSPECTION_CAPACITY_EXHAUSTED`, HTTP integration
+  отображает в `503 {"error":"inspection_capacity_exhausted"}`.
+
+Known `Content-Length` выше per-request limit отклоняется до body demand.
+Header не заменяет accounting фактически принятых bytes и не позволяет
+preallocate полную заявленную длину. Rejection/cancellation освобождает уже
+reserved bytes до публикации terminal outcome.
+
+### Backpressure и cleanup
+
+Ingest запрашивает следующий client chunk только после успешных size check,
+global reservation и retention текущего chunk. Replay выдаёт следующий
+segment только по subscriber demand. In-memory path не выполняет blocking I/O;
+parser/detector CPU work остаётся вне Netty event loop по своим contracts.
+
+Owner close обязателен и идемпотентен для:
+
+- successful replay completion;
+- parse failure, inspection gap failure или detector/policy error;
+- per-request/global exhaustion;
+- request timeout и client cancellation;
+- upstream failure во время replay;
+- graceful/forced shutdown.
+
+После close новые views/replay дают typed closed-state outcome. Logs, errors,
+state descriptions и metrics не содержат bytes, preview, filename, media URL,
+temporary path или reversible payload hash.
 
 ## Нормативные ограничения
 
@@ -94,20 +184,13 @@ ingest и последующий replay сохраняют backpressure и bound
 - [EPIC-04](epic_04_policy_engine.md) возвращает policy decision, после
   которого integration выбирает replay, rewrite или block.
 
-## Открытые решения
+## Отложенные решения
 
-1. Единый source contract либо отдельные request, ordinary response и SSE
-   abstractions для активного OpenAI MVP scope.
-2. Кто читает source первым и как parser и spool не создают две полные копии.
-3. In-memory threshold и переход к spill storage.
-4. Temporary storage type, permissions, encryption requirement и directory
-   ownership.
-5. Per-request, per-replica и global quotas.
-6. Stable outcome при hard memory/disk/file-descriptor exhaustion.
-7. Replay ordering, backpressure и повторное чтение.
-8. Cleanup при success, block, parse failure, upstream error, timeout,
-   cancellation и process shutdown.
-9. API между spool, protocol parser и future rewriter.
+- Response и atomic SSE получают отдельные lifecycle/source issues после
+  активации response inspection; request abstraction не обобщается заранее.
+- Disk spill требует отдельного security contract для directory ownership,
+  permissions, encryption, disk/file-descriptor quota и crash cleanup.
+- Future rewriter требует patch API поверх original source и protocol locators.
 
 ## Не входит в epic
 
@@ -138,12 +221,10 @@ ingest и последующий replay сохраняют backpressure и bound
 
 ```text
 Ambiguity Report:
-  Goals:        0.15  общий lifecycle понятен
-  Acceptance:   0.50  thresholds и exhaustion semantics не выбраны
-  Boundaries:   0.35  source abstractions и response scope открыты
-  Alternatives: 0.60  memory/disk strategy не выбрана
-  Assumptions:  0.60  resource model требует baseline
-  Aggregate:    0.44  выше порога implementation-ready issue
+  Goals:        0.0   ✓ request lifecycle and replay explicit
+  Acceptance:   0.15  ✓ exact quotas, errors and cleanup matrix fixed
+  Boundaries:   0.05  ✓ response and disk scope deferred explicitly
+  Alternatives: 0.10  ✓ in-memory request strategy selected
+  Assumptions:  0.20  ✓ default sizes remain measured profiling baselines
+  Aggregate:    0.10  ✓ below threshold (0.3 epic)
 ```
-
-Оставить `Draft` до закрытия spool-контракта.

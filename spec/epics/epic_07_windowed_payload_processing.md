@@ -2,9 +2,9 @@
 
 **ID:** `EPIC-07`  
 **Тип:** Epic  
-**Статус:** Draft  
+**Статус:** In progress  
 **Приоритет:** High  
-**Предварительная оценка:** после закрытия windowing-контракта  
+**Предварительная оценка:** 3-5 инженерных дней осталось  
 **Связанные требования:** `PERF-03`, `PERF-04`, `CONC-01`, `CONC-02`, `CONC-03`
 
 ## Подтверждённое решение
@@ -17,25 +17,22 @@ Capability оформляется самостоятельным epic, пото�
 parser, policy engine, detector execution, offsets и reaction mapping, но не
 принадлежит ни одному конкретному LLM protocol adapter.
 
-## Предварительная карта декомпозиции
+## Карта декомпозиции
 
 ```text
 EPIC-07 Windowed payload processing
-├── windowing contract and detector capabilities
-├── window generation and overlap
-├── detector execution over windows
-├── global UTF-8 offsets and finding deduplication
-├── cancellation, ordering and resource bounds
-└── reaction mapping to original fragment
+├── windowing contract and detector capabilities (Done)
+└── windowed fast PII execution (Ready)
+    ├── UTF-8 window generation and capability-derived overlap
+    ├── detector execution over windows
+    ├── global offsets and finding deduplication
+    └── cancellation, ordering and resource bounds
 ```
-
-Карта является предварительной. Исполняемые issues создаются после решения,
-где проходит граница между window provider, detector executor и result
-aggregation.
 
 ## Дочерние issues
 
-- [ ] [VIG-07-01: Контракт windowed payload processing](../issues/epic_07/issue_07_01_windowing_contract.md) - `Draft`
+- [x] [VIG-07-01: Контракт windowed payload processing](../issues/epic_07/issue_07_01_windowing_contract.md) - `Done`
+- [ ] [VIG-07-02: Windowed fast PII execution](../issues/epic_07/issue_07_02_windowed_fast_pii_execution.md) - `Ready for implementation`
 
 ## Контекст
 
@@ -73,7 +70,72 @@ offset translation + deduplication
 findings relative to original fragment
 ```
 
-Точная ответственность capability за detector invocation пока не выбрана.
+Windowed executor владеет генерацией окон, вызовом одного detector,
+translation, validation, deduplication и aggregation для одного logical
+fragment. Он не выбирает policies и не применяет reactions.
+
+## Нормативный контракт
+
+### Detector capability и overlap
+
+Detector, допускающий windowing, публикует:
+
+```text
+maxWindowUtf8Bytes
+maximumEvidenceSpanUtf8Bytes?
+```
+
+Evidence span включает finding целиком и весь lookbehind/lookahead, нужный
+recognizer-у для boundary или contextual validation. Required overlap равен
+`maximumEvidenceSpanUtf8Bytes - 1`. Значение обязано быть доказано из
+versioned recognizer rules и boundary corpus, а не выбрано по типичному input.
+
+Если finite evidence span отсутствует, fragment не длиннее
+`maxWindowUtf8Bytes` проверяется одним direct call. Более длинный fragment
+возвращает `WINDOWING_UNSUPPORTED`: executor не угадывает overlap, не обрезает
+text и не пропускает suffix. Capability invalid, если maximum evidence span
+неположителен, больше window size или не оставляет progress минимум на один
+четырёхбайтовый UTF-8 code point.
+
+### Window boundaries
+
+Первое окно начинается в byte offset `0`. End является последней Unicode
+code-point boundary не правее `start + maxWindowUtf8Bytes`. Следующий start
+является последней boundary не правее `previousEnd - requiredOverlap`, что
+может только увеличить overlap. Последнее окно заканчивается на exact UTF-8
+length fragment.
+
+При такой схеме любой contiguous evidence span длиной не больше declared
+maximum полностью содержится хотя бы в одном окне. Окна никогда не переходят
+между fragments и не включают synthetic prefix/suffix.
+
+### Execution и aggregation
+
+Первый increment выполняет окна последовательно на bounded CPU executor и
+всегда вызывает `FastPiiDetector` с `stopOnFirst=false`, потому что safe audit
+требует total finding counts. Completion order поэтому совпадает с window
+order, но итог дополнительно canonicalized и не зависит от chunking.
+
+Local finding обязан лежать на valid UTF-8 boundaries внутри window. Global
+span вычисляется добавлением `windowStartUtf8`. Semantic duplicate identity:
+
+```text
+type + global start/end + recognizerId
+```
+
+Exact duplicates удаляются. `recognizerVersion`, `evidenceStrength` и
+`confidence` у duplicate identity обязаны совпасть; mismatch возвращает
+`INCONSISTENT_WINDOW_RESULT`. Итог сортируется по global start, global end,
+PII type, recognizer ID и version.
+
+Первый detector error прекращает новые calls и возвращает один safe error без
+partial findings. Cancellation остаётся cancellation. Executor удерживает
+original fragment и не более одного materialized window/result batch, не
+создаёт unbounded queue и не логирует fragment, window или matched text.
+
+Aggregated result сохраняет original fragment provenance без window IDs.
+Offsets остаются координатами decoded fragment; future protocol rewriter
+отдельно отвечает за mapping в encoded source.
 
 ## Нормативные ограничения
 
@@ -98,20 +160,13 @@ findings relative to original fragment
 - [EPIC-06](epic_06_llm_message_parsing.md) задаёт logical fragment,
   provenance и mapping к protocol source.
 
-## Открытые решения
+## Отложенные решения
 
-1. Window provider только создаёт окна либо также оркестрирует detector calls.
-2. Как detector сообщает безопасный window size и обязательный overlap.
-3. Как гарантировать отсутствие false negatives для detector без известной
-   максимальной длины finding.
-4. Exact window size, overlap и switch threshold для каждого detector class.
-5. Последовательное или bounded-parallel выполнение окон и стабильный порядок
-   результатов.
-6. Translation локальных UTF-8 offsets окна в offsets исходного fragment.
-7. Дедупликация duplicate и overlapping findings из соседних окон.
-8. Aggregation detector errors, cancellation и fail-fast между окнами.
-9. Bounded memory, backpressure и hard resource exhaustion.
-10. Mapping итоговых findings обратно через provenance для `MASK` и `REMOVE`.
+- Bounded-parallel window execution допускается только после baseline,
+  доказывающего benefit и сохраняющего те же result/cancellation semantics.
+- Reverse mapping для `MASK`/`REMOVE` принадлежит future rewriter EPIC-06.
+- Detector без finite evidence span требует detector-specific streaming
+  algorithm или explicit unsupported outcome; generic overlap не добавляется.
 
 ## Не входит в epic
 
@@ -140,12 +195,10 @@ findings relative to original fragment
 
 ```text
 Ambiguity Report:
-  Goals:        0.15  общий результат понятен
-  Acceptance:   0.50  overlap и error semantics ещё не выбраны
-  Boundaries:   0.45  ownership detector orchestration не закрыт
-  Alternatives: 0.60  window strategy и detector capability contract открыты
-  Assumptions:  0.55  resource model требует baseline
-  Aggregate:    0.45  выше порога implementation-ready issue
+  Goals:        0.0   ✓ exact fragment-level result
+  Acceptance:   0.15  ✓ capability proof and boundary corpus required
+  Boundaries:   0.05  ✓ executor ownership fixed
+  Alternatives: 0.10  ✓ sequential strategy and unsupported path fixed
+  Assumptions:  0.20  ✓ concrete Fast PII span is implementation evidence
+  Aggregate:    0.10  ✓ below threshold (0.3 epic)
 ```
-
-Оставить `Draft` до закрытия windowing-контракта.

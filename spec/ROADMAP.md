@@ -170,17 +170,21 @@ baseline.
 
 ### Stage 1: закрыть contract decisions
 
-1. [VIG-06-01](issues/epic_06/issue_06_01_protocol_contract.md) фиксирует
+Stage завершён. Все четыре documentation-only issues имеют status `Done`, их
+parent epics содержат normative decisions, а implementation leaves опубликованы
+с estimate не более пяти инженерных дней и pre-agreed public seams.
+
+1. [VIG-06-01](issues/epic_06/issue_06_01_protocol_contract.md) зафиксировал
    versioned Chat Completions JSON request field map, inspectability results,
    stable failures и boundary с spool/windowing. Response, SSE inspection и
-   Responses API implementation leaves могут остаться `Draft`.
-2. [VIG-03-01](issues/epic_03/issue_03_01_context_contract.md) фиксирует
+   Responses API implementation leaves остались future `Draft`.
+2. [VIG-03-01](issues/epic_03/issue_03_01_context_contract.md) зафиксировал
    anonymous request context для global `ANY` policy без identity extraction.
-3. [VIG-07-01](issues/epic_07/issue_07_01_windowing_contract.md) после
-   VIG-06-01 фиксирует detector capability, overlap, offset translation,
+3. [VIG-07-01](issues/epic_07/issue_07_01_windowing_contract.md) зафиксировал
+   detector capability, overlap, offset translation,
    deduplication, cancellation и error aggregation.
-4. [VIG-08-01](issues/epic_08/issue_08_01_spool_contract.md) после VIG-06-01
-   фиксирует request-only in-memory source, quotas, replay, backpressure и
+4. [VIG-08-01](issues/epic_08/issue_08_01_spool_contract.md) зафиксировал
+   request-only in-memory source, quotas, replay, backpressure и
    cleanup. Response/SSE storage и disk spill остаются `Draft`.
 
 Contract issues обязаны опубликовать implementation leaves с estimate не более
@@ -191,12 +195,12 @@ Contract issues обязаны опубликовать implementation leaves с
 Следующие planned leaves получают реальные IDs только при публикации в своих
 parent epics:
 
-| Parent | Planned leaf | Observable result | Hard blockers | Estimate | Confidence |
+| Parent | Work item | Observable result | Hard blockers | Estimate | Confidence |
 |---|---|---|---|---:|---|
-| EPIC-06 | Chat Completions JSON request parser | Original JSON даёт normalized model, ordered text fragments и coverage/failure result без reconstruction | VIG-06-01 | 3-5 дней | Medium |
-| EPIC-07 | Windowed fast PII execution | Fragment до configured request limit проверяется без boundary false negatives и duplicate findings | VIG-07-01, EPIC-02 Done | 3-5 дней | Medium |
-| EPIC-08 | Bounded in-memory request source | Client bytes принимаются с quotas/backpressure и replay-ятся byte-for-byte либо дают stable capacity error | VIG-08-01 | 3-5 дней | Medium |
-| EPIC-03 | Anonymous request PolicyContext | Normalized path и parser model создают REQUEST context с subject `ANY` без raw body или identity | VIG-03-01, VIG-03-02, EPIC-06 parser leaf | 2-3 дня | Medium |
+| EPIC-06 | [VIG-06-02: Chat Completions JSON request parser](issues/epic_06/issue_06_02_chat_completions_request_parser.md) | Original JSON даёт normalized model, ordered text fragments и coverage/failure result без reconstruction | VIG-06-01 Done | 3-5 дней | Medium |
+| EPIC-07 | [VIG-07-02: Windowed fast PII execution](issues/epic_07/issue_07_02_windowed_fast_pii_execution.md) | Fragment до configured request limit проверяется без boundary false negatives и duplicate findings | VIG-07-01 Done, VIG-06-01 Done, EPIC-02 Done | 3-5 дней | Medium |
+| EPIC-08 | [VIG-08-02: Bounded in-memory request source](issues/epic_08/issue_08_02_bounded_request_source.md) | Client bytes принимаются с quotas/backpressure и replay-ятся byte-for-byte либо дают stable capacity error | VIG-08-01 Done, VIG-06-01 Done | 3-5 дней | Medium |
+| EPIC-03 | [VIG-03-07: Anonymous request PolicyContext](issues/epic_03/issue_03_07_anonymous_request_context.md) | Normalized path и parser model создают REQUEST context с subject `ANY` без raw body или identity | VIG-03-01 Done, VIG-03-02, VIG-06-02 | 2-3 дня | Medium |
 
 EPIC-03 обязан создать отдельный anonymous request leaf. Existing VIG-03-04
 сохраняет dependency на identity extraction и не используется как скрытый
@@ -260,13 +264,13 @@ VIG-10-05. Текущий общий RedMadRobot exact recall остаётся �
 ## Delivery graph
 
 ```text
-VIG-06-01 +--> EPIC-06 request parser -----------+
-          +--> VIG-07-01 --> EPIC-07 windowing --+
-          +--> VIG-08-01 --> EPIC-08 spool ------+
-                                                   |
-VIG-03-01 --> VIG-03-02 --> anonymous context -----+
-                              ^                    |
-                              +-- parser model ----+
+VIG-06-01 Done +--> VIG-06-02 request parser --------+
+               +--> VIG-07-01 Done --> VIG-07-02 ----+
+               +--> VIG-08-01 Done --> VIG-08-02 ----+
+                                                       |
+VIG-03-01 Done --> VIG-03-02 --> VIG-03-07 context ---+
+                                      ^               |
+                                      +-- VIG-06-02 --+
                                                    |
 EPIC-02 Done --> Fast PII adapter -----------------+
 EPIC-04 Done --> global coverage validation -------+
@@ -311,14 +315,16 @@ horizontal logging subsystem.
 
 Все implementation issues Stage 0 завершены: VIG-09-01..09 и EPIC-09 имеют
 status `Done`, а project work-item validator входит в `check`. VIG-10-01 и
-VIG-10-02 имеют status `Done`; полный repository frontier содержит VIG-01A и
-VIG-10-03..07. VIG-01A проверяет logging-specific PERF-01, а VIG-10-03..07
-roadmap относит к Stage 5: они не создают отсутствующий HTTP integration path.
+VIG-10-02 также имеют status `Done`.
 
-Stage 0 закрыт; следующий шаг delivery path - contract decisions Stage 1.
-VIG-03-01 и VIG-06-01 остаются `Draft` до внесения согласованных решений в
-их normative epics и повторного ambiguity gate. Planned leaves из этого
-документа не входят во frontier до публикации собственных issue-файлов.
+Stage 0 и Stage 1 закрыты. Roadmap frontier Stage 2 содержит VIG-03-02,
+VIG-06-02, VIG-07-02 и VIG-08-02: их hard blockers завершены. VIG-03-07
+становится frontier после VIG-03-02 и VIG-06-02. Identity leaves EPIC-03
+готовы по contract, но не входят в первый production increment.
+
+Полный repository frontier также сохраняет VIG-01A и VIG-10-03..07. VIG-01A
+проверяет logging-specific PERF-01, а VIG-10-03..07 относятся к Stage 5 и не
+создают отсутствующий HTTP integration path.
 
 ## Не входит в первый production increment
 

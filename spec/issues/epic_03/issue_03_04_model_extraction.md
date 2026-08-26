@@ -1,11 +1,11 @@
 # VIG-03-04: Сборка PolicyContext из нормализованных данных
 
-**Статус:** Draft  
+**Статус:** Ready for implementation  
 **Epic:** [EPIC-03](../../epics/epic_03_policy_context_extraction.md)  
 **Ветка:** Context assembly  
 **Зависит от:** [VIG-03-01](issue_03_01_context_contract.md), [VIG-03-02](issue_03_02_url_normalization.md), [VIG-03-03](issue_03_03_identity_extraction.md), [VIG-06-01](../epic_06/issue_06_01_protocol_contract.md)  
 **Блокирует:** [VIG-03-05](issue_03_05_response_handoff.md)  
-**Оценка после уточнения:** 2-3 инженерных дня
+**Оценка:** 2-3 инженерных дня
 
 ## Результат
 
@@ -27,18 +27,22 @@ events или Batch records. Все извлечения из этих исто�
   а не выводится из nullable-полей или exception message.
 - Результат не зависит от `PolicyProvider` и не содержит transport types.
 
-## Требует решения
+## Нормативный input contract
 
-- Точный provider-neutral attributes contract EPIC-06.
-- Представление missing и invalid protocol-derived attributes.
-- Инварианты `PolicyContext` и typed result сборки.
+- EPIC-06 передаёт immutable `NormalizedProtocolAttributes` с единственным
+  полем `model`; arbitrary attributes map отсутствует.
+- Successful attributes обязаны содержать exact decoded non-blank model.
+  Missing/blank model и contradictory phase дают typed safe assembly failure.
+- Assembler принимает только normalized URL, normalized identity, explicit
+  phase и normalized attributes. Target остается existing immutable
+  `PolicyContext` EPIC-04.
 
 ## Тестовый seam
 
 Table-driven pure unit tests с синтетическими normalized inputs, без Armeria,
 JSON parser и сетевых вызовов.
 
-## Критерии готовности после уточнения
+## Критерии приёмки
 
 - [ ] Одинаковые normalized inputs дают структурно одинаковый context.
 - [ ] Model и другие protocol-derived значения переносятся без повторного

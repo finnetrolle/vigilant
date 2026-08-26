@@ -1,6 +1,6 @@
 # VIG-06-01: Контракт разбора LLM-сообщений
 
-**Статус:** Draft  
+**Статус:** Done  
 **Epic:** [EPIC-06](../../epics/epic_06_llm_message_parsing.md)  
 **Ветка:** Protocol contract and supported surface  
 **Зависит от:** нет  
@@ -113,34 +113,56 @@
   читает source, но result не содержит raw или reconstructed body. Unmodified
   forwarding использует original source.
 
-## Решения, которые нужно закрыть
+## Закрывающие решения для первого production increment
 
-1. Protocol-specific semantic field maps для request и response.
-2. Поведение unknown keyword внутри model-visible JSON Schema. Решение
-   отложено без default; schema-walker implementation остаётся `Draft`.
-3. Точные result boundaries и terminal event names для Responses и Chat
-   Completions в non-streaming и SSE режимах. Canonical source, deduplication
-   и mismatch result для повторных final snapshots отложены без default; SSE
-   adapter implementations остаются `Draft`.
-4. Граница с windowing capability, bounded parsing state, spooling и hard
-   resource exhaustion.
-5. Reverse-mapping contract отдельного rewriter для адресной модификации
-   original source.
+1. Активная surface имеет ровно один operation descriptor: `POST`, normalized
+   path `/v1/chat/completions`, media type `application/json`, direction
+   `REQUEST`, contract snapshot `openai-openapi 2.3.0` на commit
+   `1665a18fe20217c989c66dd73888345c6e4eb63c`, проверенный `2026-08-26`.
+   `stream=true` не меняет request parser: upstream response остаётся
+   streaming pass-through без inspection.
+2. Request field map зафиксирована в EPIC-06. Она покрывает message content,
+   message/tool labels, tool arguments/results, custom-tool grammar,
+   predicted content и model-visible JSON Schema. Остальные известные root
+   properties являются metadata/control fields и не становятся fragments.
+3. Unknown additional property известного object сохраняется только в
+   original source и не добавляется в normalized view. Unknown role, content
+   part или tool discriminator возвращает `AMBIGUOUS_CONTENT`. Unknown JSON
+   Schema keyword с `null`, boolean или number игнорируется как additive
+   constraint; keyword со string, object или array возвращает
+   `AMBIGUOUS_CONTENT`, потому что может скрывать model-visible text.
+4. Complete bounded request source является единственной единицей parse.
+   Parser не владеет source, не replay-ит его и не запускает windowing.
+   Source больше configured per-request limit отклоняется до parser; parser
+   дополнительно ограничивает nesting depth и число normalized fragments и
+   возвращает `UNSUPPORTED_SCHEMA` при превышении structural budget.
+5. Parse result содержит decoded fragments и opaque protocol locators, но не
+   byte ranges encoded JSON. В первом increment все reactions равны `ALLOW`,
+   поэтому rewriter не публикуется. Будущий `MASK`/`REMOVE` потребует отдельный
+   contract, который патчит original source по locator и сохраняет все
+   нецелевые bytes; decoded UTF-8 offsets нельзя использовать как JSON byte
+   offsets.
+6. Chat Completions response, SSE parsing, Responses API и schema evolution
+   за пределами pinned snapshot остаются явным future scope EPIC-06. Для них
+   нет default terminal/canonical/mismatch semantics, и они не блокируют
+   independently deliverable request parser первого increment.
 
-## Критерии готовности draft
+## Критерии готовности
 
-- [ ] Все пять оставшихся групп решений имеют один выбранный вариант и
+- [x] Все contract decision groups имеют один выбранный вариант и
   rationale.
-- [ ] EPIC-06 не содержит конфликтующих или устаревших open decisions.
-- [ ] Граница с EPIC-02, EPIC-03 и EPIC-04 не дублирует ответственность.
-- [ ] Protocol contract следует schema-tolerant, lossless и strict
+- [x] EPIC-06 не содержит конфликтующих или устаревших open decisions для
+  активной request surface.
+- [x] Граница с EPIC-02, EPIC-03 и EPIC-04 не дублирует ответственность.
+- [x] Protocol contract следует schema-tolerant, lossless и strict
   inspectability principle проекта с согласованным узким исключением для
   schema-recognized non-text и provider-opaque content.
-- [ ] Созданы независимо исполняемые issues размером не более пяти
-  инженерных дней каждая.
-- [ ] Для каждой implementation issue заданы test seam, edge cases и
+- [x] Создана независимо исполняемая
+  [VIG-06-02](issue_06_02_chat_completions_request_parser.md) размером не более
+  пяти инженерных дней.
+- [x] Для implementation issue заданы test seam, edge cases и
   non-goals.
-- [ ] EPIC-06 и все готовые implementation issues имеют ambiguity aggregate
+- [x] EPIC-06 и готовая implementation issue имеют ambiguity aggregate
   не выше `0.3`.
 
 ## Не входит
@@ -152,12 +174,10 @@ Production parser, HTTP integration, policy execution, detector execution и
 
 ```text
 Ambiguity Report:
-  Goals:        0.05
-  Acceptance:   0.20
-  Boundaries:   0.15
-  Alternatives: 0.35
-  Assumptions:  0.35
-  Aggregate:    0.22
+  Goals:        0.0   ✓ active request outcome fixed
+  Acceptance:   0.10  ✓ examples and stable results fixed
+  Boundaries:   0.05  ✓ source, windowing and HTTP integration separated
+  Alternatives: 0.10  ✓ unknown-schema and rewriter behavior selected
+  Assumptions:  0.15  ✓ snapshot is pinned and future surfaces are explicit
+  Aggregate:    0.08  ✓ below threshold (0.3 issue)
 ```
-
-Оставить `Draft` до закрытия перечисленных решений.
