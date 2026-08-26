@@ -1,4 +1,100 @@
-# PERF-01: результат полного прогона 2026-08-22
+# PERF-01: история результатов
+
+## Полный прогон 2026-08-26
+
+### Вердикт
+
+**PASS: gateway стабилен, PERF-01 подтверждён.**
+
+Неизменённый full profile завершил все 840 000 запросов без ошибок. Direct и
+proxy measurement обработали по 240 000 запросов при 2 000 RPS. Gateway с
+`-Xms512m -Xmx512m` не получил `OutOfMemoryError`, не потерял соединения и
+сохранил bounded live heap после warm-up.
+
+### Измеренные числа
+
+| Path/profile | Успешно | Запланировано | Успешных RPS | Success | p50 | p95 | p99 | max |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| direct / non-streaming | 192 000 | 192 000 | 1 600.0 | 100.00% | 1 ms | 1 ms | 1 ms | 45 ms |
+| direct / streaming | 48 000 | 48 000 | 400.0 | 100.00% | 3 ms | 4 ms | 4 ms | 47 ms |
+| direct / combined | 240 000 | 240 000 | 2 000.0 | 100.00% | 1 ms | 4 ms | 4 ms | 47 ms |
+| proxy / non-streaming | 192 000 | 192 000 | 1 600.0 | 100.00% | 1 ms | 1 ms | 1 ms | 41 ms |
+| proxy / streaming | 48 000 | 48 000 | 400.0 | 100.00% | 4 ms | 4 ms | 4 ms | 40 ms |
+| proxy / combined | 240 000 | 240 000 | 2 000.0 | 100.00% | 1 ms | 4 ms | 4 ms | 41 ms |
+
+`proxy_overhead p99 = 4 ms - 4 ms = 0 ms`, поэтому требование
+`proxy_overhead p99 <= 2 ms` выполнено на этом стенде.
+
+### Root cause исходного OOM
+
+`responseIdleTimeoutDecorator` сбрасывал upstream response timeout на каждом
+`ResponseHeaders` и `HttpData`. Armeria закрывала внутренний
+`HttpResponseWrapper` и отменяла его timeout до того, как последний data object
+проходил через внешний `peekData`. Последний callback снова планировал timeout
+на 300 s, но последующего completion cleanup уже не было. До срабатывания этой
+задачи каждый успешный exchange удерживал scheduled task, client/server request
+contexts и оба request logs.
+
+Исходный диагностический RED при 2 000 RPS и heap 512 MiB повторил OOM. Перед
+collapse forced-GC histogram показывал live heap `230 625 888` bytes и линейное
+удержание завершённых exchanges:
+
+| Класс | Live instances до fix |
+|---|---:|
+| `DefaultClientRequestContext` | 23 672 |
+| `DefaultServiceRequestContext` | 23 672 |
+| `DefaultRequestLog` | 47 344 |
+| `ScheduledFutureTask` | 23 745 |
+
+Причинность дополнительно проверена A/B diagnostic profile: только уменьшение
+response timeout с 300 s до 1 s позволило тому же gateway обработать 100 000
+proxy requests без ошибок. После GC осталось примерно одна секунда трафика:
+1 932 client contexts, 1 932 server contexts и 3 864 request logs. Это был
+диагностический эксперимент, а не product fix.
+
+Исправление сохраняет timeout первого объекта и idle gap между объектами, но
+явно очищает deadline после полного consumption response, то есть после
+последнего `peekData`. Focused production-process regression с heap 64 MiB и
+timeout 30 s до fix завершался `OutOfMemoryError` на batch 54, а после fix
+обработал все 12 800 запросов и сохранил readiness.
+
+### Bounded-memory evidence после fix
+
+Во время полного run снимались forced-GC class histograms без payload и
+headers. Два snapshots разделены полным proxy warm-up и десятками тысяч
+measurement requests:
+
+| Точка | Live heap | Client ctx | Server ctx | Request logs | Scheduled tasks |
+|---|---:|---:|---:|---:|---:|
+| proxy warm-up | 20 736 432 bytes | 3 | 3 | 6 | 84 |
+| после full proxy warm-up | 20 786 656 bytes | 1 | 1 | 2 | 96 |
+
+Live set не растёт вместе с числом завершённых requests. Forced-GC safepoints
+могли повлиять на единичный `max`, но formal p99 остался 4 ms для обоих путей.
+
+### Профиль и стенд
+
+- Run UTC: `2026-08-26T07:04:22Z` - `2026-08-26T07:12:27Z`.
+- Git revision: `cafce8b1884f35dccc17346b005e42d2046779c3`, worktree dirty.
+- Target: 2 000 RPS отдельно для direct и proxy.
+- Ramp warm-up: 60 s; steady-state warm-up: 60 s; measurement: 120 s.
+- Gap: 5 s; distribution: 80% non-streaming / 20% streaming.
+- Gatling connection pool: shared, максимум 64 соединения на host.
+- Request body: 1 024 bytes; non-streaming response: 4 096 bytes.
+- Streaming response: 4 chunks по 1 024 bytes, интервал 1 ms.
+- Upstream и gateway: отдельные JVM-процессы, loopback network.
+- Gateway/upstream heap: `-Xms512m -Xmx512m`; load-generator heap: 2 GiB.
+- OS: macOS 26.3.1, arm64; CPU: Apple M3 Max, 14 logical processors.
+- Physical memory: 36.0 GiB; Gatling: 3.15.1; load generator: JDK 21;
+  gateway и upstream: JDK 25.
+
+Команда: `./gradlew perfTest`. Generated summary сохранён как
+`build/reports/perf-01/perf-01-20260826-070422.md`, Gatling HTML report как
+`build/reports/gatling/perfloadsimulation-20260826070422760/index.html`.
+`build/` не хранится в Git, поэтому воспроизводимые параметры, root cause и
+значимые evidence counts зафиксированы здесь.
+
+## Полный прогон 2026-08-22
 
 ## Вердикт
 

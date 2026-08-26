@@ -5,19 +5,15 @@ import com.linecorp.armeria.common.HttpHeaderNames
 import com.linecorp.armeria.common.HttpResponse
 import com.linecorp.armeria.common.HttpStatus
 import io.opentelemetry.sdk.metrics.SdkMeterProvider
-import io.vigilant.gateway.GatewayTestFixture
 import io.vigilant.gateway.AppComponent
-import io.vigilant.gateway.withTestPolicyConfiguration
+import io.vigilant.gateway.GatewayProcessFixture
+import io.vigilant.gateway.GatewayTestFixture
 import io.vigilant.gateway.config.OtlpSettings
 import io.vigilant.gateway.proxy.BypassProxyService
-import java.io.IOException
 import java.net.URI
-import java.net.ServerSocket
 import java.time.Duration
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
-import kotlin.concurrent.thread
-import kotlin.random.Random
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -76,18 +72,14 @@ class OtlpMetricsExportTest {
     fun `production gateway exports proxy metrics on shutdown`() {
         val collector = startOtlpCollector()
         val upstream = fixture.startServer { HttpResponse.of(HttpStatus.OK) }
-        val gatewayPort = reserveGatewayPort()
-        val process = launchGateway(fixture.serverUri(upstream), collector.uri, gatewayPort)
-        val output = StringBuilder()
-        val outputReader = thread(name = "metrics-gateway-output") {
-            process.inputStream.bufferedReader().forEachLine { line ->
-                synchronized(output) { output.append(line).append('\n') }
-            }
-        }
+        val gateway = GatewayProcessFixture.launch(
+            upstream = fixture.serverUri(upstream),
+            environment = mapOf("VIGILANT_OTLP_ENDPOINT" to collector.uri.toString()),
+        )
+        val process = gateway.process
         try {
-            awaitGateway(process, gatewayPort)
-            val response = WebClient.of("http://127.0.0.1:$gatewayPort")
-                .get("/v1/models")
+            val client = gateway.awaitServing("/healthz")
+            val response = client.get("/v1/models")
                 .aggregate()
                 .join()
             assertEquals(HttpStatus.OK, response.status())
@@ -98,16 +90,15 @@ class OtlpMetricsExportTest {
                 .plusSeconds(10)
             assertTrue(
                 process.waitFor(exitTimeout.toSeconds(), TimeUnit.SECONDS),
-                "gateway did not stop after SIGTERM; output: ${synchronized(output) { output.toString() }}",
+                "gateway did not stop after SIGTERM; output: ${gateway.output()}",
             )
             assertTrue(
                 collector.exports.any { it.path == "/v1/metrics" },
                 "production shutdown did not export metrics; paths: ${collector.exports.map { it.path }}; " +
-                    "output: ${synchronized(output) { output.toString() }}",
+                    "output: ${gateway.output()}",
             )
         } finally {
-            process.destroyForcibly()
-            outputReader.join(5_000)
+            gateway.close()
         }
     }
 
@@ -129,58 +120,6 @@ class OtlpMetricsExportTest {
         return OtlpCollector(exports, fixture.serverUri(server))
     }
 
-    /**
-     * Reserves a free listen port for the child gateway below the OS ephemeral
-     * range. Fixture servers bind OS-assigned ephemeral ports, so a port taken
-     * from that same range can be stolen between this call and the child JVM
-     * binding it; a verified non-ephemeral port cannot be handed out by the OS
-     * to another fixture server in that window.
-     */
-    private fun reserveGatewayPort(): Int {
-        while (true) {
-            val candidate = Random.nextInt(MIN_GATEWAY_PORT, MAX_GATEWAY_PORT)
-            try {
-                ServerSocket(candidate).use { return candidate }
-            } catch (_: IOException) {
-                // Port already taken by an unrelated local process; try another.
-            }
-        }
-    }
-
-    /** Starts the production gateway with one upstream and one common OTLP base endpoint. */
-    private fun launchGateway(upstream: URI, collector: URI, port: Int): Process =
-        ProcessBuilder(
-            "${System.getProperty("java.home")}/bin/java",
-            "-cp",
-            System.getProperty("java.class.path"),
-            "io.vigilant.gateway.MainKt",
-        ).redirectErrorStream(true)
-            .withTestPolicyConfiguration()
-            .apply {
-            environment().apply {
-                put("VIGILANT_UPSTREAM_URL", upstream.toString())
-                put("VIGILANT_PORT", port.toString())
-                put("VIGILANT_OTLP_ENDPOINT", collector.toString())
-            }
-        }.start()
-
-    /** Waits until the child gateway accepts health traffic or exits unexpectedly. */
-    private fun awaitGateway(process: Process, port: Int) {
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
-        var lastError: Exception? = null
-        while (System.nanoTime() < deadline) {
-            if (!process.isAlive) throw AssertionError("gateway exited before becoming ready")
-            try {
-                WebClient.of("http://127.0.0.1:$port").get("/healthz").aggregate().join()
-                return
-            } catch (error: Exception) {
-                lastError = error
-                Thread.sleep(100)
-            }
-        }
-        throw AssertionError("gateway did not become ready within 30 seconds", lastError)
-    }
-
     /** Reports whether [haystack] contains [needle] as an exact byte sequence. */
     private fun containsBytes(haystack: ByteArray, needle: ByteArray): Boolean {
         if (needle.isEmpty()) return true
@@ -195,8 +134,4 @@ class OtlpMetricsExportTest {
     /** Local collector endpoint and its captured exports. */
     private data class OtlpCollector(val exports: CopyOnWriteArrayList<OtlpExport>, val uri: URI)
 
-    private companion object {
-        const val MIN_GATEWAY_PORT = 1024
-        const val MAX_GATEWAY_PORT = 49152
-    }
 }

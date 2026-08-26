@@ -35,12 +35,16 @@ internal fun buildUpstreamWebClient(settings: UpstreamClientSettings): WebClient
  * requires: the configured response timeout is the maximum time to the first
  * received object plus the maximum idle gap between two received objects,
  * while the total duration of a legitimately long LLM stream stays unbounded.
- * Each reset is a single non-blocking deadline update on the event loop
- * (spec CONC-01..03).
+ * Each reset is a single non-blocking deadline update on the event loop. Once
+ * the response is fully consumed, the deadline is cleared after the last data
+ * callback so a completed exchange cannot retain its request context until the
+ * configured timeout expires (spec CONC-01..03).
  */
 private fun responseIdleTimeoutDecorator(responseTimeout: Duration): DecoratingHttpClientFunction =
     DecoratingHttpClientFunction { delegate, ctx, request ->
-        delegate.execute(ctx, request)
+        val response = delegate.execute(ctx, request)
             .peekHeaders { ctx.setResponseTimeout(TimeoutMode.SET_FROM_NOW, responseTimeout) }
             .peekData { ctx.setResponseTimeout(TimeoutMode.SET_FROM_NOW, responseTimeout) }
+        response.whenComplete().whenComplete { _, _ -> ctx.clearResponseTimeout() }
+        response
     }

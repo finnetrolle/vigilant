@@ -1,6 +1,6 @@
 # VIG-09-02: Подтверждение PERF-01 по p99
 
-**Статус:** Ready for implementation
+**Статус:** Done
 **Epic:** [EPIC-09](../../epics/epic_09_v0_architecture_closure.md)
 **Ветка:** Performance and capacity > PERF-01 p99 confirmation
 **Зависит от:** [VIG-09-01](issue_09_01_memory_stability.md)
@@ -21,18 +21,18 @@ run превышает SLO, минимальная профиль-guided опт�
 
 ## Критерии готовности
 
-- [ ] Run выполняет неизменённый full profile: 2 000 RPS, оба warm-up этапа,
+- [x] Run выполняет неизменённый full profile: 2 000 RPS, оба warm-up этапа,
   120 s measurement, 80/20 non-streaming/streaming и общий upstream baseline.
-- [ ] Direct и proxy paths завершают не менее 99% planned workload и не имеют
+- [x] Direct и proxy paths завершают не менее 99% planned workload и не имеют
   Gatling request failures, требующих исключения samples.
-- [ ] Измеренный `proxy_overhead p99` не превышает 2 ms.
-- [ ] Если потребовалась optimization, профиль до изменения показывает её
+- [x] Измеренный `proxy_overhead p99` не превышает 2 ms.
+- [x] Если потребовалась optimization, профиль до изменения показывает её
   вклад, а targeted test/benchmark устанавливает RED до production fix.
-- [ ] Full report фиксирует hardware, JVM, connections, payload sizes,
+- [x] Full report фиксирует hardware, JVM, connections, payload sizes,
   streaming profile, Git revision и memory settings по `PERF-06`.
-- [ ] `docs/perf-01-result.md` обновлён новым подтверждённым result без удаления
+- [x] `docs/perf-01-result.md` обновлён новым подтверждённым result без удаления
   истории предыдущего deviation.
-- [ ] `./gradlew build` проходит.
+- [x] `./gradlew build` проходит.
 
 ## Test/demo seam
 

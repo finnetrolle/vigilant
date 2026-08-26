@@ -82,6 +82,10 @@ final class PerfProcesses implements AutoCloseable {
         ProcessBuilder builder = process(command, logFile);
         builder.environment().put("VIGILANT_UPSTREAM_URL", profile.upstreamBaseUrl());
         builder.environment().put("VIGILANT_PORT", Integer.toString(profile.gatewayPort()));
+        builder.environment().put(
+            "VIGILANT_POLITICS_CONFIG",
+            profile.projectDirectory().resolve("politics.conf.example").toString()
+        );
         builder.environment().put("VIGILANT_OTLP_ENABLED", "false");
         builder.environment().put("VIGILANT_LOG_LEVEL", "WARN");
         return builder.start();

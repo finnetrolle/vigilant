@@ -2,7 +2,7 @@
 
 **ID:** `EPIC-09`
 **Тип:** Epic
-**Статус:** Ready for implementation
+**Статус:** In progress
 **Приоритет:** Critical
 **Суммарная оценка:** 19-29 инженерных дней
 **Связанные требования:** `PERF-01`, `PERF-06`, `PROXY-01`, `PROXY-02`, `PROXY-03`, `CONC-01`, разделы «Входит в v0» и «Поставка»
@@ -42,8 +42,8 @@ EPIC-09 v0 architecture closure
 
 ## Дочерние issues
 
-- [ ] [VIG-09-01: Стабильность памяти gateway при 2 000 RPS](../issues/epic_09/issue_09_01_memory_stability.md) - `Ready for implementation`
-- [ ] [VIG-09-02: Подтверждение PERF-01 по p99](../issues/epic_09/issue_09_02_perf01_latency.md) - `Ready for implementation`
+- [x] [VIG-09-01: Стабильность памяти gateway при 2 000 RPS](../issues/epic_09/issue_09_01_memory_stability.md) - `Done`
+- [x] [VIG-09-02: Подтверждение PERF-01 по p99](../issues/epic_09/issue_09_02_perf01_latency.md) - `Done`
 - [ ] [VIG-09-03: E2E request streaming и backpressure](../issues/epic_09/issue_09_03_request_backpressure.md) - `Ready for implementation`
 - [ ] [VIG-09-04: E2E response backpressure](../issues/epic_09/issue_09_04_response_backpressure.md) - `Ready for implementation`
 - [ ] [VIG-09-05: E2E connection pooling](../issues/epic_09/issue_09_05_connection_pooling.md) - `Ready for implementation`

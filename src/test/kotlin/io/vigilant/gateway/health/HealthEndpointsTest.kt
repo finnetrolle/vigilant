@@ -7,13 +7,11 @@ import com.linecorp.armeria.common.HttpStatus
 import com.linecorp.armeria.common.MediaType
 import com.linecorp.armeria.server.Server
 import io.vigilant.gateway.AppComponent
-import io.vigilant.gateway.withTestPolicyConfiguration
+import io.vigilant.gateway.GatewayProcessFixture
 import io.vigilant.gateway.proxy.BypassProxyService
 import java.net.URI
-import java.net.ServerSocket
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
-import kotlin.concurrent.thread
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -86,22 +84,16 @@ class HealthEndpointsTest {
         assertEquals(HttpStatus.OK, liveness.status())
     }
 
+    /** Verifies that production shutdown exposes draining readiness before the server closes. */
     @Test
     fun `graceful shutdown answers readyz with 503 before the gateway closes`() {
         val upstream = startServer {
             HttpResponse.of(HttpStatus.OK, MediaType.PLAIN_TEXT_UTF_8, "upstream")
         }
-        val gatewayPort = freePort()
-        val process = launchGateway(serverUri(upstream), gatewayPort)
-        val output = StringBuilder()
-        val reader = thread {
-            process.inputStream.bufferedReader().forEachLine { line ->
-                synchronized(output) { output.append(line).append('\n') }
-            }
-        }
+        val gateway = GatewayProcessFixture.launch(serverUri(upstream))
+        val process = gateway.process
         try {
-            awaitTraffic(process, gatewayPort)
-            val client = WebClient.of("http://127.0.0.1:$gatewayPort")
+            val client = gateway.awaitServing("/healthz")
 
             process.destroy()
             val deadline = System.nanoTime() + AppComponent.GRACEFUL_SHUTDOWN_QUIET_PERIOD.multipliedBy(2).toNanos()
@@ -117,7 +109,7 @@ class HealthEndpointsTest {
             assertTrue(
                 sawDraining,
                 "/readyz must answer 503 between the start of graceful shutdown and the actual close; " +
-                    "gateway output: ${synchronized(output) { output.toString() }}",
+                    "gateway output: ${gateway.output()}",
             )
             val exitTimeoutSeconds =
                 AppComponent.GRACEFUL_SHUTDOWN_TIMEOUT.plus(AppComponent.GRACEFUL_SHUTDOWN_QUIET_PERIOD).toSeconds()
@@ -126,8 +118,7 @@ class HealthEndpointsTest {
                 "gateway did not exit within $exitTimeoutSeconds seconds after SIGTERM",
             )
         } finally {
-            process.destroyForcibly()
-            reader.join(5_000)
+            gateway.close()
         }
     }
 
@@ -156,48 +147,6 @@ class HealthEndpointsTest {
         servers += this
         return this
     }
-
-    /**
-     * Launches the gateway application as a subprocess configured through
-     * environment variables.
-     */
-    private fun launchGateway(upstream: URI, port: Int): Process =
-        ProcessBuilder(
-            "${System.getProperty("java.home")}/bin/java",
-            "-cp",
-            System.getProperty("java.class.path"),
-            "io.vigilant.gateway.MainKt",
-        ).withTestPolicyConfiguration()
-            .apply {
-            environment().apply {
-                put("VIGILANT_UPSTREAM_URL", upstream.toString())
-                put("VIGILANT_PORT", port.toString())
-            }
-        }.start()
-
-    /**
-     * Waits until the freshly launched gateway accepts HTTP traffic, failing fast
-     * when the process exits before becoming ready.
-     */
-    private fun awaitTraffic(process: Process, port: Int) {
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
-        var lastError: Exception? = null
-        while (System.nanoTime() < deadline) {
-            if (!process.isAlive) {
-                throw AssertionError("gateway exited before becoming ready")
-            }
-            try {
-                WebClient.of("http://127.0.0.1:$port").get("/healthz").aggregate().join()
-                return
-            } catch (e: Exception) {
-                lastError = e
-                Thread.sleep(200)
-            }
-        }
-        throw AssertionError("gateway did not become ready within 30 seconds", lastError)
-    }
-
-    private fun freePort(): Int = ServerSocket(0).use { it.localPort }
 
     private fun serverUri(server: Server): URI =
         URI.create("http://127.0.0.1:${server.activeLocalPort()}")
