@@ -157,13 +157,12 @@ Production PII shadow proxy
 [VIG-09-02](issues/epic_09/issue_09_02_perf01_latency.md) подтвердил PERF-01.
 Оба hard gate имеют status `Done`.
 
-[VIG-09-03](issues/epic_09/issue_09_03_request_backpressure.md) также имеет
-status `Done` и доказывает request streaming/backpressure через E2E seam.
-Оставшиеся независимые issues EPIC-09 можно выполнять параллельно с contract
-и module work:
+[VIG-09-03](issues/epic_09/issue_09_03_request_backpressure.md) и
+[VIG-09-04](issues/epic_09/issue_09_04_response_backpressure.md) также имеют
+status `Done` и доказывают streaming/backpressure в обоих направлениях через
+E2E seams. Оставшиеся независимые issues EPIC-09 можно выполнять параллельно с
+contract и module work:
 
-- [VIG-09-04](issues/epic_09/issue_09_04_response_backpressure.md) - response
-  backpressure для остающегося pass-through response path;
 - [VIG-09-05](issues/epic_09/issue_09_05_connection_pooling.md) - upstream
   connection reuse;
 - [VIG-09-06](issues/epic_09/issue_09_06_malformed_upstream.md) - stable error
@@ -318,22 +317,21 @@ horizontal logging subsystem.
 Формально implementation-ready и без dependency blockers среди оставшихся
 work items Stage 0:
 
-- VIG-09-04;
 - VIG-09-05;
 - VIG-09-06;
 - VIG-09-07;
 - VIG-09-08.
 
-VIG-09-01, VIG-09-02 и VIG-09-03 имеют status `Done`. Полный repository
-frontier также содержит VIG-01A, VIG-10-01 и VIG-10-02. VIG-01A проверяет
-logging-specific PERF-01, а VIG-10-01 и VIG-10-02 roadmap относит к Stage 5:
-они не создают отсутствующий HTTP integration path.
+VIG-09-01..04 имеют status `Done`. Полный repository frontier также содержит
+VIG-01A, VIG-10-01 и VIG-10-02. VIG-01A проверяет logging-specific PERF-01, а
+VIG-10-01 и VIG-10-02 roadmap относит к Stage 5: они не создают отсутствующий
+HTTP integration path.
 
-Roadmap recommendation: продолжить с VIG-09-04, закрыв вторую сторону
-backpressure evidence до интеграции EPIC-08. VIG-03-01 и VIG-06-01 остаются
-`Draft` до внесения согласованных решений в их normative epics и повторного
-ambiguity gate. Planned leaves из этого документа не входят во frontier до
-публикации собственных issue-файлов.
+Roadmap recommendation: продолжить с VIG-09-08, закрыв ownership и bounded
+shutdown lifecycle до production changes следующих этапов. VIG-03-01 и
+VIG-06-01 остаются `Draft` до внесения согласованных решений в их normative
+epics и повторного ambiguity gate. Planned leaves из этого документа не входят
+во frontier до публикации собственных issue-файлов.
 
 ## Не входит в первый production increment
 

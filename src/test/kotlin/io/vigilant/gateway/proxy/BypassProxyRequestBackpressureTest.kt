@@ -63,8 +63,8 @@ class BypassProxyRequestBackpressureTest {
         val client = WebClient.builder(fixture.serverUri(gateway).toString())
             .responseTimeout(RESPONSE_TIMEOUT)
             .build()
-        val requestChunks = requestChunks()
-        val expectedBody = concatenate(requestChunks)
+        val requestChunks = orderedBinaryChunks(REQUEST_CHUNK_COUNT, REQUEST_CHUNK_SIZE)
+        val expectedBody = concatenateChunks(requestChunks)
         val publisher = DemandControlledPublisher()
         val request = HttpRequest.of(
             RequestHeaders.builder(HttpMethod.POST, "/v1/messages")
@@ -159,21 +159,6 @@ class BypassProxyRequestBackpressureTest {
         return nextChunk
     }
 
-    /** Builds non-sensitive binary chunks whose order changes their complete byte sequence. */
-    private fun requestChunks(): List<ByteArray> =
-        List(REQUEST_CHUNK_COUNT) { chunkIndex ->
-            ByteArray(REQUEST_CHUNK_SIZE) { byteIndex ->
-                ((chunkIndex * 31 + byteIndex) % 251).toByte()
-            }
-        }
-
-    /** Concatenates the source chunks into the independent expected request body. */
-    private fun concatenate(chunks: List<ByteArray>): ByteArray =
-        ByteArrayOutputStream(chunks.sumOf(ByteArray::size)).use { output ->
-            chunks.forEach(output::write)
-            output.toByteArray()
-        }
-
     /**
      * Reactive Streams publisher controlled by the test thread. It records
      * transport demand and emits a body object only when demand is available.
@@ -225,7 +210,7 @@ class BypassProxyRequestBackpressureTest {
                         }
                         if (elements == Long.MAX_VALUE) unboundedDemand.set(true)
                         largestDemand.getAndUpdate { current -> maxOf(current, elements) }
-                        demand.getAndUpdate { current -> addDemand(current, elements) }
+                        demand.getAndUpdate { current -> addDemandSaturated(current, elements) }
                     }
 
                     /** Records cancellation so the test cannot emit after transport shutdown. */
@@ -243,12 +228,6 @@ class BypassProxyRequestBackpressureTest {
                 if (current == 0L) return false
                 if (demand.compareAndSet(current, current - 1)) return true
             }
-        }
-
-        private companion object {
-            /** Saturating addition required by Reactive Streams demand accounting. */
-            fun addDemand(current: Long, added: Long): Long =
-                if (current > Long.MAX_VALUE - added) Long.MAX_VALUE else current + added
         }
     }
 
