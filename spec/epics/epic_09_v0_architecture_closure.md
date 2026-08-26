@@ -48,7 +48,7 @@ EPIC-09 v0 architecture closure
 - [x] [VIG-09-04: E2E response backpressure](../issues/epic_09/issue_09_04_response_backpressure.md) - `Done`
 - [x] [VIG-09-05: E2E connection pooling](../issues/epic_09/issue_09_05_connection_pooling.md) - `Done`
 - [x] [VIG-09-06: Некорректный upstream HTTP как stable proxy error](../issues/epic_09/issue_09_06_malformed_upstream.md) - `Done`
-- [ ] [VIG-09-07: Dynamic hop-by-hop response headers](../issues/epic_09/issue_09_07_response_connection_headers.md) - `Ready for implementation`
+- [x] [VIG-09-07: Dynamic hop-by-hop response headers](../issues/epic_09/issue_09_07_response_connection_headers.md) - `Done`
 - [x] [VIG-09-08: Полный graceful shutdown lifecycle](../issues/epic_09/issue_09_08_shutdown_lifecycle.md) - `Done`
 
 Жёсткая зависимость внутри epic одна: VIG-09-02 зависит от VIG-09-01, потому

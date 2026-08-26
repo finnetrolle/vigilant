@@ -5,22 +5,11 @@ import com.linecorp.armeria.common.HttpStatus
 import io.opentelemetry.api.common.AttributeKey.stringKey
 import io.opentelemetry.sdk.metrics.SdkMeterProvider
 import io.vigilant.gateway.GatewayTestFixture
+import io.vigilant.gateway.RawHttp1TestUpstream
 import io.vigilant.gateway.assertUpstreamFailureWarning
 import io.vigilant.gateway.proxy.BypassProxyService
-import io.vigilant.gateway.readBoundedHttp1RequestHead
 import io.vigilant.gateway.renderForSecretScan
-import java.io.BufferedInputStream
-import java.io.BufferedOutputStream
-import java.net.InetAddress
-import java.net.InetSocketAddress
-import java.net.ServerSocket
-import java.net.Socket
-import java.net.SocketException
-import java.net.URI
-import java.nio.charset.StandardCharsets
 import java.time.Duration
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -40,13 +29,13 @@ class MalformedUpstreamResponseTest {
         .registerMetricReader(reader)
         .build()
     private val meter = meterProvider.get("io.vigilant.gateway.malformed-upstream-test")
-    private val upstreams = mutableListOf<MalformedHttpUpstream>()
+    private val upstreams = mutableListOf<RawHttp1TestUpstream>()
 
     /** Closes gateways, raw sockets, and the metrics SDK after every scenario. */
     @AfterTest
     fun closeResources() {
         fixture.close()
-        upstreams.asReversed().forEach(MalformedHttpUpstream::close)
+        upstreams.asReversed().forEach(RawHttp1TestUpstream::close)
         meterProvider.close()
     }
 
@@ -56,7 +45,10 @@ class MalformedUpstreamResponseTest {
      */
     @Test
     fun `malformed upstream status line becomes safe observable transport failure`() {
-        val upstream = MalformedHttpUpstream().also(upstreams::add)
+        val upstream = RawHttp1TestUpstream(
+            diagnosticName = "malformed",
+            applicationResponse = MALFORMED_HTTP_RESPONSE,
+        ).also(upstreams::add)
         val logEvents = fixture.attachAppenderTo(BypassProxyService::class.java)
         val armeriaEvents = fixture.attachAppenderTo(ARMERIA_LOGGER_NAME)
         val gateway = fixture.startMetricsGateway(upstream.uri, meter)
@@ -101,98 +93,12 @@ class MalformedUpstreamResponseTest {
         }
     }
 
-    /**
-     * Minimal raw HTTP/1.1 upstream that handles Armeria protocol probing and
-     * answers every application request with a deterministic invalid status.
-     */
-    private class MalformedHttpUpstream : AutoCloseable {
-        private val closed = AtomicBoolean()
-        private val failure = AtomicReference<Throwable>()
-        private val serverSocket = ServerSocket().apply {
-            reuseAddress = true
-            bind(InetSocketAddress(InetAddress.getByName(LOOPBACK_ADDRESS), 0))
-        }
-        private val acceptThread = Thread.ofVirtual()
-            .name("malformed-upstream-accept")
-            .start(::acceptConnections)
-
-        /** Address used by the gateway's real Armeria upstream client. */
-        val uri: URI = URI.create("http://$LOOPBACK_ADDRESS:${serverSocket.localPort}")
-
-        /** Stops the accept loop and surfaces unexpected raw-server failures. */
-        override fun close() {
-            closed.set(true)
-            serverSocket.close()
-            acceptThread.join(THREAD_JOIN_TIMEOUT.toMillis())
-            failure.get()?.let { throw AssertionError("raw malformed upstream failed", it) }
-        }
-
-        /** Accepts protocol probes and application requests until test teardown. */
-        private fun acceptConnections() {
-            while (!closed.get()) {
-                try {
-                    serverSocket.accept().use(::handleConnection)
-                } catch (exception: SocketException) {
-                    if (!closed.get()) failure.compareAndSet(null, exception)
-                } catch (exception: Exception) {
-                    failure.compareAndSet(null, exception)
-                }
-            }
-        }
-
-        /** Handles an HTTP/1.1 probe followed by zero or more application requests. */
-        private fun handleConnection(socket: Socket) {
-            socket.tcpNoDelay = true
-            val input = BufferedInputStream(socket.getInputStream())
-            val output = BufferedOutputStream(socket.getOutputStream())
-            var continueReading = true
-            while (!closed.get() && continueReading) {
-                val requestHead = input.readBoundedHttp1RequestHead() ?: break
-                val requestLine = requestHead.substringBefore("\r\n")
-                when (requestLine) {
-                    HTTP2_PREFACE_REQUEST_LINE -> continueReading = false
-                    HTTP1_OPTIONS_REQUEST_LINE -> writeProbeResponse(output)
-                    else -> {
-                        require(requestLine.endsWith(" HTTP/1.1")) {
-                            "unexpected request-line shape"
-                        }
-                        writeMalformedResponse(output)
-                        continueReading = false
-                    }
-                }
-            }
-        }
-
-        /** Returns a valid empty response to Armeria's HTTP/1.1 protocol probe. */
-        private fun writeProbeResponse(output: BufferedOutputStream) {
-            output.write(
-                "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n"
-                    .toByteArray(StandardCharsets.US_ASCII),
-            )
-            output.flush()
-        }
-
-        /** Writes a status code that no HTTP parser can interpret as valid. */
-        private fun writeMalformedResponse(output: BufferedOutputStream) {
-            output.write(
-                "HTTP/1.1 20X $MALFORMED_WIRE_SENTINEL\r\n\r\n"
-                    .toByteArray(StandardCharsets.US_ASCII),
-            )
-            output.flush()
-        }
-
-        private companion object {
-            const val LOOPBACK_ADDRESS = "127.0.0.1"
-            const val HTTP2_PREFACE_REQUEST_LINE = "PRI * HTTP/2.0"
-            const val HTTP1_OPTIONS_REQUEST_LINE = "OPTIONS * HTTP/1.1"
-            val THREAD_JOIN_TIMEOUT: Duration = Duration.ofSeconds(2)
-        }
-    }
-
     private companion object {
         const val TRANSPORT_ERROR_METRIC = "vigilant.proxy.transport_errors"
         const val ARMERIA_LOGGER_NAME = "com.linecorp.armeria"
         const val REQUEST_SENTINEL = "request-query-secret-7E2B"
         const val MALFORMED_WIRE_SENTINEL = "malformed-wire-secret-4A91"
+        const val MALFORMED_HTTP_RESPONSE =
+            "HTTP/1.1 20X $MALFORMED_WIRE_SENTINEL\r\n\r\n"
     }
 }
