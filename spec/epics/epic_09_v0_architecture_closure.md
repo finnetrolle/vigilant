@@ -44,7 +44,7 @@ EPIC-09 v0 architecture closure
 
 - [x] [VIG-09-01: Стабильность памяти gateway при 2 000 RPS](../issues/epic_09/issue_09_01_memory_stability.md) - `Done`
 - [x] [VIG-09-02: Подтверждение PERF-01 по p99](../issues/epic_09/issue_09_02_perf01_latency.md) - `Done`
-- [ ] [VIG-09-03: E2E request streaming и backpressure](../issues/epic_09/issue_09_03_request_backpressure.md) - `Ready for implementation`
+- [x] [VIG-09-03: E2E request streaming и backpressure](../issues/epic_09/issue_09_03_request_backpressure.md) - `Done`
 - [ ] [VIG-09-04: E2E response backpressure](../issues/epic_09/issue_09_04_response_backpressure.md) - `Ready for implementation`
 - [ ] [VIG-09-05: E2E connection pooling](../issues/epic_09/issue_09_05_connection_pooling.md) - `Ready for implementation`
 - [ ] [VIG-09-06: Некорректный upstream HTTP как stable proxy error](../issues/epic_09/issue_09_06_malformed_upstream.md) - `Ready for implementation`

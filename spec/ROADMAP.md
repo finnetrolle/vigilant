@@ -152,16 +152,16 @@ Production PII shadow proxy
 
 ### Stage 0: стабилизировать runtime foundation
 
-Первым приоритетом остаётся
-[VIG-09-01](issues/epic_09/issue_09_01_memory_stability.md). Его OOM finding
-должен быть локализован и устранён до production milestone. Это hard gate для
-release evidence, но не blocker для независимой contract и module work.
+[VIG-09-01](issues/epic_09/issue_09_01_memory_stability.md) локализовал и
+устранил OOM finding, а
+[VIG-09-02](issues/epic_09/issue_09_02_perf01_latency.md) подтвердил PERF-01.
+Оба hard gate имеют status `Done`.
 
-Остальные независимые issues EPIC-09 можно выполнять параллельно с contract и
-module work:
+[VIG-09-03](issues/epic_09/issue_09_03_request_backpressure.md) также имеет
+status `Done` и доказывает request streaming/backpressure через E2E seam.
+Оставшиеся независимые issues EPIC-09 можно выполнять параллельно с contract
+и module work:
 
-- [VIG-09-03](issues/epic_09/issue_09_03_request_backpressure.md) - request
-  streaming и backpressure evidence;
 - [VIG-09-04](issues/epic_09/issue_09_04_response_backpressure.md) - response
   backpressure для остающегося pass-through response path;
 - [VIG-09-05](issues/epic_09/issue_09_05_connection_pooling.md) - upstream
@@ -173,10 +173,8 @@ module work:
 - [VIG-09-08](issues/epic_09/issue_09_08_shutdown_lifecycle.md) - shutdown
   ownership для server, upstream client, telemetry и будущих inspection
   resources.
-
-После VIG-09-01 выполняется
-[VIG-09-02](issues/epic_09/issue_09_02_perf01_latency.md). Existing PERF-01
-contract остаётся нормативным отдельно от advisory inspection baseline.
+Existing PERF-01 contract остаётся нормативным отдельно от advisory inspection
+baseline.
 
 ### Stage 1: закрыть contract decisions
 
@@ -317,22 +315,22 @@ horizontal logging subsystem.
 
 ## Текущий roadmap frontier
 
-Формально implementation-ready и без dependency blockers среди work items,
-входящих в Stage 0:
+Формально implementation-ready и без dependency blockers среди оставшихся
+work items Stage 0:
 
-- VIG-09-01;
-- VIG-09-03;
 - VIG-09-04;
 - VIG-09-05;
 - VIG-09-06;
 - VIG-09-07;
 - VIG-09-08.
 
-Полный repository frontier также содержит VIG-10-01 и VIG-10-02. Roadmap
-относит их к Stage 5, потому что они улучшают detector quality, но не создают
-отсутствующий HTTP integration path.
+VIG-09-01, VIG-09-02 и VIG-09-03 имеют status `Done`. Полный repository
+frontier также содержит VIG-01A, VIG-10-01 и VIG-10-02. VIG-01A проверяет
+logging-specific PERF-01, а VIG-10-01 и VIG-10-02 roadmap относит к Stage 5:
+они не создают отсутствующий HTTP integration path.
 
-Roadmap recommendation: начать с VIG-09-01. VIG-03-01 и VIG-06-01 остаются
+Roadmap recommendation: продолжить с VIG-09-04, закрыв вторую сторону
+backpressure evidence до интеграции EPIC-08. VIG-03-01 и VIG-06-01 остаются
 `Draft` до внесения согласованных решений в их normative epics и повторного
 ambiguity gate. Planned leaves из этого документа не входят во frontier до
 публикации собственных issue-файлов.

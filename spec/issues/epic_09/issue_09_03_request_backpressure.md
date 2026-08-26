@@ -1,6 +1,6 @@
 # VIG-09-03: E2E request streaming и backpressure
 
-**Статус:** Ready for implementation
+**Статус:** Done
 **Epic:** [EPIC-09](../../epics/epic_09_v0_architecture_closure.md)
 **Ветка:** Streaming verifiability > request streaming and backpressure
 **Зависит от:** нет
@@ -21,19 +21,19 @@ finding AR-03.
 
 ## Критерии готовности
 
-- [ ] Client отправляет request body несколькими управляемыми chunks через
+- [x] Client отправляет request body несколькими управляемыми chunks через
   реальный gateway и upstream.
-- [ ] Upstream получает первый body data до отправки последнего client chunk;
+- [x] Upstream получает первый body data до отправки последнего client chunk;
   тест падает при полной request aggregation.
-- [ ] Slow upstream consumer ограничивает demand/число buffered chunks в
+- [x] Slow upstream consumer ограничивает demand/число buffered chunks в
   детерминированном bound вместо `Long.MAX_VALUE` relay.
-- [ ] Полный byte content и порядок сохраняются; transport coalescing не
+- [x] Полный byte content и порядок сохраняются; transport coalescing не
   трактуется как нарушение логических chunk boundaries.
-- [ ] Test использует deadline-bounded synchronization без широких sleep-only
+- [x] Test использует deadline-bounded synchronization без широких sleep-only
   assertions и не логирует body sentinels.
-- [ ] Production code не меняется. Если test выявляет defect, fix создаётся
+- [x] Production code не меняется. Если test выявляет defect, fix создаётся
   отдельной issue с RED-first TDD.
-- [ ] Focused test и `./gradlew build` проходят.
+- [x] Focused test и `./gradlew build` проходят.
 
 ## Test/demo seam
 
