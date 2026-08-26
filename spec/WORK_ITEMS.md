@@ -102,7 +102,7 @@ Issue является листом mind map, если:
 | [EPIC-06: Разбор LLM-сообщений и извлечение payload](epics/epic_06_llm_message_parsing.md) | `Draft` | 0/1 | после закрытия протокольного контракта |
 | [EPIC-07: Windowed payload processing](epics/epic_07_windowed_payload_processing.md) | `Draft` | 0/1 | после закрытия windowing-контракта |
 | [EPIC-08: Lossless message spooling and replay](epics/epic_08_message_spooling_replay.md) | `Draft` | 0/1 | после закрытия spool-контракта |
-| [EPIC-09: Закрытие архитектурных рисков v0](epics/epic_09_v0_architecture_closure.md) | `In progress` | 4/8 | 8-13 дней |
+| [EPIC-09: Закрытие архитектурных рисков v0](epics/epic_09_v0_architecture_closure.md) | `In progress` | 5/8 | 6-10 дней |
 | [EPIC-10: Повышение качества детерминированного PII-распознавания](epics/epic_10_pii_detection_quality.md) | `Ready for implementation` | 0/8 | 21-29 дней |
 
 ## Как закрывать work item
