@@ -401,18 +401,18 @@ Collector должен:
 
 ## Критерии приёмки
 
-- [ ] `slf4j-simple` удалён, Logback Classic — единственный SLF4J provider.
-- [ ] Приложение имеет только один logging sink: `stdout`.
-- [ ] Каждая stdout-запись является валидной JSONL-записью.
-- [ ] Root logger подключён только к bounded `ASYNC_STDOUT`.
-- [ ] `neverBlock=true`; медленный sink не блокирует producer/event-loop test thread.
-- [ ] Политика потери событий при threshold/full queue проверена тестом.
-- [ ] `TrafficLog`, `PacketSnapshot` и все body/header taps удалены.
-- [ ] В логах отсутствуют bodies, query, auth headers, cookies и sentinel secrets.
-- [ ] File appender и OTLP exporter отсутствуют в application runtime.
-- [ ] `AppConfig`, Metro graph и startup flow не усложнены logging sink-конфигурацией.
-- [ ] В README описаны Docker non-blocking buffer, rotation limits и внешний Collector.
-- [ ] Unit/integration tests проходят.
+- [x] `slf4j-simple` удалён, Logback Classic — единственный SLF4J provider.
+- [x] Приложение имеет только один logging sink: `stdout`.
+- [x] Каждая stdout-запись является валидной JSONL-записью.
+- [x] Root logger подключён только к bounded `ASYNC_STDOUT`.
+- [x] `neverBlock=true`; медленный sink не блокирует producer/event-loop test thread.
+- [x] Политика потери событий при threshold/full queue проверена тестом.
+- [x] `TrafficLog`, `PacketSnapshot` и все body/header taps удалены.
+- [x] В логах отсутствуют bodies, query, auth headers, cookies и sentinel secrets.
+- [x] File appender и OTLP exporter отсутствуют в application runtime.
+- [x] `AppConfig`, Metro graph и startup flow не усложнены logging sink-конфигурацией.
+- [x] В README описаны Docker non-blocking buffer, rotation limits и внешний Collector.
+- [x] Unit/integration tests проходят.
 
 Нагрузочные критерии приёмки - в `issue_01A_benchmark.md`.
 

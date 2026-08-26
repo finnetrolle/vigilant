@@ -61,6 +61,14 @@ val perfContractTestSourceSet = sourceSets.create("perfContractTest") {
     compileClasspath += gatlingSourceSet.get().output + sourceSets.test.get().compileClasspath
     runtimeClasspath += output + compileClasspath + sourceSets.test.get().runtimeClasspath
 }
+val workItemValidatorSourceSet = sourceSets.create("workItemValidator") {
+    java.srcDir("src/workItemValidator/java")
+}
+val workItemValidatorTestSourceSet = sourceSets.create("workItemValidatorTest") {
+    java.srcDir("src/workItemValidatorTest/java")
+    compileClasspath += workItemValidatorSourceSet.output + sourceSets.test.get().compileClasspath
+    runtimeClasspath += output + compileClasspath + sourceSets.test.get().runtimeClasspath
+}
 
 kotlin {
     jvmToolchain(25)
@@ -163,12 +171,37 @@ tasks.named<JavaCompile>(perfContractTestSourceSet.compileJavaTaskName) {
     options.release = 21
 }
 
+tasks.named<JavaCompile>(workItemValidatorSourceSet.compileJavaTaskName) {
+    options.release = 21
+}
+
+tasks.named<JavaCompile>(workItemValidatorTestSourceSet.compileJavaTaskName) {
+    options.release = 21
+}
+
 val perfContractTest = tasks.register<Test>("perfContractTest") {
     testClassesDirs = perfContractTestSourceSet.output.classesDirs
     classpath = perfContractTestSourceSet.runtimeClasspath
     useJUnitPlatform()
     group = "verification"
     description = "Runs fast PERF-01 scenario contract tests without load."
+}
+
+val workItemValidatorTest = tasks.register<Test>("workItemValidatorTest") {
+    testClassesDirs = workItemValidatorTestSourceSet.output.classesDirs
+    classpath = workItemValidatorTestSourceSet.runtimeClasspath
+    useJUnitPlatform()
+    group = "verification"
+    description = "Runs fixture tests for the project work-item graph validator."
+}
+
+val validateWorkItems = tasks.register<JavaExec>("validateWorkItems") {
+    dependsOn(workItemValidatorSourceSet.classesTaskName)
+    group = "verification"
+    description = "Validates consistency of the project work-item graph."
+    classpath = workItemValidatorSourceSet.runtimeClasspath
+    mainClass.set("io.vigilant.spec.WorkItemValidatorMain")
+    args(rootDir.absolutePath)
 }
 
 tasks.named("gatlingRun") {
@@ -285,7 +318,7 @@ tasks.register("piiJmhBaseline") {
 }
 
 tasks.named("check") {
-    dependsOn(piiProductionRuntimeClasspathCheck)
+    dependsOn(piiProductionRuntimeClasspathCheck, workItemValidatorTest, validateWorkItems)
 }
 
 tasks.register("verifyAll") {

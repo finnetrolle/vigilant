@@ -158,12 +158,12 @@ Production PII shadow proxy
 Оба hard gate имеют status `Done`.
 
 [VIG-09-03](issues/epic_09/issue_09_03_request_backpressure.md) -
-[VIG-09-08](issues/epic_09/issue_09_08_shutdown_lifecycle.md) также имеют
-status `Done`: streaming/backpressure, connection reuse, malformed upstream,
-dynamic response hop-by-hop stripping и shutdown lifecycle доказаны через E2E
-seams. Все дочерние issues EPIC-09 закрыты, но сам epic сохраняет status
-`In progress`, пока отсутствующий project work-item validator не позволит
-пройти последний completion gate.
+[VIG-09-08](issues/epic_09/issue_09_08_shutdown_lifecycle.md) доказали через E2E
+seams streaming/backpressure, connection reuse, malformed upstream, dynamic
+response hop-by-hop stripping и shutdown lifecycle.
+[VIG-09-09](issues/epic_09/issue_09_09_work_item_validator.md) добавил
+детерминированный completion gate `./gradlew validateWorkItems` в `check`.
+Все дочерние issues и EPIC-09 имеют status `Done`.
 
 Existing PERF-01 contract остаётся нормативным отдельно от advisory inspection
 baseline.
@@ -277,7 +277,7 @@ EPIC-04 Done --> global coverage validation -------+
                 protocol/gap outcomes    capacity/cancellation    safe audit
                          +-------------------------+------------------+
                                                    v
-VIG-09-01..08 Done --------------------> packaged OCI evidence
+VIG-09-01..09 Done --------------------> packaged OCI evidence
                                                    |
                                                    v
                                   Production PII shadow proxy
@@ -308,18 +308,16 @@ horizontal logging subsystem.
 
 ## Текущий roadmap frontier
 
-Все implementation issues Stage 0 завершены: VIG-09-01..08 имеют status
-`Done`. EPIC-09 сохраняет status `In progress` только из-за отсутствующего
-project work-item validator, обязательного его критериями готовности. VIG-10-01
-имеет status `Done`; полный repository frontier содержит VIG-01A и
+Все implementation issues Stage 0 завершены: VIG-09-01..09 и EPIC-09 имеют
+status `Done`, а project work-item validator входит в `check`. VIG-10-01 имеет
+status `Done`; полный repository frontier содержит VIG-01A и
 VIG-10-02..07. VIG-01A проверяет logging-specific PERF-01, а VIG-10-02..07
 roadmap относит к Stage 5: они не создают отсутствующий HTTP integration path.
 
-Roadmap recommendation: опубликовать work item для project work-item validator,
-закрыть completion gate EPIC-09 и затем перейти к contract decisions Stage 1.
-VIG-03-01 и VIG-06-01 остаются `Draft` до внесения согласованных решений в их
-normative epics и повторного ambiguity gate. Planned leaves из этого документа
-не входят во frontier до публикации собственных issue-файлов.
+Stage 0 закрыт; следующий шаг delivery path - contract decisions Stage 1.
+VIG-03-01 и VIG-06-01 остаются `Draft` до внесения согласованных решений в
+их normative epics и повторного ambiguity gate. Planned leaves из этого
+документа не входят во frontier до публикации собственных issue-файлов.
 
 ## Не входит в первый production increment
 

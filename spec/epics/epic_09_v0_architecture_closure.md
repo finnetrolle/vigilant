@@ -2,9 +2,9 @@
 
 **ID:** `EPIC-09`
 **Тип:** Epic
-**Статус:** In progress
+**Статус:** Done
 **Приоритет:** Critical
-**Суммарная оценка:** 19-29 инженерных дней
+**Суммарная оценка:** 20-31 инженерный день
 **Связанные требования:** `PERF-01`, `PERF-06`, `PROXY-01`, `PROXY-02`, `PROXY-03`, `CONC-01`, разделы «Входит в v0» и «Поставка»
 
 ## Контекст
@@ -50,6 +50,7 @@ EPIC-09 v0 architecture closure
 - [x] [VIG-09-06: Некорректный upstream HTTP как stable proxy error](../issues/epic_09/issue_09_06_malformed_upstream.md) - `Done`
 - [x] [VIG-09-07: Dynamic hop-by-hop response headers](../issues/epic_09/issue_09_07_response_connection_headers.md) - `Done`
 - [x] [VIG-09-08: Полный graceful shutdown lifecycle](../issues/epic_09/issue_09_08_shutdown_lifecycle.md) - `Done`
+- [x] [VIG-09-09: Project work-item validator](../issues/epic_09/issue_09_09_work_item_validator.md) - `Done`
 
 Жёсткая зависимость внутри epic одна: VIG-09-02 зависит от VIG-09-01, потому
 что p99 невозможно подтвердить без успешного proxy sample. VIG-09-02 также
@@ -109,7 +110,7 @@ backpressure, pooling, proxy protocol error paths и bounded shutdown.
 
 ## Критерии готовности
 
-- VIG-09-01..08 имеют status `Done`, а checklist и реестр обновлены в тех же
+- VIG-09-01..09 имеют status `Done`, а checklist и реестр обновлены в тех же
   change sets.
 - Полный PERF-01 report содержит успешные direct/proxy samples, memory evidence
   и подтверждённый `proxy_overhead p99 <= 2 ms`.
