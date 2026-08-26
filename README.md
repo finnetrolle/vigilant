@@ -106,6 +106,10 @@ vigilant {
   upstream-write-timeout = 30s
   upstream-response-timeout = 5m
   upstream-connection-idle-timeout = 10s
+
+  # Graceful shutdown; значения ниже - значения по умолчанию.
+  shutdown-quiet-period = 5s
+  shutdown-force-timeout = 30s
 }
 ```
 
@@ -117,6 +121,8 @@ vigilant {
 - `VIGILANT_UPSTREAM_WRITE_TIMEOUT` - таймаут записи запроса в upstream, по умолчанию `30s`;
 - `VIGILANT_UPSTREAM_RESPONSE_TIMEOUT` - таймаут ответа upstream (модель - в разделе «Таймауты upstream-клиента»), по умолчанию `5m`;
 - `VIGILANT_UPSTREAM_CONNECTION_IDLE_TIMEOUT` - сколько простаивающее соединение к upstream живёт в пуле, по умолчанию `10s`;
+- `VIGILANT_SHUTDOWN_QUIET_PERIOD` - gap без активных запросов перед закрытием сервера, по умолчанию `5s`;
+- `VIGILANT_SHUTDOWN_FORCE_TIMEOUT` - абсолютный bound graceful shutdown, по умолчанию `30s`, не меньше quiet period;
 - `VIGILANT_OTLP_ENDPOINT` - базовый HTTP(S) endpoint OTLP-коллектора для экспорта traces; `/v1/traces` добавляется сам; без значения экспорт выключен;
 - `VIGILANT_OTLP_ENABLED` - выключатель OTLP-экспорта, по умолчанию `true`;
 - `VIGILANT_CONFIG` - путь к файлу конфигурации.
@@ -134,7 +140,7 @@ policies = []
 
 Минимальный пример находится в `politics.conf.example`.
 
-Формат значений длительностей - строки вида `300ms`, `10s`, `5m` (или ISO-8601 `PT5M`); нулевые и отрицательные значения отклоняются при старте.
+Формат значений длительностей - строки вида `300ms`, `10s`, `5m` (или ISO-8601 `PT5M`). Нулевые и отрицательные значения отклоняются при старте, кроме `shutdown-quiet-period=0s`, который отключает ожидание drain; force timeout всегда должен быть положительным и не меньше quiet period.
 
 Недопустимая или неполная application/policy configuration: сообщение об ошибке в stderr и код завершения 2.
 
@@ -176,7 +182,7 @@ Gateway сам отвечает на пробы оркестратора; пут
 
 Пути `/healthz` и `/readyz` выбраны по конвенции Kubernetes и не конфликтуют с пространством путей LLM API: OpenAI/Anthropic-совместимые API живут под `/v1/`, пробы зарезервированы вне его.
 
-Graceful shutdown: по SIGTERM (или иному завершению JVM) readiness переключается на `503` до остановки сервера; сервер ждёт до 5 секунд отсутствия активных запросов (quiet period) и закрывается не позднее 30 секунд (force timeout), прерывая застрявшие запросы.
+Graceful shutdown: по SIGTERM (или иному завершению JVM) readiness переключается на `503`, новый proxy traffic локально отклоняется, а уже активные exchanges продолжают drain. По умолчанию сервер ждёт до 5 секунд отсутствия активных запросов (quiet period) и закрывается не позднее 30 секунд (force timeout), прерывая застрявшие запросы. После drain приложение закрывает dedicated upstream client factory, затем flush/close providers traces и metrics. Оба bound настраиваются через HOCON или `VIGILANT_SHUTDOWN_*`.
 
 ## Логирование
 

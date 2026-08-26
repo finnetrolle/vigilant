@@ -1,7 +1,8 @@
 # Пример конфигурации Vigilant (HOCON).
 # Поиск файла: $VIGILANT_CONFIG, затем ./vigilant.conf, затем /etc/vigilant/vigilant.conf.
 # Переменные окружения VIGILANT_UPSTREAM_URL, VIGILANT_PORT, VIGILANT_UPSTREAM_*_TIMEOUT,
-# VIGILANT_OTLP_ENDPOINT и VIGILANT_OTLP_ENABLED переопределяют значения файла.
+# VIGILANT_SHUTDOWN_*, VIGILANT_OTLP_ENDPOINT и VIGILANT_OTLP_ENABLED
+# переопределяют значения файла.
 vigilant {
   upstream-url = "http://127.0.0.1:18081"
   port = 8080
@@ -11,6 +12,10 @@ vigilant {
   upstream-write-timeout = 30s           # запись запроса в upstream
   upstream-response-timeout = 5m         # первый объект ответа + пауза между чанками
   upstream-connection-idle-timeout = 10s # жизнь простаивающего соединения в пуле
+
+  # Graceful shutdown: gap без активных запросов и абсолютный force bound.
+  shutdown-quiet-period = 5s
+  shutdown-force-timeout = 30s
 
   # Экспорт traces и metrics через OTLP HTTP (локальный трейсинг и correlation ID
   # работают всегда; без endpoint внешний экспорт выключен). К общему базовому

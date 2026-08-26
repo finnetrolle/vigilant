@@ -22,6 +22,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 class ReadinessService : HttpService {
     private val ready = AtomicBoolean(true)
 
+    /** Returns whether new ordinary traffic may still enter the gateway. */
+    fun isReady(): Boolean = ready.get()
+
     /**
      * Answers the probe locally without touching the upstream, according to the
      * current readiness state.
@@ -30,7 +33,7 @@ class ReadinessService : HttpService {
         ctx: ServiceRequestContext,
         request: HttpRequest,
     ): HttpResponse =
-        if (ready.get()) {
+        if (isReady()) {
             HttpResponse.of(HttpStatus.OK, MediaType.PLAIN_TEXT_UTF_8, "ready")
         } else {
             HttpResponse.of(HttpStatus.SERVICE_UNAVAILABLE, MediaType.PLAIN_TEXT_UTF_8, "draining")

@@ -1,5 +1,6 @@
 package io.vigilant.gateway.proxy
 
+import com.linecorp.armeria.client.ClientFactory
 import com.linecorp.armeria.client.WebClient
 import com.linecorp.armeria.common.HttpData
 import com.linecorp.armeria.common.HttpRequest
@@ -23,10 +24,13 @@ import kotlin.test.assertEquals
  */
 class UpstreamTimeoutsTest {
     private val servers = mutableListOf<Server>()
+    private val upstreamClientFactories = mutableListOf<ClientFactory>()
 
+    /** Stops tracked servers before closing their dedicated upstream client factories. */
     @AfterTest
     fun stopServers() {
         servers.asReversed().forEach { it.stop().join() }
+        upstreamClientFactories.forEach { it.closeAsync().join() }
     }
 
     @Test
@@ -110,9 +114,10 @@ class UpstreamTimeoutsTest {
             "VIGILANT_UPSTREAM_URL" to serverUri(upstream).toString(),
         ).apply(extraEnv)
         val config = loadAppConfig(env = env, defaultConfigPaths = emptyList())
+        val factory = buildUpstreamClientFactory(config.upstream).also(upstreamClientFactories::add)
         return Server.builder()
             .http(0)
-            .serviceUnder("/", BypassProxyService(config.upstreamUri, buildUpstreamWebClient(config.upstream)))
+            .serviceUnder("/", BypassProxyService(config.upstreamUri, buildUpstreamWebClient(config.upstream, factory)))
             .build()
             .startAndTrack()
     }

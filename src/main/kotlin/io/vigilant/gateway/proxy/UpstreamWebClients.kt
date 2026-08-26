@@ -8,17 +8,26 @@ import io.vigilant.gateway.config.UpstreamClientSettings
 import java.time.Duration
 
 /**
- * Builds the upstream [WebClient] from the validated [UpstreamClientSettings]:
- * connect and idle timeouts live on a dedicated [ClientFactory] (connection
- * level), write and response timeouts on the client itself (spec v0: explicit
- * timeouts and pooling instead of library defaults). The streaming-safe
- * deadline model is layered on top by [responseIdleTimeoutDecorator].
+ * Builds the dedicated upstream [ClientFactory] owned by the application
+ * lifecycle. Connection-level settings live here so the factory can be closed
+ * explicitly after server drain instead of relying on library defaults or JVM
+ * termination.
  */
-internal fun buildUpstreamWebClient(settings: UpstreamClientSettings): WebClient {
-    val factory = ClientFactory.builder()
+internal fun buildUpstreamClientFactory(settings: UpstreamClientSettings): ClientFactory =
+    ClientFactory.builder()
         .connectTimeout(settings.connectTimeout)
         .idleTimeout(settings.connectionIdleTimeout)
         .build()
+
+/**
+ * Builds the upstream [WebClient] on the application-owned [factory]. Write and
+ * response timeouts live on the client, with the streaming-safe deadline model
+ * layered on top by [responseIdleTimeoutDecorator].
+ */
+internal fun buildUpstreamWebClient(
+    settings: UpstreamClientSettings,
+    factory: ClientFactory,
+): WebClient {
     return WebClient.builder()
         .factory(factory)
         .writeTimeout(settings.writeTimeout)

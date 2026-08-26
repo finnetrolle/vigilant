@@ -1,5 +1,6 @@
 package io.vigilant.gateway.proxy
 
+import com.linecorp.armeria.client.ClientFactory
 import com.linecorp.armeria.client.WebClient
 import com.linecorp.armeria.common.AggregatedHttpResponse
 import com.linecorp.armeria.common.HttpStatus
@@ -38,14 +39,14 @@ import kotlin.test.assertTrue
  */
 class UpstreamConnectionPoolingTest {
     private val fixture = GatewayTestFixture()
-    private val upstreamClients = mutableListOf<WebClient>()
+    private val upstreamClientFactories = mutableListOf<ClientFactory>()
     private val upstreams = mutableListOf<Http1KeepAliveUpstream>()
 
     /** Closes every gateway, upstream client factory, and raw upstream created by a test. */
     @AfterTest
     fun closeResources() {
         fixture.close()
-        upstreamClients.forEach { it.options().factory().closeAsync().join() }
+        upstreamClientFactories.forEach { it.closeAsync().join() }
         upstreams.asReversed().forEach(Http1KeepAliveUpstream::close)
     }
 
@@ -141,7 +142,8 @@ class UpstreamConnectionPoolingTest {
             ),
             defaultConfigPaths = emptyList(),
         )
-        val upstreamClient = buildUpstreamWebClient(config.upstream).also(upstreamClients::add)
+        val factory = buildUpstreamClientFactory(config.upstream).also(upstreamClientFactories::add)
+        val upstreamClient = buildUpstreamWebClient(config.upstream, factory)
         return fixture.startServer(BypassProxyService(config.upstreamUri, upstreamClient))
     }
 

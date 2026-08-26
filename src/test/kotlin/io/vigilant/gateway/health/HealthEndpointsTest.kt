@@ -112,7 +112,9 @@ class HealthEndpointsTest {
                     "gateway output: ${gateway.output()}",
             )
             val exitTimeoutSeconds =
-                AppComponent.GRACEFUL_SHUTDOWN_TIMEOUT.plus(AppComponent.GRACEFUL_SHUTDOWN_QUIET_PERIOD).toSeconds()
+                AppComponent.GRACEFUL_SHUTDOWN_FORCE_TIMEOUT
+                    .plus(AppComponent.GRACEFUL_SHUTDOWN_QUIET_PERIOD)
+                    .toSeconds()
             assertTrue(
                 process.waitFor(exitTimeoutSeconds, TimeUnit.SECONDS),
                 "gateway did not exit within $exitTimeoutSeconds seconds after SIGTERM",

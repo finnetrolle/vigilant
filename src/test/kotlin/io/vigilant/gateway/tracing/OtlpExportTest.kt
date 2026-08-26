@@ -2,7 +2,6 @@ package io.vigilant.gateway.tracing
 
 import ch.qos.logback.classic.spi.ILoggingEvent
 import com.linecorp.armeria.client.WebClient
-import com.linecorp.armeria.common.HttpHeaderNames
 import com.linecorp.armeria.common.HttpMethod
 import com.linecorp.armeria.common.HttpRequest
 import com.linecorp.armeria.common.HttpResponse
@@ -10,11 +9,14 @@ import com.linecorp.armeria.common.HttpStatus
 import com.linecorp.armeria.common.RequestHeaders
 import io.opentelemetry.sdk.trace.SdkTracerProvider
 import io.vigilant.gateway.GatewayTestFixture
+import io.vigilant.gateway.OtlpTestCollector
+import io.vigilant.gateway.OtlpTestExport
 import io.vigilant.gateway.config.OtlpSettings
+import io.vigilant.gateway.containsSubsequence
+import io.vigilant.gateway.startOtlpTestCollector
 import io.vigilant.gateway.telemetry.resolveOtlpSignalEndpoint
 import java.net.URI
 import java.time.Duration
-import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -35,9 +37,10 @@ class OtlpExportTest {
         fixture.close()
     }
 
+    /** Exports a completed span as OTLP protobuf to the configured collector endpoint. */
     @Test
     fun `spans are exported via otlp http to the configured endpoint`() {
-        val collector = startOtlpCollector()
+        val collector = fixture.startOtlpTestCollector()
         val provider = track(
             buildSdkTracerProvider(OtlpSettings(enabled = true, endpoint = collector.uri)),
         )
@@ -66,7 +69,7 @@ class OtlpExportTest {
             assertEquals("/v1/traces", export.path)
             assertEquals("application/x-protobuf", export.contentType)
             assertTrue(
-                containsBytes(export.body, hexToBytes(traceId)),
+                export.body.containsSubsequence(hexToBytes(traceId)),
                 "the exported span must carry the exchange trace id",
             )
         } finally {
@@ -74,9 +77,10 @@ class OtlpExportTest {
         }
     }
 
+    /** Keeps span export disabled when no collector endpoint is configured. */
     @Test
     fun `no otlp export when endpoint is not configured`() {
-        val collector = startOtlpCollector()
+        val collector = fixture.startOtlpTestCollector()
         val provider = track(
             buildSdkTracerProvider(OtlpSettings(enabled = true, endpoint = null)),
         )
@@ -102,9 +106,10 @@ class OtlpExportTest {
         }
     }
 
+    /** Keeps span export disabled when OTLP export is explicitly turned off. */
     @Test
     fun `no otlp export when export is disabled`() {
-        val collector = startOtlpCollector()
+        val collector = fixture.startOtlpTestCollector()
         val provider = track(
             buildSdkTracerProvider(OtlpSettings(enabled = false, endpoint = collector.uri)),
         )
@@ -155,36 +160,6 @@ class OtlpExportTest {
      */
     private val instrumentationScope = "io.vigilant.gateway.test"
 
-    /**
-     * One captured OTLP export request.
-     */
-    private data class OtlpExport(val path: String, val contentType: String, val body: ByteArray)
-
-    /**
-     * A minimal local OTLP HTTP collector recording every post it receives.
-     */
-    private data class OtlpCollector(val exports: CopyOnWriteArrayList<OtlpExport>, val uri: URI)
-
-    /**
-     * Starts the recording OTLP collector on an ephemeral port.
-     */
-    private fun startOtlpCollector(): OtlpCollector {
-        val exports = CopyOnWriteArrayList<OtlpExport>()
-        val server = fixture.startServer { request ->
-            HttpResponse.of(
-                request.aggregate().thenApply { aggregated ->
-                    exports += OtlpExport(
-                        path = request.path(),
-                        contentType = aggregated.headers().get(HttpHeaderNames.CONTENT_TYPE).orEmpty(),
-                        body = aggregated.content().array(),
-                    )
-                    HttpResponse.of(HttpStatus.OK)
-                },
-            )
-        }
-        return OtlpCollector(exports, fixture.serverUri(server))
-    }
-
     private fun startUpstream() = fixture.startServer { HttpResponse.of(HttpStatus.OK) }
 
     private fun track(provider: SdkTracerProvider): SdkTracerProvider {
@@ -217,7 +192,7 @@ class OtlpExportTest {
      * Waits until the collector received [expected] exports, failing after a
      * deadline.
      */
-    private fun awaitExport(collector: OtlpCollector, expected: Int): List<OtlpExport> {
+    private fun awaitExport(collector: OtlpTestCollector, expected: Int): List<OtlpTestExport> {
         assertTrue(
             fixture.awaitUntil(Duration.ofSeconds(10)) { collector.exports.size >= expected },
             "expected $expected OTLP export(s), saw: ${collector.exports.map { it.path }}",
@@ -230,21 +205,10 @@ class OtlpExportTest {
      * Waits long enough for a would-be export to surface, then reports whether
      * the collector stayed quiet.
      */
-    private fun awaitQuiet(collector: OtlpCollector): Boolean =
+    private fun awaitQuiet(collector: OtlpTestCollector): Boolean =
         !fixture.awaitUntil(Duration.ofSeconds(2)) { collector.exports.isNotEmpty() }
 
     private fun hexToBytes(hex: String): ByteArray =
         hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 
-    /**
-     * Reports whether [haystack] contains the exact [needle] byte sequence.
-     */
-    private fun containsBytes(haystack: ByteArray, needle: ByteArray): Boolean {
-        if (needle.isEmpty()) return true
-        return (haystack.size - needle.size).let { lastStart ->
-            (0..lastStart).any { start ->
-                haystack.copyOfRange(start, start + needle.size).contentEquals(needle)
-            }
-        }
-    }
 }

@@ -11,7 +11,9 @@ import kotlin.system.exitProcess
  * the server closes. The shutdown hook first marks readiness as draining, so
  * `GET /readyz` answers `503` while the server is still closing, then stops the
  * server, and finally closes both OpenTelemetry SDK providers so queued spans
- * and metric measurements are flushed to the configured endpoint.
+ * and metric measurements are flushed to the configured endpoint. The
+ * dedicated upstream client factory is closed after server drain and before
+ * telemetry providers.
  */
 fun main() {
     val graph = try {
@@ -20,6 +22,7 @@ fun main() {
         graph.policyProvider
         graph.server
         graph.readinessService
+        graph.upstreamClientResources
         graph.sdkTracerProvider
         graph.sdkMeterProvider
         graph
@@ -33,9 +36,19 @@ fun main() {
     Runtime.getRuntime().addShutdownHook(
         Thread({
             readiness.markNotReady()
-            server.stop().join()
-            graph.sdkTracerProvider.close()
-            graph.sdkMeterProvider.close()
+            try {
+                server.stop().join()
+            } finally {
+                try {
+                    graph.upstreamClientResources.close()
+                } finally {
+                    try {
+                        graph.sdkTracerProvider.close()
+                    } finally {
+                        graph.sdkMeterProvider.close()
+                    }
+                }
+            }
         }, "vigilant-shutdown"),
     )
 

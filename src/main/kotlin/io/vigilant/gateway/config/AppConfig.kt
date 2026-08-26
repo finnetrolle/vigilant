@@ -23,11 +23,15 @@ private const val UPSTREAM_CONNECT_TIMEOUT_ENV = "VIGILANT_UPSTREAM_CONNECT_TIME
 private const val UPSTREAM_WRITE_TIMEOUT_ENV = "VIGILANT_UPSTREAM_WRITE_TIMEOUT"
 private const val UPSTREAM_RESPONSE_TIMEOUT_ENV = "VIGILANT_UPSTREAM_RESPONSE_TIMEOUT"
 private const val UPSTREAM_CONNECTION_IDLE_TIMEOUT_ENV = "VIGILANT_UPSTREAM_CONNECTION_IDLE_TIMEOUT"
+private const val SHUTDOWN_QUIET_PERIOD_ENV = "VIGILANT_SHUTDOWN_QUIET_PERIOD"
+private const val SHUTDOWN_FORCE_TIMEOUT_ENV = "VIGILANT_SHUTDOWN_FORCE_TIMEOUT"
 private const val OTLP_ENDPOINT_ENV = "VIGILANT_OTLP_ENDPOINT"
 private const val DEFAULT_CONNECT_TIMEOUT_SECONDS = 10L
 private const val DEFAULT_WRITE_TIMEOUT_SECONDS = 30L
 private const val DEFAULT_RESPONSE_TIMEOUT_SECONDS = 300L
 private const val DEFAULT_CONNECTION_IDLE_TIMEOUT_SECONDS = 10L
+private const val DEFAULT_SHUTDOWN_QUIET_PERIOD_SECONDS = 5L
+private const val DEFAULT_SHUTDOWN_FORCE_TIMEOUT_SECONDS = 30L
 
 /**
  * Default time an idle upstream connection may stay pooled; matches Armeria's
@@ -59,6 +63,14 @@ internal val DEFAULT_UPSTREAM_WRITE_TIMEOUT: Duration =
 internal val DEFAULT_UPSTREAM_RESPONSE_TIMEOUT: Duration =
     Duration.ofSeconds(DEFAULT_RESPONSE_TIMEOUT_SECONDS)
 
+/** Default gap without active requests required before graceful shutdown completes. */
+internal val DEFAULT_SHUTDOWN_QUIET_PERIOD: Duration =
+    Duration.ofSeconds(DEFAULT_SHUTDOWN_QUIET_PERIOD_SECONDS)
+
+/** Default upper bound after which graceful shutdown force-closes active exchanges. */
+internal val DEFAULT_SHUTDOWN_FORCE_TIMEOUT: Duration =
+    Duration.ofSeconds(DEFAULT_SHUTDOWN_FORCE_TIMEOUT_SECONDS)
+
 /**
  * Default locations searched for the configuration file when `VIGILANT_CONFIG` is not set.
  */
@@ -73,6 +85,7 @@ private val DEFAULT_CONFIG_PATHS: List<Path> = listOf(
  * @param upstreamUri validated absolute HTTP(S) URL of the upstream service.
  * @param port HTTP port the gateway listens on.
  * @param upstream validated timeouts and pooling settings of the upstream client.
+ * @param shutdown validated graceful shutdown quiet and force bounds.
  * @param otlp common OTLP export settings for traces and metrics; external
  *   export is active only when [OtlpSettings.enabled] is `true` and an endpoint is set.
  */
@@ -80,7 +93,19 @@ data class AppConfig(
     val upstreamUri: URI,
     val port: Int,
     val upstream: UpstreamClientSettings,
+    val shutdown: ShutdownSettings,
     val otlp: OtlpSettings,
+)
+
+/**
+ * Validated graceful shutdown bounds.
+ *
+ * @param quietPeriod gap without active requests required before the server closes.
+ * @param forceTimeout upper bound before active exchanges are force-closed.
+ */
+data class ShutdownSettings(
+    val quietPeriod: Duration,
+    val forceTimeout: Duration,
 )
 
 /**
@@ -130,6 +155,8 @@ internal data class VigilantSettings(
     val upstreamWriteTimeout: Duration = DEFAULT_UPSTREAM_WRITE_TIMEOUT,
     val upstreamResponseTimeout: Duration = DEFAULT_UPSTREAM_RESPONSE_TIMEOUT,
     val upstreamConnectionIdleTimeout: Duration = DEFAULT_UPSTREAM_CONNECTION_IDLE_TIMEOUT,
+    val shutdownQuietPeriod: Duration = DEFAULT_SHUTDOWN_QUIET_PERIOD,
+    val shutdownForceTimeout: Duration = DEFAULT_SHUTDOWN_FORCE_TIMEOUT,
     val otlpEnabled: Boolean = true,
     val otlpEndpoint: String? = null,
 )
@@ -196,6 +223,10 @@ internal fun loadAppConfig(
                 UPSTREAM_RESPONSE_TIMEOUT_ENV,
                 root.vigilant.upstreamResponseTimeout,
             ),
+        ),
+        shutdown = validatedShutdownSettings(
+            quietPeriod = root.vigilant.shutdownQuietPeriod,
+            forceTimeout = root.vigilant.shutdownForceTimeout,
         ),
         otlp = OtlpSettings(
             enabled = root.vigilant.otlpEnabled,
@@ -287,6 +318,27 @@ internal fun validatedPort(port: Int): Int {
 internal fun validatedPositiveDuration(envName: String, value: Duration): Duration {
     require(value > Duration.ZERO) { "$envName must be a positive duration, was: $value" }
     return value
+}
+
+/**
+ * Validates graceful shutdown durations and their ordering.
+ *
+ * @return immutable settings accepted by Armeria's graceful shutdown contract.
+ * @throws IllegalArgumentException when either duration is invalid or the force
+ * timeout is shorter than the quiet period.
+ */
+internal fun validatedShutdownSettings(
+    quietPeriod: Duration,
+    forceTimeout: Duration,
+): ShutdownSettings {
+    require(quietPeriod >= Duration.ZERO) {
+        "$SHUTDOWN_QUIET_PERIOD_ENV must be a non-negative duration, was: $quietPeriod"
+    }
+    validatedPositiveDuration(SHUTDOWN_FORCE_TIMEOUT_ENV, forceTimeout)
+    require(forceTimeout >= quietPeriod) {
+        "$SHUTDOWN_FORCE_TIMEOUT_ENV must be greater than or equal to $SHUTDOWN_QUIET_PERIOD_ENV"
+    }
+    return ShutdownSettings(quietPeriod, forceTimeout)
 }
 
 /**

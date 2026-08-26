@@ -338,6 +338,64 @@ class AppConfigLoadingTest {
         )
     }
 
+    /** Graceful shutdown keeps the documented production bounds when unset. */
+    @Test
+    fun `shutdown timeout defaults are applied when absent`() {
+        val config = loadAppConfig(
+            env = mapOf("VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081"),
+            defaultConfigPaths = emptyList(),
+        )
+
+        assertEquals(
+            ShutdownSettings(
+                quietPeriod = Duration.ofSeconds(5),
+                forceTimeout = Duration.ofSeconds(30),
+            ),
+            config.shutdown,
+        )
+    }
+
+    /** Environment values provide shorter deterministic bounds for lifecycle deployments and tests. */
+    @Test
+    fun `loads shutdown bounds from environment`() {
+        val config = loadAppConfig(
+            env = mapOf(
+                "VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081",
+                "VIGILANT_SHUTDOWN_QUIET_PERIOD" to "250ms",
+                "VIGILANT_SHUTDOWN_FORCE_TIMEOUT" to "3s",
+            ),
+            defaultConfigPaths = emptyList(),
+        )
+
+        assertEquals(
+            ShutdownSettings(
+                quietPeriod = Duration.ofMillis(250),
+                forceTimeout = Duration.ofSeconds(3),
+            ),
+            config.shutdown,
+        )
+    }
+
+    /** A force bound shorter than the quiet period fails startup with a stable explanation. */
+    @Test
+    fun `force timeout shorter than quiet period fails`() {
+        val exception = assertFailsWith<IllegalArgumentException> {
+            loadAppConfig(
+                env = mapOf(
+                    "VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081",
+                    "VIGILANT_SHUTDOWN_QUIET_PERIOD" to "5s",
+                    "VIGILANT_SHUTDOWN_FORCE_TIMEOUT" to "1s",
+                ),
+                defaultConfigPaths = emptyList(),
+            )
+        }
+
+        assertEquals(
+            "VIGILANT_SHUTDOWN_FORCE_TIMEOUT must be greater than or equal to VIGILANT_SHUTDOWN_QUIET_PERIOD",
+            exception.message,
+        )
+    }
+
     @Test
     fun `loads upstream client timeouts from hocon file`() {
         val file = writeConfig(

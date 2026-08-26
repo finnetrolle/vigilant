@@ -11,13 +11,16 @@ import io.opentelemetry.api.metrics.Meter
 import io.opentelemetry.sdk.metrics.SdkMeterProvider
 import io.opentelemetry.sdk.trace.SdkTracerProvider
 import io.vigilant.gateway.config.AppConfig
+import io.vigilant.gateway.config.DEFAULT_SHUTDOWN_FORCE_TIMEOUT
+import io.vigilant.gateway.config.DEFAULT_SHUTDOWN_QUIET_PERIOD
 import io.vigilant.gateway.config.loadAppConfig
 import io.vigilant.gateway.health.LivenessService
 import io.vigilant.gateway.health.ReadinessService
+import io.vigilant.gateway.health.TrafficAdmissionService
 import io.vigilant.gateway.metrics.MetricsService
 import io.vigilant.gateway.metrics.buildSdkMeterProvider
 import io.vigilant.gateway.proxy.BypassProxyService
-import io.vigilant.gateway.proxy.buildUpstreamWebClient
+import io.vigilant.gateway.proxy.UpstreamClientResources
 import io.vigilant.gateway.tracing.TracingService
 import io.vigilant.gateway.tracing.buildSdkTracerProvider
 import io.vigilant.policy.config.loadPolicySnapshot
@@ -25,19 +28,22 @@ import io.vigilant.policy.domain.DetectorId
 import io.vigilant.policy.provider.DummyPolicyProvider
 import io.vigilant.policy.provider.PolicyProvider
 import java.net.URI
-import java.time.Duration
 
 /** Built-in detector metadata available while validating the startup policy snapshot. */
 private val STARTUP_DETECTOR_IDS: Set<DetectorId> = setOf(DetectorId("fast-pii"))
 
 /**
- * Application-wide dependency graph: configuration, the upstream [WebClient],
- * the immutable policy provider, the tracing and metrics SDKs, and the assembled Armeria [Server].
+ * Application-wide dependency graph: configuration, the owned upstream
+ * upstream client resources and [WebClient], the immutable policy provider, the tracing
+ * and metrics SDKs, and the assembled Armeria [Server].
  */
 @DependencyGraph(AppScope::class)
 interface AppComponent {
     val server: Server
     val readinessService: ReadinessService
+
+    /** Exposes application-owned upstream resources for ordered shutdown after server drain. */
+    val upstreamClientResources: UpstreamClientResources
     val sdkTracerProvider: SdkTracerProvider
     val sdkMeterProvider: SdkMeterProvider
 
@@ -59,9 +65,11 @@ interface AppComponent {
         @SingleIn(AppScope::class)
         fun upstreamUri(appConfig: AppConfig): URI = appConfig.upstreamUri
 
+        /** Builds the upstream client on the application-owned connection factory. */
         @Provides
         @SingleIn(AppScope::class)
-        fun upstreamWebClient(appConfig: AppConfig): WebClient = buildUpstreamWebClient(appConfig.upstream)
+        fun upstreamWebClient(upstreamClientResources: UpstreamClientResources): WebClient =
+            upstreamClientResources.webClient
 
         @Provides
         @SingleIn(AppScope::class)
@@ -103,28 +111,28 @@ interface AppComponent {
             appConfig: AppConfig,
             livenessService: LivenessService,
             readinessService: ReadinessService,
-            metricsService: MetricsService,
+            trafficAdmissionService: TrafficAdmissionService,
         ): Server =
             Server.builder()
                 .http(appConfig.port)
-                .gracefulShutdownTimeout(GRACEFUL_SHUTDOWN_QUIET_PERIOD, GRACEFUL_SHUTDOWN_TIMEOUT)
+                .gracefulShutdownTimeout(appConfig.shutdown.quietPeriod, appConfig.shutdown.forceTimeout)
                 .service("/healthz", livenessService)
                 .service("/readyz", readinessService)
-                .serviceUnder("/", metricsService)
+                .serviceUnder("/", trafficAdmissionService)
                 .build()
 
         /**
          * How long the graceful shutdown waits for a gap with no active requests
          * before closing, keeping readiness observable as `503` in the meantime.
-         * Internal so tests can derive their waiting bounds from the real values.
+         * Internal so default-config tests can derive their waiting bounds.
          */
-        internal val GRACEFUL_SHUTDOWN_QUIET_PERIOD = Duration.ofSeconds(5)
+        internal val GRACEFUL_SHUTDOWN_QUIET_PERIOD = DEFAULT_SHUTDOWN_QUIET_PERIOD
 
         /**
          * The upper bound of the graceful shutdown: the server closes after this
          * even if some requests are still stuck. Internal so tests can derive
-         * their waiting bounds from the real values.
+         * their waiting bounds from the default configuration.
          */
-        internal val GRACEFUL_SHUTDOWN_TIMEOUT = Duration.ofSeconds(30)
+        internal val GRACEFUL_SHUTDOWN_FORCE_TIMEOUT = DEFAULT_SHUTDOWN_FORCE_TIMEOUT
     }
 }

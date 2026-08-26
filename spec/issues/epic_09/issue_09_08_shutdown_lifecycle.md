@@ -1,6 +1,6 @@
 # VIG-09-08: Полный graceful shutdown lifecycle
 
-**Статус:** Ready for implementation
+**Статус:** Done
 **Epic:** [EPIC-09](../../epics/epic_09_v0_architecture_closure.md)
 **Ветка:** Operations > bounded active-request shutdown and resource lifecycle
 **Зависит от:** нет
@@ -23,21 +23,21 @@ wait активных requests; finding AR-08.
 
 ## Критерии готовности
 
-- [ ] SIGTERM во время активного конечного streaming exchange сначала делает
+- [x] SIGTERM во время активного конечного streaming exchange сначала делает
   `/readyz` недоступным и позволяет exchange завершиться без обрыва в пределах
   quiet/force bounds.
-- [ ] После начала shutdown новый обычный proxy request не принимается как
+- [x] После начала shutdown новый обычный proxy request не принимается как
   normal traffic согласно принятой Armeria lifecycle semantics.
-- [ ] Никогда не завершающийся exchange принудительно закрывается, а process
+- [x] Никогда не завершающийся exchange принудительно закрывается, а process
   выходит не позже configured force timeout плюс малый test tolerance.
-- [ ] Созданный приложением dedicated `ClientFactory` имеет явного owner и
+- [x] Созданный приложением dedicated `ClientFactory` имеет явного owner и
   закрывается после server drain; library defaults не заменяют lifecycle
   contract приложения.
-- [ ] Traces и metrics, завершившиеся до закрытия providers, flush-ятся в
+- [x] Traces и metrics, завершившиеся до закрытия providers, flush-ятся в
   test OTLP collector; shutdown ordering не теряет completion callbacks.
-- [ ] Tests используют production child process и выводят последний observed
+- [x] Tests используют production child process и выводят последний observed
   lifecycle state при deadline failure.
-- [ ] Для добавленных/изменённых declarations написан KDoc, focused tests и
+- [x] Для добавленных/изменённых declarations написан KDoc, focused tests и
   `./gradlew build` проходят.
 
 ## Test/demo seam
