@@ -6,10 +6,15 @@
 работа представляется как mind map, где epic является корнем, крупные
 capabilities образуют ветви, а отдельные проверяемые issues являются листьями.
 
+Cross-epic delivery path к первому промышленному guardrail increment описан в
+[ROADMAP.md](ROADMAP.md). Roadmap связывает существующие и planned work items,
+но не заменяет их статусы, hard dependencies или нормативный scope epics.
+
 ## Размещение
 
 ```text
 spec/
+  ROADMAP.md
   epics/
     epic_NN_name.md
   issues/
