@@ -10,13 +10,14 @@ import com.linecorp.armeria.common.HttpStatus
 import com.linecorp.armeria.common.MediaType
 import com.linecorp.armeria.common.RequestHeaders
 import com.linecorp.armeria.common.ResponseHeaders
-import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.AppenderBase
 import com.linecorp.armeria.server.Server
 import com.fasterxml.jackson.databind.ObjectMapper
 import io.vigilant.gateway.GatewayProcessFixture
+import io.vigilant.gateway.assertUpstreamFailureWarning
+import io.vigilant.gateway.renderForSecretScan
 import io.vigilant.gateway.withTestPolicyConfiguration
 import java.net.URI
 import java.net.ServerSocket
@@ -24,7 +25,6 @@ import java.time.Duration
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
 import org.slf4j.LoggerFactory
-import org.slf4j.event.KeyValuePair
 import kotlin.concurrent.thread
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -172,6 +172,7 @@ class BypassProxyServiceTest {
         assertEquals("""{"error":"upstream_unavailable"}""", response.contentUtf8())
     }
 
+    /** Verifies that an upstream transport failure emits no request secrets. */
     @Test
     fun `upstream failure is logged structurally without bodies or auth headers`() {
         val events = CopyOnWriteArrayList<ILoggingEvent>()
@@ -207,22 +208,14 @@ class BypassProxyServiceTest {
         }
 
         val event = events.single()
-        assertEquals(Level.WARN, event.level)
-        assertEquals("upstream_request_failed", event.keyValuePairs.valueOf("event.name"))
-        assertEquals("upstream_unavailable", event.keyValuePairs.valueOf("upstream.error"))
-        assertFalse(
-            event.keyValuePairs.valueOf("upstream.cause").isNullOrEmpty(),
-            "the cause class must be recorded for transport-vs-timeout metrics",
-        )
-        val logged = buildString {
-            append(event.formattedMessage)
-            event.keyValuePairs.forEach { pair -> append(' ').append(pair.key).append('=').append(pair.value) }
-        }
+        event.assertUpstreamFailureWarning("upstream_unavailable")
+        val logged = event.renderForSecretScan()
         allSentinels.forEach { sentinel ->
             assertFalse(logged.contains(sentinel), "sentinel $sentinel leaked into the upstream failure log")
         }
     }
 
+    /** Verifies that a mid-response timeout emits the stable upstream warning. */
     @Test
     fun `upstream failure mid response is logged structurally`() {
         val events = CopyOnWriteArrayList<ILoggingEvent>()
@@ -259,13 +252,7 @@ class BypassProxyServiceTest {
         }
 
         val event = events.single()
-        assertEquals(Level.WARN, event.level)
-        assertEquals("upstream_request_failed", event.keyValuePairs.valueOf("event.name"))
-        assertEquals("upstream_timeout", event.keyValuePairs.valueOf("upstream.error"))
-        assertFalse(
-            event.keyValuePairs.valueOf("upstream.cause").isNullOrEmpty(),
-            "the cause class must be recorded for transport-vs-timeout metrics",
-        )
+        event.assertUpstreamFailureWarning("upstream_timeout")
     }
 
     @Test
@@ -493,12 +480,6 @@ class BypassProxyServiceTest {
     }
 
     private fun freePort(): Int = ServerSocket(0).use { it.localPort }
-
-    /**
-     * Returns the value of the structured key-value pair with the given key.
-     */
-    private fun List<KeyValuePair>.valueOf(key: String): String? =
-        firstOrNull { it.key == key }?.value?.toString()
 
     private fun startGateway(upstream: Server): Server = startGateway(serverUri(upstream), WebClient.of())
 

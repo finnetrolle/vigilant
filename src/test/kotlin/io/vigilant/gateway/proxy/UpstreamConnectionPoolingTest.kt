@@ -5,10 +5,10 @@ import com.linecorp.armeria.common.AggregatedHttpResponse
 import com.linecorp.armeria.common.HttpStatus
 import com.linecorp.armeria.server.Server
 import io.vigilant.gateway.GatewayTestFixture
+import io.vigilant.gateway.readBoundedHttp1RequestHead
 import io.vigilant.gateway.config.loadAppConfig
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
-import java.io.ByteArrayOutputStream
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
@@ -213,7 +213,7 @@ class UpstreamConnectionPoolingTest {
                 val input = BufferedInputStream(socket.getInputStream())
                 val output = BufferedOutputStream(socket.getOutputStream())
                 while (!closed.get()) {
-                    val requestHead = readRequestHead(input) ?: return
+                    val requestHead = input.readBoundedHttp1RequestHead() ?: return
                     val path = parsePath(requestHead) ?: return
                     if (path == HTTP1_OPTIONS_TARGET) {
                         writeResponse(output, "")
@@ -232,28 +232,6 @@ class UpstreamConnectionPoolingTest {
                 closedConnectionIds += connectionId
                 sockets -= socket
             }
-        }
-
-        /** Reads one bounded HTTP/1.1 request head, or `null` after a clean peer close. */
-        private fun readRequestHead(input: BufferedInputStream): String? {
-            val bytes = ByteArrayOutputStream()
-            var terminatorIndex = 0
-            while (bytes.size() < MAX_REQUEST_HEAD_BYTES) {
-                val next = input.read()
-                if (next == -1) return if (bytes.size() == 0) null else error("truncated request head")
-                bytes.write(next)
-                terminatorIndex = if (next == REQUEST_HEAD_TERMINATOR[terminatorIndex].toInt()) {
-                    terminatorIndex + 1
-                } else if (next == REQUEST_HEAD_TERMINATOR[0].toInt()) {
-                    1
-                } else {
-                    0
-                }
-                if (terminatorIndex == REQUEST_HEAD_TERMINATOR.size) {
-                    return bytes.toString(StandardCharsets.US_ASCII)
-                }
-            }
-            error("request head exceeds $MAX_REQUEST_HEAD_BYTES bytes")
         }
 
         /**
@@ -291,8 +269,6 @@ class UpstreamConnectionPoolingTest {
             const val LOOPBACK_ADDRESS = "127.0.0.1"
             const val HTTP2_PREFACE_REQUEST_LINE = "PRI * HTTP/2.0"
             const val HTTP1_OPTIONS_TARGET = "*"
-            const val MAX_REQUEST_HEAD_BYTES = 16 * 1024
-            val REQUEST_HEAD_TERMINATOR = "\r\n\r\n".toByteArray(StandardCharsets.US_ASCII)
             val THREAD_JOIN_TIMEOUT: Duration = Duration.ofSeconds(2)
         }
     }

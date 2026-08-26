@@ -8,13 +8,8 @@ import com.linecorp.armeria.common.HttpStatus
 import com.linecorp.armeria.common.MediaType
 import com.linecorp.armeria.common.ResponseHeaders
 import io.opentelemetry.api.common.AttributeKey.stringKey
-import io.opentelemetry.sdk.common.CompletableResultCode
-import io.opentelemetry.sdk.metrics.InstrumentType
 import io.opentelemetry.sdk.metrics.SdkMeterProvider
-import io.opentelemetry.sdk.metrics.data.AggregationTemporality
 import io.opentelemetry.sdk.metrics.data.MetricData
-import io.opentelemetry.sdk.metrics.export.CollectionRegistration
-import io.opentelemetry.sdk.metrics.export.MetricReader
 import io.vigilant.gateway.GatewayTestFixture
 import java.time.Duration
 import java.net.ServerSocket
@@ -140,21 +135,34 @@ class MetricsServiceTest {
         )
     }
 
-    /** Upstream client and server errors are counted under bounded status-class attributes. */
+    /** Correct upstream client and server errors pass through with bounded status metrics. */
     @Test
     fun `upstream 4xx and 5xx responses increment their status classes`() {
         val upstream = fixture.startServer { request ->
             when (request.path()) {
-                "/client-error" -> HttpResponse.of(HttpStatus.BAD_REQUEST)
-                "/server-error" -> HttpResponse.of(HttpStatus.SERVICE_UNAVAILABLE)
+                "/client-error" -> HttpResponse.of(
+                    HttpStatus.BAD_REQUEST,
+                    MediaType.PLAIN_TEXT_UTF_8,
+                    "client-error-body",
+                )
+                "/server-error" -> HttpResponse.of(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    MediaType.PLAIN_TEXT_UTF_8,
+                    "server-error-body",
+                )
                 else -> HttpResponse.of(HttpStatus.NOT_FOUND)
             }
         }
         val gateway = fixture.startMetricsGateway(fixture.serverUri(upstream), meter)
         val client = WebClient.of(fixture.serverUri(gateway).toString())
 
-        assertEquals(HttpStatus.BAD_REQUEST, client.get("/client-error").aggregate().join().status())
-        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, client.get("/server-error").aggregate().join().status())
+        val clientError = client.get("/client-error").aggregate().join()
+        val serverError = client.get("/server-error").aggregate().join()
+
+        assertEquals(HttpStatus.BAD_REQUEST, clientError.status())
+        assertEquals("client-error-body", clientError.contentUtf8())
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, serverError.status())
+        assertEquals("server-error-body", serverError.contentUtf8())
 
         val statusPoints = awaitMetric("vigilant.proxy.responses")
             .longSumData.points
@@ -365,30 +373,3 @@ private fun Collection<MetricData>.singleMetric(name: String): MetricData =
 
 /** Returns the only long sum point value of this metric. */
 private fun MetricData.singleLongSum(): Long = longSumData.points.single().value
-
-/**
- * Minimal pull reader used by E2E tests to inspect the SDK's cumulative metric
- * data without mocking the metrics API or adding a production exporter.
- */
-private class TestMetricReader : MetricReader {
-    @Volatile
-    private var registration: CollectionRegistration = CollectionRegistration.noop()
-
-    /** Stores the SDK collection hook supplied when the provider is built. */
-    override fun register(registration: CollectionRegistration) {
-        this.registration = registration
-    }
-
-    /** Collects the current cumulative measurements from the SDK. */
-    fun collectAllMetrics(): Collection<MetricData> = registration.collectAllMetrics()
-
-    /** Uses cumulative aggregation so counters stay independently assertable. */
-    override fun getAggregationTemporality(instrumentType: InstrumentType): AggregationTemporality =
-        AggregationTemporality.CUMULATIVE
-
-    /** Pull readers have nothing buffered to flush. */
-    override fun forceFlush(): CompletableResultCode = CompletableResultCode.ofSuccess()
-
-    /** Pull readers own no background resources. */
-    override fun shutdown(): CompletableResultCode = CompletableResultCode.ofSuccess()
-}

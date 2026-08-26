@@ -1,6 +1,6 @@
 # VIG-09-06: Некорректный upstream HTTP как stable proxy error
 
-**Статус:** Ready for implementation
+**Статус:** Done
 **Epic:** [EPIC-09](../../epics/epic_09_v0_architecture_closure.md)
 **Ветка:** Proxy reliability > malformed upstream response
 **Зависит от:** нет
@@ -20,17 +20,17 @@ E2E test через raw TCP upstream доказывает, что malformed HTTP
 
 ## Критерии готовности
 
-- [ ] Raw upstream принимает request и возвращает детерминированно malformed
+- [x] Raw upstream принимает request и возвращает детерминированно malformed
   status line, headers или framing до начала valid response.
-- [ ] Client получает `502` и stable `{"error":"upstream_unavailable"}` без
+- [x] Client получает `502` и stable `{"error":"upstream_unavailable"}` без
   exception class, raw bytes или stack trace.
-- [ ] Transport-error metric и safe structured log получают bounded category;
+- [x] Transport-error metric и safe structured log получают bounded category;
   malformed bytes и request sentinels не попадают в telemetry.
-- [ ] Existing pass-through tests подтверждают, что корректные upstream 4xx/5xx
+- [x] Existing pass-through tests подтверждают, что корректные upstream 4xx/5xx
   не интерпретируются и не преобразуются.
-- [ ] Production code не меняется. Если test выявляет defect, fix создаётся
+- [x] Production code не меняется. Если test выявляет defect, fix создаётся
   отдельной issue с RED-first TDD.
-- [ ] Focused test и `./gradlew build` проходят.
+- [x] Focused test и `./gradlew build` проходят.
 
 ## Test/demo seam
 

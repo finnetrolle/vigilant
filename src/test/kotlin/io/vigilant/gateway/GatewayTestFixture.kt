@@ -29,7 +29,7 @@ import org.slf4j.LoggerFactory
  */
 internal class GatewayTestFixture {
     private val servers = mutableListOf<Server>()
-    private val appenders = ConcurrentHashMap<Class<*>, AppenderBase<ILoggingEvent>>()
+    private val appenders = ConcurrentHashMap<String, AppenderBase<ILoggingEvent>>()
 
     /**
      * Starts an Armeria server on an ephemeral port serving [service] under
@@ -84,14 +84,22 @@ internal class GatewayTestFixture {
      * [close].
      */
     fun attachAppenderTo(type: Class<*>): CopyOnWriteArrayList<ILoggingEvent> {
+        return attachAppenderTo(type.name)
+    }
+
+    /**
+     * Attaches a collecting appender to [loggerName], including package-level
+     * library loggers that have no single representative application class.
+     */
+    fun attachAppenderTo(loggerName: String): CopyOnWriteArrayList<ILoggingEvent> {
         val events = CopyOnWriteArrayList<ILoggingEvent>()
         val appender = object : AppenderBase<ILoggingEvent>() {
             override fun append(event: ILoggingEvent) {
                 events += event
             }
         }.apply { start() }
-        appenders[type] = appender
-        (LoggerFactory.getLogger(type) as Logger).addAppender(appender)
+        appenders[loggerName] = appender
+        (LoggerFactory.getLogger(loggerName) as Logger).addAppender(appender)
         return events
     }
 
@@ -99,8 +107,13 @@ internal class GatewayTestFixture {
      * Detaches the appender previously installed for [type].
      */
     fun detachAppenderFrom(type: Class<*>) {
-        val appender = appenders.remove(type) ?: return
-        (LoggerFactory.getLogger(type) as Logger).detachAppender(appender)
+        detachAppenderFrom(type.name)
+    }
+
+    /** Detaches the appender previously installed for [loggerName]. */
+    fun detachAppenderFrom(loggerName: String) {
+        val appender = appenders.remove(loggerName) ?: return
+        (LoggerFactory.getLogger(loggerName) as Logger).detachAppender(appender)
         appender.stop()
     }
 
