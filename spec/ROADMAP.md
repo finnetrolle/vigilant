@@ -317,9 +317,10 @@ horizontal logging subsystem.
 status `Done`, а project work-item validator входит в `check`. VIG-10-01 и
 VIG-10-02 также имеют status `Done`.
 
-Stage 0 и Stage 1 закрыты. Roadmap frontier Stage 2 содержит VIG-03-02,
-VIG-06-02, VIG-07-02 и VIG-08-02: их hard blockers завершены. VIG-03-07
-становится frontier после VIG-03-02 и VIG-06-02. Identity leaves EPIC-03
+Implementation issues Stage 2 закрыты: VIG-03-02, VIG-03-07, VIG-06-02,
+VIG-07-02 и VIG-08-02 имеют status `Done`; независимые module seams готовы к
+Stage 3 integration leaves. EPIC-07 остаётся `In progress` до подтверждения
+memory/concurrency bounds benchmark или baseline. Identity leaves EPIC-03
 готовы по contract, но не входят в первый production increment.
 
 Полный repository frontier также сохраняет VIG-01A и VIG-10-03..07. VIG-01A

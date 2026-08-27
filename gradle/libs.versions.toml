@@ -1,6 +1,7 @@
 [versions]
 armeria = "1.41.0"
 hoplite = "2.9.0"
+jackson = "2.22.1"
 opentelemetry = "1.64.0"
 slf4j = "2.0.18"
 logback = "1.6.3"
@@ -10,6 +11,7 @@ typesafe-config = "1.4.3"
 armeria = { module = "com.linecorp.armeria:armeria", version.ref = "armeria" }
 hoplite-core = { module = "com.sksamuel.hoplite:hoplite-core", version.ref = "hoplite" }
 hoplite-hocon = { module = "com.sksamuel.hoplite:hoplite-hocon", version.ref = "hoplite" }
+jackson-databind = { module = "com.fasterxml.jackson.core:jackson-databind", version.ref = "jackson" }
 opentelemetry-bom = { module = "io.opentelemetry:opentelemetry-bom", version.ref = "opentelemetry" }
 opentelemetry-sdk = { module = "io.opentelemetry:opentelemetry-sdk" }
 opentelemetry-exporter-otlp = { module = "io.opentelemetry:opentelemetry-exporter-otlp" }

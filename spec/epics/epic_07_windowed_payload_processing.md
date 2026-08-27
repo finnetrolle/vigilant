@@ -2,9 +2,9 @@
 
 **ID:** `EPIC-07`  
 **Тип:** Epic  
-**Статус:** In progress  
+**Статус:** In progress
 **Приоритет:** High  
-**Предварительная оценка:** 3-5 инженерных дней осталось  
+**Предварительная оценка:** implementation issues завершены; benchmark/baseline не оценён
 **Связанные требования:** `PERF-03`, `PERF-04`, `CONC-01`, `CONC-02`, `CONC-03`
 
 ## Подтверждённое решение
@@ -22,7 +22,7 @@ parser, policy engine, detector execution, offsets и reaction mapping, но н�
 ```text
 EPIC-07 Windowed payload processing
 ├── windowing contract and detector capabilities (Done)
-└── windowed fast PII execution (Ready)
+└── windowed fast PII execution (Done)
     ├── UTF-8 window generation and capability-derived overlap
     ├── detector execution over windows
     ├── global offsets and finding deduplication
@@ -32,7 +32,7 @@ EPIC-07 Windowed payload processing
 ## Дочерние issues
 
 - [x] [VIG-07-01: Контракт windowed payload processing](../issues/epic_07/issue_07_01_windowing_contract.md) - `Done`
-- [ ] [VIG-07-02: Windowed fast PII execution](../issues/epic_07/issue_07_02_windowed_fast_pii_execution.md) - `Ready for implementation`
+- [x] [VIG-07-02: Windowed fast PII execution](../issues/epic_07/issue_07_02_windowed_fast_pii_execution.md) - `Done`
 
 ## Контекст
 
@@ -86,28 +86,32 @@ maximumEvidenceSpanUtf8Bytes?
 ```
 
 Evidence span включает finding целиком и весь lookbehind/lookahead, нужный
-recognizer-у для boundary или contextual validation. Required overlap равен
-`maximumEvidenceSpanUtf8Bytes - 1`. Значение обязано быть доказано из
-versioned recognizer rules и boundary corpus, а не выбрано по типичному input.
+recognizer-у для boundary или contextual validation. Required context с каждой
+стороны ownership core равен `maximumEvidenceSpanUtf8Bytes - 1`. Значение
+обязано быть доказано из versioned recognizer rules и boundary corpus, а не
+выбрано по типичному input.
 
 Если finite evidence span отсутствует, fragment не длиннее
 `maxWindowUtf8Bytes` проверяется одним direct call. Более длинный fragment
 возвращает `WINDOWING_UNSUPPORTED`: executor не угадывает overlap, не обрезает
 text и не пропускает suffix. Capability invalid, если maximum evidence span
-неположителен, больше window size или не оставляет progress минимум на один
-четырёхбайтовый UTF-8 code point.
+неположителен, больше window size или после двустороннего context не оставляет
+ownership-core progress минимум на один четырёхбайтовый UTF-8 code point.
 
 ### Window boundaries
 
-Первое окно начинается в byte offset `0`. End является последней Unicode
-code-point boundary не правее `start + maxWindowUtf8Bytes`. Следующий start
-является последней boundary не правее `previousEnd - requiredOverlap`, что
-может только увеличить overlap. Последнее окно заканчивается на exact UTF-8
-length fragment.
+Fragment делится на последовательные непересекающиеся ownership cores. Размер
+core не превышает
+`maxWindowUtf8Bytes - 2 * (maximumEvidenceSpanUtf8Bytes - 1)`, а его границы
+всегда совпадают с Unicode code-point boundaries. Detector input содержит core
+и максимальный доступный actual fragment context не более required context
+слева и справа. У первого и последнего core отсутствующая сторона context
+заканчивается на настоящей границе fragment.
 
 При такой схеме любой contiguous evidence span длиной не больше declared
-maximum полностью содержится хотя бы в одном окне. Окна никогда не переходят
-между fragments и не включают synthetic prefix/suffix.
+maximum, чей finding начинается внутри core, полностью содержится в detector
+input этого core. Окна никогда не переходят между fragments и не включают
+synthetic prefix/suffix.
 
 ### Execution и aggregation
 
@@ -117,7 +121,10 @@ maximum полностью содержится хотя бы в одном ок
 order, но итог дополнительно canonicalized и не зависит от chunking.
 
 Local finding обязан лежать на valid UTF-8 boundaries внутри window. Global
-span вычисляется добавлением `windowStartUtf8`. Semantic duplicate identity:
+span вычисляется добавлением `windowStartUtf8`. В aggregate принимаются только
+findings, чей global start принадлежит текущему ownership core; поэтому
+обрезанный boundary-кандидат из context не может стать результатом. Semantic
+duplicate identity:
 
 ```text
 type + global start/end + recognizerId

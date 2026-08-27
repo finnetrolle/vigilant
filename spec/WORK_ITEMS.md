@@ -96,12 +96,12 @@ Issue является листом mind map, если:
 | [VIG-01: Асинхронные JSON-логи](issues/issue_01_logging.md) | `Done` | завершена | 0 дней осталось |
 | [VIG-01A: Benchmark логирования](issues/issue_01A_benchmark.md) | `Ready for implementation` | не начата | 4-7 дней |
 | [EPIC-02: Быстрый PII-detector](epics/epic_02_fast_pii_detector.md) | `Done` | 16/16 | 0 дней осталось |
-| [EPIC-03: Policy context extraction](epics/epic_03_policy_context_extraction.md) | `In progress` | 1/7 | 15-23 дня осталось |
+| [EPIC-03: Policy context extraction](epics/epic_03_policy_context_extraction.md) | `In progress` | 3/7 | 10-17 дней осталось |
 | [EPIC-04: Policy engine](epics/epic_04_policy_engine.md) | `Done` | 11/11 | 0 дней осталось |
 | [EPIC-05: v0 hardening](epics/epic_05_v0_hardening.md) | `Done` | 9/9 | 0 дней осталось |
-| [EPIC-06: Разбор LLM-сообщений и извлечение payload](epics/epic_06_llm_message_parsing.md) | `In progress` | 1/2 | 3-5 дней до request parser первого increment |
-| [EPIC-07: Windowed payload processing](epics/epic_07_windowed_payload_processing.md) | `In progress` | 1/2 | 3-5 дней осталось |
-| [EPIC-08: Lossless message spooling and replay](epics/epic_08_message_spooling_replay.md) | `In progress` | 1/2 | 3-5 дней до request source первого increment |
+| [EPIC-06: Разбор LLM-сообщений и извлечение payload](epics/epic_06_llm_message_parsing.md) | `In progress` | 2/2 | 0 дней до request parser; future response scope не оценён |
+| [EPIC-07: Windowed payload processing](epics/epic_07_windowed_payload_processing.md) | `In progress` | 2/2 | benchmark/baseline не оценён |
+| [EPIC-08: Lossless message spooling and replay](epics/epic_08_message_spooling_replay.md) | `In progress` | 2/2 | 0 дней до request source; future response/disk scope не оценён |
 | [EPIC-09: Закрытие архитектурных рисков v0](epics/epic_09_v0_architecture_closure.md) | `Done` | 9/9 | 0 дней осталось |
 | [EPIC-10: Повышение качества детерминированного PII-распознавания](epics/epic_10_pii_detection_quality.md) | `In progress` | 2/8 | 17-23 дня осталось |
 

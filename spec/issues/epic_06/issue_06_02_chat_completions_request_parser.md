@@ -1,6 +1,6 @@
 # VIG-06-02: Chat Completions JSON request parser
 
-**Статус:** Ready for implementation  
+**Статус:** Done
 **Epic:** [EPIC-06](../../epics/epic_06_llm_message_parsing.md)  
 **Ветка:** OpenAI Chat Completions > JSON request  
 **Зависит от:** [VIG-06-01](issue_06_01_protocol_contract.md)  
@@ -26,22 +26,22 @@ detector и spool implementation не мокируются и не входят 
 
 ## Критерии приёмки
 
-- [ ] Versioned conformance corpus покрывает каждую строку semantic field map и
+- [x] Versioned conformance corpus покрывает каждую строку semantic field map и
   каждое routing/resource rule из раздела EPIC-06 «Нормативный Chat Completions
   JSON request contract» через public parser seam.
-- [ ] Для каждого success case corpus проверяет normalized attributes, exact
+- [x] Для каждого success case corpus проверяет normalized attributes, exact
   order и semantic metadata fragments, opaque locators, inspection gaps и
   итоговый coverage status.
-- [ ] Negative corpus покрывает каждую stable failure branch нормативного
+- [x] Negative corpus покрывает каждую stable failure branch нормативного
   contract и проверяет отсутствие source preview или partial parse result.
-- [ ] Отдельная schema-walker matrix доказывает conformance явному vocabulary,
+- [x] Отдельная schema-walker matrix доказывает conformance явному vocabulary,
   unknown-keyword rules и reference outcomes parent contract.
-- [ ] Unicode и cancellation cases подтверждают точное декодирование fragment,
+- [x] Unicode и cancellation cases подтверждают точное декодирование fragment,
   opaque locator semantics и удаление partial normalized state.
-- [ ] Parse result и safe failures не раскрывают original source или иные
+- [x] Parse result и safe failures не раскрывают original source или иные
   запрещённые parent contract данные; forwarding по-прежнему использует source
   за пределами parser.
-- [ ] Focused parser tests и `./gradlew build` проходят.
+- [x] Focused parser tests и `./gradlew build` проходят.
 
 ## Edge cases
 

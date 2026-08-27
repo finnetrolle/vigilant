@@ -1,6 +1,6 @@
 # VIG-07-02: Windowed fast PII execution
 
-**Статус:** Ready for implementation  
+**Статус:** Done
 **Epic:** [EPIC-07](../../epics/epic_07_windowed_payload_processing.md)  
 **Ветка:** Window generation, execution and aggregation  
 **Зависит от:** [VIG-07-01](issue_07_01_windowing_contract.md), [VIG-06-01](../epic_06/issue_06_01_protocol_contract.md), [EPIC-02](../../epics/epic_02_fast_pii_detector.md)  
@@ -25,20 +25,20 @@ Tests используют production `FastPiiDetector` и synthetic boundary co
 
 ## Критерии приёмки
 
-- [ ] Versioned capability proof и table-driven conformance corpus покрывают
+- [x] Versioned capability proof и table-driven conformance corpus покрывают
   каждый detector/window rule раздела EPIC-07 «Нормативный контракт» через
   public fragment-inspection seam.
-- [ ] Boundary corpus сравнивает public result с direct detection и доказывает
+- [x] Boundary corpus сравнивает public result с direct detection и доказывает
   exact original-fragment offsets, metadata и deterministic deduplication для
   всех поддерживаемых PII formats и Unicode boundary classes.
-- [ ] Negative matrix покрывает invalid capability, unsupported windowing,
+- [x] Negative matrix покрывает invalid capability, unsupported windowing,
   invalid detector result и conflicting duplicates, проверяя единый typed safe
   outcome без partial findings или payload preview.
-- [ ] Execution/cancellation matrix доказывает normative ordering, resource и
+- [x] Execution/cancellation matrix доказывает normative ordering, resource и
   CPU-executor constraints без моков recognizers или window provider.
-- [ ] Каждый success result сохраняет только разрешённую parent contract
+- [x] Каждый success result сохраняет только разрешённую parent contract
   provenance и не раскрывает window-scoped или encoded-source данные.
-- [ ] Focused tests и `./gradlew build` проходят.
+- [x] Focused tests и `./gradlew build` проходят.
 
 ## Не входит
 

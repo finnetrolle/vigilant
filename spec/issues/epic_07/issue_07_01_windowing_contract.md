@@ -34,15 +34,18 @@ detector execution, offset translation, deduplication и resource bounds мож�
 2. Detector capability публикует `maxWindowUtf8Bytes` и nullable
    `maximumEvidenceSpanUtf8Bytes`. Evidence span включает весь finding и
    обязательный left/right lookaround recognizer-а. Для bounded detector
-   overlap равен `maximumEvidenceSpanUtf8Bytes - 1`; отсутствие finite proof
-   запрещает windowing большого fragment и даёт `WINDOWING_UNSUPPORTED`.
-3. Window start/end всегда являются UTF-8 code-point boundaries. Следующий
-   start выбирается на последней boundary не правее `previousEnd - overlap`,
-   поэтому фактический overlap не меньше required. Capability обязана
-   оставлять progress минимум на один maximum-width UTF-8 code point.
+   context с каждой стороны ownership core равен
+   `maximumEvidenceSpanUtf8Bytes - 1`; отсутствие finite proof запрещает
+   windowing большого fragment и даёт `WINDOWING_UNSUPPORTED`.
+3. Fragment делится на непересекающиеся ownership cores с UTF-8 code-point
+   boundaries. Detector input добавляет к core доступный actual context слева
+   и справа без synthetic bytes. Capability обязана после двустороннего
+   context оставлять core progress минимум на один maximum-width UTF-8 code
+   point.
 4. Local finding offsets проверяются относительно window и переводятся через
    `windowStartUtf8 + localOffset`. Duplicate identity состоит из type,
-   translated span и recognizer ID; metadata duplicates обязаны совпасть,
+   translated span и recognizer ID. В aggregate входит finding, global start
+   которого принадлежит текущему core; metadata duplicates обязаны совпасть,
    иначе result равен safe `INCONSISTENT_WINDOW_RESULT`.
 5. Первый increment выполняет окна последовательно и exhaustive
    (`stopOnFirst=false`) на bounded CPU executor. Первый detector error

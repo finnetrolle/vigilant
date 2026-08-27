@@ -1,6 +1,6 @@
 # VIG-03-07: Anonymous request PolicyContext
 
-**Статус:** Ready for implementation  
+**Статус:** Done
 **Epic:** [EPIC-03](../../epics/epic_03_policy_context_extraction.md)  
 **Ветка:** Context assembly > anonymous request  
 **Зависит от:** [VIG-03-01](issue_03_01_context_contract.md), [VIG-03-02](issue_03_02_url_normalization.md), [VIG-06-02](../epic_06/issue_06_02_chat_completions_request_parser.md)  
@@ -22,22 +22,25 @@ Table-driven pure unit tests вызывают public assembler с typed normaliz
 и `NormalizedProtocolAttributes`. Consumer example использует production
 `PolicySelector`, чтобы показать match global `ANY` policy и отсутствие match
 для USER/GROUP policy, без Armeria и mocks собственных production classes.
+Canonical-state URL принадлежит `PolicyUrlNormalizer` и переносится typed
+wrapper-ом; assembler проверяет этот state без повторного URI parsing или
+копирования normalization rules.
 
 ## Критерии приёмки
 
-- [ ] Exact normalized URL и request model переносятся в `PolicyContext` без
+- [x] Exact normalized URL и request model переносятся в `PolicyContext` без
   повторной canonicalization или protocol parsing.
-- [ ] Result всегда имеет `phase=REQUEST`, `user=null` и immutable empty
+- [x] Result всегда имеет `phase=REQUEST`, `user=null` и immutable empty
   `groups`.
-- [ ] Global enabled REQUEST policy с `url=*`, `model=*`, `subject=ANY`
+- [x] Global enabled REQUEST policy с `url=*`, `model=*`, `subject=ANY`
   совпадает с anonymous context; USER/GROUP policies не совпадают.
-- [ ] Missing, blank или contradictory normalized input даёт typed safe
+- [x] Missing, blank или contradictory normalized input даёт typed safe
   assembly failure без raw exception и без partial context.
-- [ ] Public API не принимает HTTP headers, raw body, JSON tree, fragments,
+- [x] Public API не принимает HTTP headers, raw body, JSON tree, fragments,
   provenance, credentials или provider-specific document type.
-- [ ] Locale и mutable input collection не меняют structural result.
-- [ ] Для добавленных и изменённых Kotlin declarations написан KDoc.
-- [ ] Focused tests и `./gradlew build` проходят.
+- [x] Locale и mutable input collection не меняют structural result.
+- [x] Для добавленных и изменённых Kotlin declarations написан KDoc.
+- [x] Focused tests и `./gradlew build` проходят.
 
 ## Не входит
 

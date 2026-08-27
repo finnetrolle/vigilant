@@ -1,6 +1,6 @@
 # VIG-08-02: Bounded in-memory request source
 
-**Статус:** Ready for implementation  
+**Статус:** Done
 **Epic:** [EPIC-08](../../epics/epic_08_message_spooling_replay.md)  
 **Ветка:** Request source > bounded in-memory ingest and replay  
 **Зависит от:** [VIG-08-01](issue_08_01_spool_contract.md), [VIG-06-01](../epic_06/issue_06_01_protocol_contract.md)  
@@ -24,19 +24,19 @@ quota counters и terminal outcome только через public source/quota A
 
 ## Критерии приёмки
 
-- [ ] Public source/quota conformance suite покрывает каждый lifecycle, bounds,
+- [x] Public source/quota conformance suite покрывает каждый lifecycle, bounds,
   precedence и stable-outcome rule раздела EPIC-08 «Нормативный request source
   contract» без проверки private storage representation.
-- [ ] Demand matrix доказывает bounded ingest/replay и exact byte sequence через
+- [x] Demand matrix доказывает bounded ingest/replay и exact byte sequence через
   controlled publisher/subscriber, включая incorrect length и concurrent
   reservations.
-- [ ] State matrix проверяет complete read-only view, replay и все misuse
+- [x] State matrix проверяет complete read-only view, replay и все misuse
   outcomes только через public source/quota API без передачи ownership parser-у.
-- [ ] Cleanup matrix покрывает каждый terminal path parent contract и доказывает
+- [x] Cleanup matrix покрывает каждый terminal path parent contract и доказывает
   однократное освобождение всех owner, byte и bookkeeping reservations.
-- [ ] Sentinel corpus подтверждает, что public results, logs и state
+- [x] Sentinel corpus подтверждает, что public results, logs и state
   descriptions раскрывают только разрешённые parent contract данные.
-- [ ] Focused source tests и `./gradlew build` проходят.
+- [x] Focused source tests и `./gradlew build` проходят.
 
 ## Edge cases
 

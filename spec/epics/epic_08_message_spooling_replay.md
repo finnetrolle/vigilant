@@ -4,7 +4,7 @@
 **Тип:** Epic  
 **Статус:** In progress  
 **Приоритет:** High  
-**Предварительная оценка:** 3-5 инженерных дней осталось до request source первого increment  
+**Предварительная оценка:** 0 дней до request source первого increment; future response/disk scope не оценён
 **Связанные требования:** `PROXY-01`, `PROXY-02`, `CONC-01`, `CONC-02`, `CONC-03`, `SEC-01`, `SEC-02`
 
 ## Подтверждённое решение
@@ -29,7 +29,7 @@ decision. Это решение не активно в первом production i
 EPIC-08 Lossless spooling and replay
 ├── source/spool contract (Done)
 ├── first production increment
-│   └── bounded in-memory request source (Ready)
+│   └── bounded in-memory request source (Done)
 │       ├── ingest and global quota
 │       ├── read-only parser view
 │       ├── replay with backpressure
@@ -42,7 +42,7 @@ EPIC-08 Lossless spooling and replay
 ## Дочерние issues
 
 - [x] [VIG-08-01: Контракт source, spool и replay](../issues/epic_08/issue_08_01_spool_contract.md) - `Done`
-- [ ] [VIG-08-02: Bounded in-memory request source](../issues/epic_08/issue_08_02_bounded_request_source.md) - `Ready for implementation`
+- [x] [VIG-08-02: Bounded in-memory request source](../issues/epic_08/issue_08_02_bounded_request_source.md) - `Done`
 
 ## Контекст
 

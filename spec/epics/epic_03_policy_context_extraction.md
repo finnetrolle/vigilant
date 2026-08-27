@@ -4,7 +4,7 @@
 **Тип:** Epic  
 **Статус:** In progress  
 **Приоритет:** High  
-**Предварительная оценка:** 15-23 инженерных дня осталось  
+**Предварительная оценка:** 10-17 инженерных дней осталось
 **Связанные требования:** `MVP-14`, `MVP-20`, `MVP-21`
 
 ## Карта декомпозиции
@@ -12,8 +12,8 @@
 ```text
 EPIC-03 Policy context extraction
 ├── Context contract and trust boundary (Done)
-├── URL normalization (Ready)
-├── Anonymous request context (Ready, first increment)
+├── URL normalization (Done)
+├── Anonymous request context (Done, first increment)
 ├── Identity
 │   ├── configurable extraction (Ready, future)
 │   └── secret-safe upstream stripping (Ready, future)
@@ -27,12 +27,12 @@ EPIC-03 Policy context extraction
 ## Дочерние issues
 
 - [x] [VIG-03-01: Контракт и trust boundary](../issues/epic_03/issue_03_01_context_contract.md) - `Done`
-- [ ] [VIG-03-02: Нормализация URL](../issues/epic_03/issue_03_02_url_normalization.md) - `Ready for implementation`
+- [x] [VIG-03-02: Нормализация URL](../issues/epic_03/issue_03_02_url_normalization.md) - `Done`
 - [ ] [VIG-03-03: Настраиваемое identity extraction](../issues/epic_03/issue_03_03_identity_extraction.md) - `Ready for implementation`
 - [ ] [VIG-03-04: Сборка PolicyContext из нормализованных данных](../issues/epic_03/issue_03_04_model_extraction.md) - `Ready for implementation`
 - [ ] [VIG-03-05: Перенос контекста в response phase](../issues/epic_03/issue_03_05_response_handoff.md) - `Ready for implementation`
 - [ ] [VIG-03-06: E2E security и upstream stripping](../issues/epic_03/issue_03_06_security_e2e.md) - `Ready for implementation`
-- [ ] [VIG-03-07: Anonymous request PolicyContext](../issues/epic_03/issue_03_07_anonymous_request_context.md) - `Ready for implementation`
+- [x] [VIG-03-07: Anonymous request PolicyContext](../issues/epic_03/issue_03_07_anonymous_request_context.md) - `Done`
 
 ## Контекст
 
@@ -94,11 +94,13 @@ lowercase-scheme://lowercase-idna-host[:non-default-port]/normalized-path
 ```
 
 Configured upstream base path сначала объединяется с inbound request path.
-Scheme/host lowercase; terminal DNS dot и default port удаляются. Empty path
-становится `/`, dot segments удаляются, percent escapes получают uppercase
-hex, percent-encoded unreserved ASCII декодируется. Repeated slash, trailing
-slash, path case и encoded reserved characters сохраняются. EPIC-04 применяет
-свой существующий case-insensitive exact matcher ко всему key.
+Scheme/host lowercase; terminal DNS dot и default port удаляются. IPv6 literal
+валидируется без DNS lookup и записывается в единственной lowercase compressed
+форме. Empty path становится `/`, dot segments удаляются, percent escapes
+получают uppercase hex, percent-encoded unreserved ASCII декодируется.
+Repeated slash, trailing slash, path case и encoded reserved characters
+сохраняются. EPIC-04 применяет свой существующий case-insensitive exact matcher
+ко всему key.
 
 Query, fragment и user-info не участвуют в matching и не попадают в context,
 errors или logs. Unsupported scheme, absent host, malformed percent encoding,

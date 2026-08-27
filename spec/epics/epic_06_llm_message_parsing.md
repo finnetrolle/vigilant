@@ -4,7 +4,7 @@
 **Тип:** Epic  
 **Статус:** In progress  
 **Приоритет:** High  
-**Предварительная оценка:** 3-5 инженерных дней до request parser первого increment; future response surfaces не оценены  
+**Предварительная оценка:** 0 дней до request parser первого increment; future response surfaces не оценены
 **Связанные требования:** `MVP-14`, `MVP-20`, `PROXY-01`, `PROXY-02`
 
 ## Подтверждённое решение
@@ -371,7 +371,7 @@ spooling исходного request до policy decision и hard resource exhaus
 EPIC-06 LLM message parsing
 ├── protocol contract and supported surface (Done)
 ├── first production increment
-│   └── Chat Completions JSON request parser (Ready)
+│   └── Chat Completions JSON request parser (Done)
 ├── OpenAI Responses
 │   ├── request and non-streaming response (future Draft)
 │   └── SSE response stream (future Draft)
@@ -391,7 +391,7 @@ protocol family и единицы payload, чтобы не закреплять 
 ## Дочерние issues
 
 - [x] [VIG-06-01: Контракт разбора LLM-сообщений](../issues/epic_06/issue_06_01_protocol_contract.md) - `Done`
-- [ ] [VIG-06-02: Chat Completions JSON request parser](../issues/epic_06/issue_06_02_chat_completions_request_parser.md) - `Ready for implementation`
+- [x] [VIG-06-02: Chat Completions JSON request parser](../issues/epic_06/issue_06_02_chat_completions_request_parser.md) - `Done`
 
 ## Контекст
 
