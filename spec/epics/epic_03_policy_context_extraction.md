@@ -4,7 +4,7 @@
 **Тип:** Epic  
 **Статус:** In progress  
 **Приоритет:** High  
-**Предварительная оценка:** 10-17 инженерных дней осталось
+**Предварительная оценка:** 8-14 инженерных дней осталось
 **Связанные требования:** `MVP-14`, `MVP-20`, `MVP-21`
 
 ## Карта декомпозиции
@@ -18,7 +18,7 @@ EPIC-03 Policy context extraction
 │   ├── configurable extraction (Ready, future)
 │   └── secret-safe upstream stripping (Ready, future)
 ├── Context assembly
-│   └── HTTP-derived + protocol-derived attributes (Ready, future identity)
+│   └── HTTP-derived + protocol-derived attributes (Done)
 └── Lifecycle
     ├── request-to-response handoff (Ready, future response inspection)
     └── end-to-end security behavior (Ready)
@@ -29,7 +29,7 @@ EPIC-03 Policy context extraction
 - [x] [VIG-03-01: Контракт и trust boundary](../issues/epic_03/issue_03_01_context_contract.md) - `Done`
 - [x] [VIG-03-02: Нормализация URL](../issues/epic_03/issue_03_02_url_normalization.md) - `Done`
 - [ ] [VIG-03-03: Настраиваемое identity extraction](../issues/epic_03/issue_03_03_identity_extraction.md) - `Ready for implementation`
-- [ ] [VIG-03-04: Сборка PolicyContext из нормализованных данных](../issues/epic_03/issue_03_04_model_extraction.md) - `Ready for implementation`
+- [x] [VIG-03-04: Сборка PolicyContext из нормализованных данных](../issues/epic_03/issue_03_04_model_extraction.md) - `Done`
 - [ ] [VIG-03-05: Перенос контекста в response phase](../issues/epic_03/issue_03_05_response_handoff.md) - `Ready for implementation`
 - [ ] [VIG-03-06: E2E security и upstream stripping](../issues/epic_03/issue_03_06_security_e2e.md) - `Ready for implementation`
 - [x] [VIG-03-07: Anonymous request PolicyContext](../issues/epic_03/issue_03_07_anonymous_request_context.md) - `Done`

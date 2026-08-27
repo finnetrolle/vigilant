@@ -14,7 +14,7 @@ import io.vigilant.policy.domain.Reaction
 import io.vigilant.policy.domain.SubjectId
 import io.vigilant.policy.domain.SubjectType
 import io.vigilant.policy.selection.PolicySelector
-import io.vigilant.protocol.openai.NormalizedProtocolAttributes
+import io.vigilant.protocol.NormalizedProtocolAttributes
 import java.time.Duration
 import java.util.Locale
 import kotlin.test.Test

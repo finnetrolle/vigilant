@@ -2,7 +2,7 @@ package io.vigilant.context
 
 import io.vigilant.policy.domain.PolicyContext
 import io.vigilant.policy.domain.PolicyPhase
-import io.vigilant.protocol.openai.NormalizedProtocolAttributes
+import io.vigilant.protocol.NormalizedProtocolAttributes
 
 /** Stable anonymous request-context assembly failure categories. */
 enum class AnonymousRequestContextAssemblyErrorCode {

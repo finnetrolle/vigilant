@@ -1,5 +1,6 @@
 package io.vigilant.protocol.openai
 
+import io.vigilant.protocol.NormalizedProtocolAttributes
 import java.io.ByteArrayInputStream
 import java.util.concurrent.CancellationException
 import kotlin.test.Test

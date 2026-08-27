@@ -1,5 +1,6 @@
 package io.vigilant.protocol.openai
 
+import io.vigilant.protocol.NormalizedProtocolAttributes
 import java.io.ByteArrayInputStream
 import java.io.InputStream
 import java.util.Collections
@@ -81,12 +82,6 @@ data class OpenAiOperationDescriptor(
             )
     }
 }
-
-/** Typed body-derived attributes validated by the consumer that assembles a policy context. */
-data class NormalizedProtocolAttributes(
-    /** Exact decoded request model. */
-    val model: String,
-)
 
 /** Guardrail-facing semantics of one independent decoded text fragment. */
 enum class FragmentSemanticKind {

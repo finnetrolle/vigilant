@@ -1,6 +1,6 @@
 # VIG-03-04: Сборка PolicyContext из нормализованных данных
 
-**Статус:** Ready for implementation  
+**Статус:** Done
 **Epic:** [EPIC-03](../../epics/epic_03_policy_context_extraction.md)  
 **Ветка:** Context assembly  
 **Зависит от:** [VIG-03-01](issue_03_01_context_contract.md), [VIG-03-02](issue_03_02_url_normalization.md), [VIG-03-03](issue_03_03_identity_extraction.md), [VIG-06-01](../epic_06/issue_06_01_protocol_contract.md)  
@@ -44,15 +44,15 @@ JSON parser и сетевых вызовов.
 
 ## Критерии приёмки
 
-- [ ] Одинаковые normalized inputs дают структурно одинаковый context.
-- [ ] Model и другие protocol-derived значения переносятся без повторного
+- [x] Одинаковые normalized inputs дают структурно одинаковый context.
+- [x] Model и другие protocol-derived значения переносятся без повторного
   parsing или normalization, не принадлежащего EPIC-03.
-- [ ] Missing, contradictory и invalid inputs имеют явные typed outcomes.
-- [ ] Protocol-specific и transport-specific types отсутствуют в public API
+- [x] Missing, contradictory и invalid inputs имеют явные typed outcomes.
+- [x] Protocol-specific и transport-specific types отсутствуют в public API
   EPIC-03.
-- [ ] Context не содержит payload, provenance, credentials или raw headers.
-- [ ] Для добавленных и изменённых Kotlin declarations написан KDoc.
-- [ ] Focused tests и `./gradlew test` проходят.
+- [x] Context не содержит payload, provenance, credentials или raw headers.
+- [x] Для добавленных и изменённых Kotlin declarations написан KDoc.
+- [x] Focused tests и `./gradlew test` проходят.
 
 ## Не входит
 
