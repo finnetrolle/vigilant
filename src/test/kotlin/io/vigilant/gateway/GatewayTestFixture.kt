@@ -11,6 +11,7 @@ import com.linecorp.armeria.server.Server
 import io.opentelemetry.api.metrics.Meter
 import io.opentelemetry.api.trace.Tracer
 import io.vigilant.gateway.metrics.MetricsService
+import io.vigilant.gateway.config.TracingSettings
 import io.vigilant.gateway.proxy.BypassProxyService
 import io.vigilant.gateway.tracing.TracingService
 import java.net.URI
@@ -57,8 +58,12 @@ internal class GatewayTestFixture {
      * Starts the traced bypass gateway against [upstream] on an ephemeral port
      * and tracks it for [close].
      */
-    fun startTracedGateway(upstream: URI, tracer: Tracer): Server =
-        startServer(TracingService(BypassProxyService(upstream, WebClient.of()), tracer))
+    fun startTracedGateway(
+        upstream: URI,
+        tracer: Tracer,
+        tracingSettings: TracingSettings = TracingSettings(),
+    ): Server =
+        startServer(TracingService(BypassProxyService(upstream, WebClient.of()), tracer, tracingSettings))
 
     /**
      * Starts the metrics-decorated bypass gateway against [upstream] on an

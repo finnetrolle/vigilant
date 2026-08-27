@@ -1,105 +1,81 @@
 package io.vigilant.gateway.metrics
 
-import com.linecorp.armeria.client.WebClient
-import com.linecorp.armeria.common.HttpResponse
-import com.linecorp.armeria.common.HttpStatus
+import com.fasterxml.jackson.databind.ObjectMapper
 import io.opentelemetry.sdk.metrics.SdkMeterProvider
-import io.vigilant.gateway.AppComponent
-import io.vigilant.gateway.GatewayProcessFixture
-import io.vigilant.gateway.GatewayTestFixture
-import io.vigilant.gateway.chatCompletions
 import io.vigilant.gateway.config.OtlpSettings
-import io.vigilant.gateway.containsSubsequence
-import io.vigilant.gateway.proxy.BypassProxyService
-import io.vigilant.gateway.startOtlpTestCollector
-import java.time.Duration
+import java.io.ByteArrayOutputStream
+import java.io.PrintStream
+import java.nio.charset.StandardCharsets
 import java.util.concurrent.TimeUnit
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-/** Verifies metrics export through a real local OTLP HTTP collector. */
+/** Verifies the OTLP JSON Lines metrics exporter wired to process stdout. */
 class OtlpMetricsExportTest {
-    private val fixture = GatewayTestFixture()
     private val providers = mutableListOf<SdkMeterProvider>()
 
-    /** Flushes providers while the collector is alive, then releases all servers. */
+    /** Flushes and closes every provider created by a test. */
     @AfterTest
     fun tearDown() {
         providers.forEach { it.close() }
-        fixture.close()
     }
 
-    /** Proxy metrics use the common OTLP base endpoint and metrics signal path. */
+    /** Emits collected metrics as OTLP JSON Lines to stdout without a collector connection. */
     @Test
-    fun `metrics are exported as otlp protobuf to the configured endpoint`() {
-        val collector = fixture.startOtlpTestCollector()
-        val provider = buildSdkMeterProvider(
-            OtlpSettings(enabled = true, endpoint = collector.uri),
-        ).also(providers::add)
-        val upstream = fixture.startServer { HttpResponse.of(HttpStatus.OK) }
-        val gateway = fixture.startServer(
-            MetricsService(
-                BypassProxyService(fixture.serverUri(upstream), WebClient.of()),
-                provider.get("io.vigilant.gateway.test"),
-            ),
-        )
+    fun `metrics are emitted as otlp json to stdout`() {
+        val bytes = ByteArrayOutputStream()
+        val output = PrintStream(bytes, true, StandardCharsets.UTF_8)
+        val provider = track(buildSdkMeterProvider(OtlpSettings(enabled = true), output))
+        val counter = provider.get(INSTRUMENTATION_SCOPE)
+            .counterBuilder("vigilant.stdout.test")
+            .build()
 
-        val response = WebClient.of(fixture.serverUri(gateway).toString())
-            .get("/v1/models")
-            .aggregate()
-            .join()
-
-        assertEquals(HttpStatus.OK, response.status())
+        counter.add(1)
         val flush = provider.forceFlush().join(10, TimeUnit.SECONDS)
+
         assertTrue(flush.isSuccess, "metrics SDK flush failed: ${flush.failureThrowable}")
-        assertTrue(
-            fixture.awaitUntil(Duration.ofSeconds(5)) { collector.exports.isNotEmpty() },
-            "the OTLP collector did not receive a metrics export",
-        )
-        val export = collector.exports.single()
-        assertEquals("/v1/metrics", export.path)
-        assertEquals("application/x-protobuf", export.contentType)
-        assertTrue(
-            export.body.containsSubsequence("vigilant.proxy.requests".encodeToByteArray()),
-            "the protobuf payload must contain the proxy request metric",
-        )
+        val documents = bytes.toString(StandardCharsets.UTF_8)
+            .lineSequence()
+            .filter(String::isNotBlank)
+            .map(MAPPER::readTree)
+            .toList()
+        assertEquals(1, documents.size)
+        val exportedMetric = documents.single()
+            .path("resourceMetrics").single()
+            .path("scopeMetrics").single()
+            .path("metrics").single()
+        assertEquals("vigilant.stdout.test", exportedMetric.path("name").asText())
     }
 
-    /** The production process wires proxy metrics and flushes them during graceful shutdown. */
+    /** Keeps metrics collectable without emitting stdout documents when output is disabled. */
     @Test
-    fun `production gateway exports proxy metrics on shutdown`() {
-        val collector = fixture.startOtlpTestCollector()
-        val upstream = fixture.startServer { HttpResponse.of(HttpStatus.OK) }
-        val gateway = GatewayProcessFixture.launch(
-            upstream = fixture.serverUri(upstream),
-            environment = mapOf("VIGILANT_OTLP_ENDPOINT" to collector.uri.toString()),
-        )
-        val process = gateway.process
-        try {
-            val client = gateway.awaitServing("/healthz")
-            val response = client.chatCompletions("metrics")
-                .aggregate()
-                .join()
-            assertEquals(HttpStatus.OK, response.status())
+    fun `metrics remain collected without stdout export when disabled`() {
+        val bytes = ByteArrayOutputStream()
+        val output = PrintStream(bytes, true, StandardCharsets.UTF_8)
+        val reader = TestMetricReader()
+        val provider = track(buildSdkMeterProvider(OtlpSettings(enabled = false), output, reader))
 
-            process.destroy()
-            val exitTimeout = AppComponent.GRACEFUL_SHUTDOWN_FORCE_TIMEOUT
-                .plus(AppComponent.GRACEFUL_SHUTDOWN_QUIET_PERIOD)
-                .plusSeconds(10)
-            assertTrue(
-                process.waitFor(exitTimeout.toSeconds(), TimeUnit.SECONDS),
-                "gateway did not stop after SIGTERM; output: ${gateway.output()}",
-            )
-            assertTrue(
-                collector.exports.any { it.path == "/v1/metrics" },
-                "production shutdown did not export metrics; paths: ${collector.exports.map { it.path }}; " +
-                    "output: ${gateway.output()}",
-            )
-        } finally {
-            gateway.close()
-        }
+        provider.get(INSTRUMENTATION_SCOPE)
+            .counterBuilder("vigilant.disabled.test")
+            .build()
+            .add(1)
+        val flush = provider.forceFlush().join(10, TimeUnit.SECONDS)
+
+        assertTrue(flush.isSuccess, "metrics SDK flush failed: ${flush.failureThrowable}")
+        assertEquals("vigilant.disabled.test", reader.collectAllMetrics().single().name)
+        assertTrue(bytes.toString(StandardCharsets.UTF_8).isBlank())
     }
 
+    /** Retains [provider] for test cleanup and returns it to the caller. */
+    private fun track(provider: SdkMeterProvider): SdkMeterProvider {
+        providers += provider
+        return provider
+    }
+
+    private companion object {
+        const val INSTRUMENTATION_SCOPE = "io.vigilant.gateway.test"
+        val MAPPER = ObjectMapper()
+    }
 }

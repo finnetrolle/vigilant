@@ -1,7 +1,7 @@
 # Пример конфигурации Vigilant (HOCON).
 # Поиск файла: $VIGILANT_CONFIG, затем ./vigilant.conf, затем /etc/vigilant/vigilant.conf.
 # Переменные окружения VIGILANT_UPSTREAM_URL, VIGILANT_PORT, VIGILANT_UPSTREAM_*_TIMEOUT,
-# VIGILANT_SHUTDOWN_*, VIGILANT_INSPECTION_*, VIGILANT_OTLP_ENDPOINT и VIGILANT_OTLP_ENABLED
+# VIGILANT_SHUTDOWN_*, VIGILANT_INSPECTION_*, VIGILANT_TRACING_* и VIGILANT_OTLP_ENABLED
 # переопределяют значения файла.
 vigilant {
   upstream-url = "http://127.0.0.1:18081"
@@ -23,9 +23,11 @@ vigilant {
   inspection-max-concurrent-request-sources = 128
   inspection-max-retained-segments-per-request = 128
 
-  # Экспорт traces и metrics через OTLP HTTP (локальный трейсинг и correlation ID
-  # работают всегда; без endpoint внешний экспорт выключен). К общему базовому
-  # endpoint автоматически добавляются signal paths /v1/traces и /v1/metrics.
-  otlp-endpoint = "http://127.0.0.1:4318"
+  # Header с opaque session ID и header со значением W3C traceparent.
+  # tracestate, если он есть, остаётся стандартным header tracestate.
+  tracing-session-header = "x-session-id"
+  tracing-traceparent-header = "traceparent"
+
+  # OTLP JSON Lines traces и metrics в stdout. Сетевого подключения к Collector нет.
   otlp-enabled = true
 }

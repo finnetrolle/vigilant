@@ -56,6 +56,110 @@ class AppConfigLoadingTest {
         assertEquals(18082, config.port)
     }
 
+    /** Uses the documented tracing header names when neither config source overrides them. */
+    @Test
+    fun `tracing header names use documented defaults`() {
+        val config = loadAppConfig(
+            env = mapOf("VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081"),
+            defaultConfigPaths = emptyList(),
+        )
+
+        assertEquals(
+            TracingSettings(
+                sessionHeader = "x-session-id",
+                traceparentHeader = "traceparent",
+            ),
+            config.tracing,
+        )
+    }
+
+    /** Loads both configurable tracing header names from their documented HOCON keys. */
+    @Test
+    fun `tracing header names are configurable through hocon`() {
+        val file = writeConfig(
+            """
+            vigilant {
+              upstream-url = "http://127.0.0.1:18081"
+              tracing-session-header = "x-agent-session"
+              tracing-traceparent-header = "x-agent-traceparent"
+            }
+            """.trimIndent(),
+        )
+
+        val config = loadAppConfig(
+            env = mapOf("VIGILANT_CONFIG" to file.toString()),
+            defaultConfigPaths = emptyList(),
+        )
+
+        assertEquals(
+            TracingSettings(
+                sessionHeader = "x-agent-session",
+                traceparentHeader = "x-agent-traceparent",
+            ),
+            config.tracing,
+        )
+    }
+
+    /** Loads both configurable tracing header names from environment overrides. */
+    @Test
+    fun `tracing header names are configurable through environment`() {
+        val config = loadAppConfig(
+            env = mapOf(
+                "VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081",
+                "VIGILANT_TRACING_SESSION_HEADER" to "x-agent-session",
+                "VIGILANT_TRACING_TRACEPARENT_HEADER" to "x-agent-traceparent",
+            ),
+            defaultConfigPaths = emptyList(),
+        )
+
+        assertEquals(
+            TracingSettings(
+                sessionHeader = "x-agent-session",
+                traceparentHeader = "x-agent-traceparent",
+            ),
+            config.tracing,
+        )
+    }
+
+    /** Rejects a tracing session header name that is not a valid HTTP field name. */
+    @Test
+    fun `invalid tracing session header name fails startup`() {
+        val exception = assertFailsWith<IllegalArgumentException> {
+            loadAppConfig(
+                env = mapOf(
+                    "VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081",
+                    "VIGILANT_TRACING_SESSION_HEADER" to "bad header",
+                ),
+                defaultConfigPaths = emptyList(),
+            )
+        }
+
+        assertEquals(
+            "VIGILANT_TRACING_SESSION_HEADER must contain a valid HTTP header name",
+            exception.message,
+        )
+    }
+
+    /** Rejects tracing header names that differ only by case. */
+    @Test
+    fun `session and traceparent headers must be distinct`() {
+        val exception = assertFailsWith<IllegalArgumentException> {
+            loadAppConfig(
+                env = mapOf(
+                    "VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081",
+                    "VIGILANT_TRACING_SESSION_HEADER" to "x-correlation",
+                    "VIGILANT_TRACING_TRACEPARENT_HEADER" to "X-Correlation",
+                ),
+                defaultConfigPaths = emptyList(),
+            )
+        }
+
+        assertEquals(
+            "VIGILANT_TRACING_SESSION_HEADER and VIGILANT_TRACING_TRACEPARENT_HEADER must be distinct",
+            exception.message,
+        )
+    }
+
     /** Verifies environment overrides for every bounded request-source limit. */
     @Test
     fun `inspection source bounds are configurable through environment`() {
@@ -277,37 +381,39 @@ class AppConfigLoadingTest {
         )
     }
 
+    /** Uses enabled stdout OTLP export when no explicit setting is supplied. */
     @Test
-    fun `otlp settings default to enabled without endpoint`() {
+    fun `otlp stdout export defaults to enabled`() {
         val config = loadAppConfig(
             env = mapOf("VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081"),
             defaultConfigPaths = emptyList(),
         )
 
-        assertEquals(OtlpSettings(enabled = true, endpoint = null), config.otlp)
+        assertEquals(OtlpSettings(enabled = true), config.otlp)
     }
 
+    /** Disables stdout OTLP export through the environment setting. */
     @Test
-    fun `environment overrides otlp endpoint and enabled`() {
+    fun `environment disables otlp stdout export`() {
         val config = loadAppConfig(
             env = mapOf(
                 "VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081",
-                "VIGILANT_OTLP_ENDPOINT" to "http://collector:4318",
                 "VIGILANT_OTLP_ENABLED" to "false",
             ),
             defaultConfigPaths = emptyList(),
         )
 
-        assertEquals(OtlpSettings(enabled = false, endpoint = URI("http://collector:4318")), config.otlp)
+        assertEquals(OtlpSettings(enabled = false), config.otlp)
     }
 
+    /** Disables stdout OTLP export through the HOCON setting. */
     @Test
-    fun `otlp endpoint from hocon file is loaded`() {
+    fun `otlp stdout export can be disabled in hocon`() {
         val file = writeConfig(
             """
             vigilant {
               upstream-url = "http://127.0.0.1:18081"
-              otlp-endpoint = "http://collector:4318/telemetry"
+              otlp-enabled = false
             }
             """.trimIndent(),
         )
@@ -317,29 +423,7 @@ class AppConfigLoadingTest {
             defaultConfigPaths = emptyList(),
         )
 
-        assertEquals(OtlpSettings(enabled = true, endpoint = URI("http://collector:4318/telemetry")), config.otlp)
-    }
-
-    @Test
-    fun `environment overrides file for otlp endpoint`() {
-        val file = writeConfig(
-            """
-            vigilant {
-              upstream-url = "http://127.0.0.1:18081"
-              otlp-endpoint = "http://file-collector:4318"
-            }
-            """.trimIndent(),
-        )
-
-        val config = loadAppConfig(
-            env = mapOf(
-                "VIGILANT_CONFIG" to file.toString(),
-                "VIGILANT_OTLP_ENDPOINT" to "http://env-collector:4318",
-            ),
-            defaultConfigPaths = emptyList(),
-        )
-
-        assertEquals(URI("http://env-collector:4318"), config.otlp.endpoint)
+        assertEquals(OtlpSettings(enabled = false), config.otlp)
     }
 
     @Test
@@ -491,34 +575,6 @@ class AppConfigLoadingTest {
             exception.message!!.contains("upstreamConnectTimeout"),
             "error must name the offending field, was: ${exception.message}",
         )
-    }
-
-    @Test
-    fun `non http otlp endpoint fails with validation message`() {
-        val exception = assertFailsWith<IllegalArgumentException> {
-            loadAppConfig(
-                env = mapOf(
-                    "VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081",
-                    "VIGILANT_OTLP_ENDPOINT" to "ftp://collector:4318",
-                ),
-                defaultConfigPaths = emptyList(),
-            )
-        }
-        assertEquals("VIGILANT_OTLP_ENDPOINT must contain an absolute HTTP(S) URL", exception.message)
-    }
-
-    @Test
-    fun `otlp endpoint with query fails`() {
-        val exception = assertFailsWith<IllegalArgumentException> {
-            loadAppConfig(
-                env = mapOf(
-                    "VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081",
-                    "VIGILANT_OTLP_ENDPOINT" to "http://collector:4318?v=1",
-                ),
-                defaultConfigPaths = emptyList(),
-            )
-        }
-        assertEquals("VIGILANT_OTLP_ENDPOINT must not contain user info, query, or fragment", exception.message)
     }
 
     @Test

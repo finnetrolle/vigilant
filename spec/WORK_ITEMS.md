@@ -110,6 +110,7 @@ Issue является листом mind map, если:
 | [VIG-14: Strict protocol and inspection-gap outcomes](issues/issue_14_strict_protocol_gap_outcomes.md) | `Done` | завершена | 0 дней осталось |
 | [VIG-15: Capacity and cancellation outcomes](issues/issue_15_capacity_cancellation_outcomes.md) | `Done` | завершена | 0 дней осталось |
 | [VIG-16: Packaged shadow proxy evidence](issues/issue_16_packaged_shadow_proxy_evidence.md) | `Done` | завершена | 0 дней осталось |
+| [VIG-17: Сквозной tracing context и OTLP JSON через stdout](issues/issue_17_request_tracing_stdout_otlp.md) | `Done` | завершена | 0 дней осталось |
 
 ## Как закрывать work item
 

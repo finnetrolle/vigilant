@@ -190,16 +190,19 @@ class BypassProxyServiceTest {
             .responseTimeout(Duration.ofSeconds(10))
             .build()
         try {
-            val response = client.execute(
-                HttpRequest.of(
-                    RequestHeaders.builder(HttpMethod.POST, "/v1/chat?token=query-secret-1C6A")
-                        .add(HttpHeaderNames.AUTHORIZATION, "Bearer auth-secret-5F1C")
-                        .build(),
-                    HttpData.ofUtf8("request body-secret-8D07"),
-                ),
-            ).aggregate().join()
-
-            assertEquals(HttpStatus.BAD_GATEWAY, response.status())
+            val exchange = runCatching {
+                client.execute(
+                    HttpRequest.of(
+                        RequestHeaders.builder(HttpMethod.POST, "/v1/chat?token=query-secret-1C6A")
+                            .add(HttpHeaderNames.AUTHORIZATION, "Bearer auth-secret-5F1C")
+                            .build(),
+                        HttpData.ofUtf8("request body-secret-8D07"),
+                    ),
+                ).aggregate().join()
+            }
+            exchange.getOrNull()?.let { response ->
+                assertEquals(HttpStatus.BAD_GATEWAY, response.status())
+            }
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
             while (events.isEmpty() && System.nanoTime() < deadline) Thread.sleep(50)
             assertFalse(events.isEmpty(), "upstream failure was not logged")

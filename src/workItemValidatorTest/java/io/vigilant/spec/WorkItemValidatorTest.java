@@ -34,6 +34,16 @@ final class WorkItemValidatorTest {
         assertEquals(List.of(), WorkItemValidator.validate(projectDirectory));
     }
 
+    /** Accepts metadata rendered as Markdown list items. */
+    @Test
+    void acceptsMetadataAsMarkdownListItems() throws IOException {
+        writeValidGraph("Draft");
+        replace("spec/epics/epic_01_sample.md", "**ID:** `EPIC-01`", "- **ID:** `EPIC-01`");
+        replace("spec/epics/epic_01_sample.md", "**Статус:** Done", "- **Статус:** Done");
+
+        assertEquals(List.of(), WorkItemValidator.validate(projectDirectory));
+    }
+
     /** Reports a registry status that differs from the linked work item. */
     @Test
     void reportsRegistryStatusDrift() throws IOException {

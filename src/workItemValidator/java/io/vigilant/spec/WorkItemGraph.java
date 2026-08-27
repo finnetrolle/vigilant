@@ -16,8 +16,8 @@ import java.util.stream.Stream;
 final class WorkItemGraph {
     private static final Pattern TITLE_ID = Pattern.compile("^# ((?:EPIC|VIG)-[A-Z0-9-]+): .+$");
     private static final Pattern ID_METADATA =
-            Pattern.compile("^\\*\\*ID:\\*\\* `((?:EPIC|VIG)-[A-Z0-9-]+)`\\s*$");
-    private static final Pattern STATUS = Pattern.compile("^\\*\\*Статус:\\*\\* (.+)$");
+            Pattern.compile("^(?:-\\s+)?\\*\\*ID:\\*\\* `((?:EPIC|VIG)-[A-Z0-9-]+)`\\s*$");
+    private static final Pattern STATUS = Pattern.compile("^(?:-\\s+)?\\*\\*Статус:\\*\\* (.+)$");
 
     private final Path projectDirectory;
     private final Path specificationDirectory;

@@ -1,372 +1,183 @@
 # Vigilant
 
-Vigilant — проект системы guardrails для платформы ИИ-агентов.
+Vigilant - OpenAI-совместимый guardrails gateway для платформ ИИ-агентов. Он
+проверяет запрос до отправки модели, применяет явно заданные политики и
+формирует безопасный audit event, не раскрывая содержимое запроса.
 
-## Документы проекта
+> Статус: pre-release, версия `0.1.0-SNAPSHOT`. Рабочий инкремент выполняет
+> request-side PII inspection в shadow mode. Production milestone ещё не закрыт:
+> актуальный frontier и недостающие evidence перечислены в
+> [roadmap](spec/ROADMAP.md#текущий-roadmap-frontier).
 
-- [Функции MVP](spec/MVP_FUNCTIONS.md)
-- [Нефункциональные требования, стек и первая bypass-версия](spec/MVP_NON_FUNCTIONAL_REQUIREMENTS.md)
-- [Функции Stage 1](spec/STAGE_1_FUNCTIONS.md)
-- [Функции вне границ продукта](spec/OUT_OF_SCOPE_FUNCTIONS.md)
+## Что работает сейчас
 
-## Сборка и запуск
+- `POST /v1/chat/completions` с `Content-Type: application/json`.
+- Bounded приём request body и детерминированная проверка встроенным
+  `fast-pii` detector по `politics.conf`.
+- Shadow-only решение: найденный PII фиксируется как `DETECTED`, но текущая
+  disposition всегда `ALLOW`.
+- Byte-identical replay исходного body и сохранение неизвестных полей.
+- Streaming pass-through ответа upstream, включая SSE.
+- Stable fail-closed ошибки для неподдерживаемой или неоднозначной request
+  schema и при исчерпании inspection capacity.
+- JSONL-логи, correlation/trace ID, OTLP traces и metrics, health/readiness
+  endpoints и non-root OCI image.
 
-Требуется JDK 25.
+Пока не поддерживаются OpenAI Responses API, response inspection, `BLOCK`,
+`MASK`, `REMOVE`, извлечение trusted identity, disk spill, Kubernetes/Helm и
+ML/NER detector. Полные границы первого инкремента зафиксированы в
+[roadmap](spec/ROADMAP.md#не-входит-в-первый-production-increment).
 
-```bash
-./gradlew build                 # компиляция + тесты + detekt
-./gradlew installDist           # дистрибутив в build/install/vigilant/
+## Быстрый старт
+
+Требуется JDK 25. Устанавливать Gradle отдельно не нужно: проект содержит
+Gradle Wrapper.
+
+~~~bash
+./gradlew installDist
 cp politics.conf.example politics.conf
 
-# Application config через environment; policy snapshot из ./politics.conf
-VIGILANT_UPSTREAM_URL=http://127.0.0.1:18081 VIGILANT_PORT=18080 ./build/install/vigilant/bin/vigilant
+VIGILANT_UPSTREAM_URL=https://api.openai.com \
+  ./build/install/vigilant/bin/vigilant
+~~~
 
-# Запуск с HOCON-файлом (см. vigilant.conf.example; переменные окружения переопределяют файл)
-VIGILANT_CONFIG=./vigilant.conf.example ./build/install/vigilant/bin/vigilant
-```
+Проверка готовности:
 
-Недопустимая или неполная конфигурация: сообщение в stderr, код завершения 2.
+~~~bash
+curl --fail http://127.0.0.1:8080/readyz
+~~~
 
-## OCI-образ
+Пример запроса через gateway, где `OPENAI_MODEL` содержит доступную upstream
+model:
 
-Формат versioned артефакта зафиксирован как Gradle application distribution:
-один `build/distributions/vigilant-<version>.tar` с versioned JAR приложения,
-runtime-зависимостями и стартовым скриптом. Архив собирается одним target:
+~~~bash
+curl --fail-with-body http://127.0.0.1:8080/v1/chat/completions \
+  --header "Authorization: Bearer $OPENAI_API_KEY" \
+  --header "Content-Type: application/json" \
+  --data "{\"model\":\"$OPENAI_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Contact alice@example.com\"}]}"
+~~~
 
-```bash
-./gradlew ociArtifact
-```
+Vigilant проверит model-visible text, запишет safe aggregate
+`policy.shadow_decision` и отправит исходный JSON upstream без
+пересериализации. В shadow mode найденный email не блокирует запрос.
 
-Multi-stage `Dockerfile` собирает тот же артефакт в чистом JDK 25 builder и
-переносит его в финальный JRE 25 образ. Оба базовых образа закреплены по digest.
-Локальная сборка образа выполняется одной командой:
+## Как проходит запрос
 
-```bash
+~~~text
+Client
+  -> bounded request source
+  -> OpenAI request parser
+  -> policy selection + fast-pii inspection
+  -> byte-identical replay
+  -> upstream
+~~~
+
+Response body не агрегируется и передаётся клиенту потоково. Подробный
+поддерживаемый контракт, ошибки и модель таймаутов описаны в
+[runtime contract](docs/runtime-contract.md).
+
+## Конфигурация
+
+Application configuration загружается с приоритетом
+`environment > HOCON file > defaults`. Для запуска обязательны:
+
+- `VIGILANT_UPSTREAM_URL` или `vigilant.upstream-url` в HOCON;
+- валидный `politics.conf`, по умолчанию из текущей директории;
+- `VIGILANT_PORT` необязателен, значение по умолчанию - `8080`.
+
+Примеры находятся в [vigilant.conf.example](vigilant.conf.example) и
+[politics.conf.example](politics.conf.example). Полный список настроек,
+defaults, validation rules и порядок поиска файлов приведены в
+[configuration reference](docs/configuration.md).
+
+Невалидная или неполная application/policy configuration печатает безопасную
+ошибку в stderr и завершает процесс с кодом `2`.
+
+## OCI image
+
+~~~bash
 docker build --tag vigilant:0.1.0-SNAPSHOT .
-```
 
-Запуск с application configuration через environment variables и policy snapshot через read-only mount:
-
-```bash
 docker run --rm --name vigilant \
   --publish 8080:8080 \
   --stop-timeout 35 \
   --env VIGILANT_UPSTREAM_URL=https://api.openai.com \
   --env VIGILANT_POLITICS_CONFIG=/etc/vigilant/politics.conf \
-  --mount type=bind,src="$(pwd)/politics.conf",dst=/etc/vigilant/politics.conf,readonly \
+  --mount type=bind,src="$PWD/politics.conf",dst=/etc/vigilant/politics.conf,readonly \
   vigilant:0.1.0-SNAPSHOT
-```
+~~~
 
-Запуск с application HOCON и policy snapshot, смонтированными read-only:
+Образ запускается от UID/GID `10001`. Полный запуск с HOCON, формат
+versioned artifact, lifecycle и требования smoke-теста описаны в
+[deployment guide](docs/deployment.md).
 
-```bash
-docker run --rm --name vigilant \
-  --publish 8080:8080 \
-  --stop-timeout 35 \
-  --mount type=bind,src="$(pwd)/vigilant.conf",dst=/etc/vigilant/vigilant.conf,readonly \
-  --env VIGILANT_POLITICS_CONFIG=/etc/vigilant/politics.conf \
-  --mount type=bind,src="$(pwd)/politics.conf",dst=/etc/vigilant/politics.conf,readonly \
-  vigilant:0.1.0-SNAPSHOT
-```
-
-Контейнер работает от non-root UID/GID `10001`. `STOPSIGNAL SIGTERM` передаёт
-остановку JVM shutdown hook; timeout 35 секунд оставляет приложению его полный
-30-секундный graceful shutdown budget без последующего `SIGKILL`.
-
-Полный локальный smoke-тест требует Docker, `curl` и `python3`. Он собирает
-образ и проверяет env/file configuration, read-only policy mount, `/healthz`,
-`/readyz`, exact replay реального PII Chat Completions request, safe JSONL
-shadow audit, non-root user, exit code 2 для невалидной application/policy
-configuration и остановку по SIGTERM:
-
-```bash
+~~~bash
 ./scripts/oci-smoke-test
-```
-
-Smoke-тест запускается явно и не входит в `./gradlew build` или CI.
-
-## Конфигурация
-
-Vigilant настраивается HOCON-файлом и/или переменными окружения. Приоритет: переменные окружения > файл > значения по умолчанию.
-
-Поиск файла конфигурации:
-
-1. путь из переменной `VIGILANT_CONFIG` - файл обязан существовать, иначе запуск завершается ошибкой;
-2. иначе первый существующий из `./vigilant.conf`, `/etc/vigilant/vigilant.conf`;
-3. если файл не найден - конфигурация читается только из переменных окружения.
-
-Формат файла (`vigilant.conf`):
-
-```hocon
-vigilant {
-  upstream-url = "http://127.0.0.1:18081"
-  port = 8080
-
-  # Таймауты upstream-клиента; значения ниже - значения по умолчанию.
-  upstream-connect-timeout = 10s
-  upstream-write-timeout = 30s
-  upstream-response-timeout = 5m
-  upstream-connection-idle-timeout = 10s
-
-  # Graceful shutdown; значения ниже - значения по умолчанию.
-  shutdown-quiet-period = 5s
-  shutdown-force-timeout = 30s
-
-  # Bounded in-memory request source для shadow inspection.
-  inspection-per-request-limit-bytes = 8388608
-  inspection-global-retained-limit-bytes = 67108864
-  inspection-max-concurrent-request-sources = 128
-  inspection-max-retained-segments-per-request = 128
-}
-```
-
-Переменные окружения (переопределяют значения файла):
-
-- `VIGILANT_UPSTREAM_URL` - абсолютный HTTP(S) URL апстрима; обязателен, если не задан в файле;
-- `VIGILANT_PORT` - порт шлюза, по умолчанию 8080;
-- `VIGILANT_UPSTREAM_CONNECT_TIMEOUT` - таймаут установки соединения с upstream, по умолчанию `10s`;
-- `VIGILANT_UPSTREAM_WRITE_TIMEOUT` - таймаут записи запроса в upstream, по умолчанию `30s`;
-- `VIGILANT_UPSTREAM_RESPONSE_TIMEOUT` - таймаут ответа upstream (модель - в разделе «Таймауты upstream-клиента»), по умолчанию `5m`;
-- `VIGILANT_UPSTREAM_CONNECTION_IDLE_TIMEOUT` - сколько простаивающее соединение к upstream живёт в пуле, по умолчанию `10s`;
-- `VIGILANT_SHUTDOWN_QUIET_PERIOD` - gap без активных запросов перед закрытием сервера, по умолчанию `5s`;
-- `VIGILANT_SHUTDOWN_FORCE_TIMEOUT` - абсолютный bound graceful shutdown, по умолчанию `30s`, не меньше quiet period;
-- `VIGILANT_INSPECTION_PER_REQUEST_LIMIT_BYTES` - максимум retained bytes одного request, по умолчанию `8388608`;
-- `VIGILANT_INSPECTION_GLOBAL_RETAINED_LIMIT_BYTES` - process-wide максимум retained request bytes, по умолчанию `67108864`, не меньше per-request limit;
-- `VIGILANT_INSPECTION_MAX_CONCURRENT_REQUEST_SOURCES` - максимум одновременно admitted request sources, по умолчанию `128`;
-- `VIGILANT_INSPECTION_MAX_RETAINED_SEGMENTS_PER_REQUEST` - максимум storage segments одного request source, по умолчанию `128`;
-- `VIGILANT_OTLP_ENDPOINT` - базовый HTTP(S) endpoint OTLP-коллектора для экспорта traces; `/v1/traces` добавляется сам; без значения экспорт выключен;
-- `VIGILANT_OTLP_ENABLED` - выключатель OTLP-экспорта, по умолчанию `true`;
-- `VIGILANT_CONFIG` - путь к файлу конфигурации.
-
-Правило переопределения: любой ключ `vigilant.some-setting` из файла переопределяется переменной `VIGILANT_SOME_SETTING`.
-
-Policy snapshot загружается отдельно из обязательного `politics.conf`. Путь из
-`VIGILANT_POLITICS_CONFIG` имеет приоритет, иначе используется
-`./politics.conf`. Файл читается и валидируется один раз при startup; hot reload
-отсутствует. Snapshot обязан содержать хотя бы одну effective enabled global
-`REQUEST` policy с `url=*`, `model=*`, anonymous subject `*` и detector
-`fast-pii`. Все reactions текущего shadow increment обязаны использовать
-`ALLOW` без transformations. Пустой, disabled, overridden или enforcement
-snapshot отклоняется до старта сервера. Минимальный валидный пример находится
-в `politics.conf.example`.
-
-Формат значений длительностей - строки вида `300ms`, `10s`, `5m` (или ISO-8601 `PT5M`). Нулевые и отрицательные значения отклоняются при старте, кроме `shutdown-quiet-period=0s`, который отключает ожидание drain; force timeout всегда должен быть положительным и не меньше quiet period.
-
-Недопустимая или неполная application/policy configuration: сообщение об ошибке в stderr и код завершения 2.
-
-## PII shadow request proxy
-
-Production route поддерживает `POST /v1/chat/completions` с
-`Content-Type: application/json`. Gateway до первого upstream byte полностью
-принимает body в bounded source, разбирает model-visible text, применяет global
-`fast-pii` policy и затем передаёт исходные method, path/query, end-to-end
-headers и body без изменений. Response, включая SSE, остаётся streaming
-pass-through. Найденный PII не блокирует запрос: текущая disposition всегда
-`ALLOW`.
-
-Каждый успешно разобран request создаёт один structured event
-`event.name=policy.shadow_decision` с protocol, phase, decision, disposition,
-coverage, trace ID, policy/detector versions, aggregate finding counts и
-duration. Body, matched text, offsets, locators, query и headers в event не
-попадают. Known non-text content передаётся без изменений с decision
-`INSPECTION_GAP`, а не `CLEAN`.
-
-Fail-closed request outcomes до upstream:
-
-| Ситуация | Статус | Тело (`application/json`) |
-|---|---|---|
-| другой method/path/content type | `400 Bad Request` | `{"error":"unsupported_schema"}` |
-| malformed supported message | `400 Bad Request` | `{"error":"malformed_message"}` |
-| ambiguous content | `400 Bad Request` | `{"error":"ambiguous_content"}` |
-| external или unresolved context | `400 Bad Request` | `{"error":"unresolved_context"}` |
-| per-request byte limit | `413 Payload Too Large` | `{"error":"request_too_large"}` |
-| owner/global retained capacity | `503 Service Unavailable` | `{"error":"inspection_capacity_exhausted"}` |
-
-## Стабильные proxy-ошибки upstream
-
-Когда upstream недоступен (отказ соединения, unknown host) или не отвечает за отведённый timeout, клиент получает стабильную proxy-ошибку без внутренних деталей Armeria: без имён классов, сообщений исключений и stack trace. Корректные HTTP-ответы upstream (включая 4xx/5xx) передаются без изменений.
-
-| Ситуация | Статус | Тело (`application/json`) |
-|---|---|---|
-| transport-сбой (отказ соединения, unknown host, некорректный HTTP upstream) | `502 Bad Gateway` | `{"error":"upstream_unavailable"}` |
-| upstream не ответил за response timeout | `504 Gateway Timeout` | `{"error":"upstream_timeout"}` |
-
-Каждая proxy-ошибка логируется одним структурным WARN-событием (`event.name=upstream_request_failed`, `upstream.error`, `upstream.cause`) без тел запросов/ответов, query string и auth-заголовков.
-
-## Трейсинг и correlation ID
-
-Каждый запрос получает correlation/trace ID: входящий W3C `traceparent` продолжается, без него gateway генерирует новый trace ID. Trace ID попадает в MDC (`trace_id`) каждой JSONL-строки логов, относящейся к запросу, и в span proxy-обмена с атрибутами метода, пути без query, статуса и длительностей `upstream.duration_ms`/`gateway.duration_ms`. Тела и auth-заголовки в span и логи не попадают.
-
-Экспорт traces через OTLP HTTP включается заданием `VIGILANT_OTLP_ENDPOINT` (базовый URL; `/v1/traces` добавляется автоматически) и выключается `VIGILANT_OTLP_ENABLED=false`. Без endpoint gateway работает как раньше: трейсинг и логи работают, экспорт выключен. На shutdown queued spans сбрасываются в коллектор.
-
-## Таймауты upstream-клиента
-
-Upstream-клиент создаётся с явными таймаутами и настройками пула вместо библиотечных дефолтов Armeria: дефолтный response timeout Armeria (15 секунд) покрывает ответ целиком и оборвал бы легитимный длинный LLM-стрим.
-
-Принятая модель `upstream-response-timeout`:
-
-- это максимальное время до первого полученного объекта ответа (заголовков) и одновременно максимальная пауза между двумя подряд идущими объектами ответа;
-- общая длительность стрима этим таймаутом не ограничена: каждый полученный от upstream объект сбрасывает дедлайн на `now + response-timeout`;
-- зависший upstream (нет ни первого объекта, ни следующего чанка дольше таймаута) прерывается, и клиент получает стабильную proxy-ошибку `504 {"error":"upstream_timeout"}`.
-
-Соединение с незавершённым ответом не считается простаивающим: `upstream-connection-idle-timeout` не обрывает запрос, ждущий первый байт или следующий чанк (подтверждено E2E-тестом с задержкой первого байта дольше таймаута простоя). Поведение закреплено E2E-тестами: медленный чанковый стрим переживает response timeout меньшего размера, а зависший upstream прерывается по значению, заданному через переменную окружения.
-
-## Health и readiness endpoints
-
-Gateway сам отвечает на пробы оркестратора; пути проб никогда не проксируются upstream:
-
-- `GET /healthz` - liveness: `200`, пока сервер принимает соединения.
-- `GET /readyz` - readiness: `200`, когда gateway готов обрабатывать трафик; `503` после начала graceful shutdown, до фактического закрытия. Доступность upstream не проверяется.
-
-Пути `/healthz` и `/readyz` выбраны по конвенции Kubernetes и не конфликтуют с пространством путей LLM API: OpenAI/Anthropic-совместимые API живут под `/v1/`, пробы зарезервированы вне его.
-
-Graceful shutdown: по SIGTERM (или иному завершению JVM) readiness переключается на `503`, новый proxy traffic локально отклоняется, а уже активные exchanges продолжают drain. По умолчанию сервер ждёт до 5 секунд отсутствия активных запросов (quiet period) и закрывается не позднее 30 секунд (force timeout), прерывая застрявшие запросы. После drain приложение закрывает dedicated upstream client factory, затем flush/close providers traces и metrics. Оба bound настраиваются через HOCON или `VIGILANT_SHUTDOWN_*`.
-
-## Логирование
-
-У приложения ровно один logging sink: `stdout`. Файлы логов не создаются и не ротируются, по сети логи не отправляются - хранение, ротация и доставка в OpenTelemetry являются ответственностью Docker/container runtime и внешнего Collector.
-
-Формат: JSON Lines (один JSON-объект на строку) через Logback: `SLF4J 2 -> AsyncAppender (bounded queue, neverBlock) -> JsonEncoder -> stdout`. Очередь ограничена (`queueSize=8192`); при заполнении события отбрасываются вместо блокировки вызывающего потока (сначала `TRACE`/`DEBUG`/`INFO`, см. `discardingThreshold`), поэтому Netty event loop никогда не ждёт записи в stdout. Потеря операционных логов при перегрузке допустима; канал не предназначен для гарантированного audit trail.
-
-Поля записи: `timestamp` (epoch millis), `level`, `threadName`, `loggerName`, `formattedMessage`, `kvpList` (SLF4J key-value pairs), `mdc`, `throwable`. Порядок полей не фиксирован - парсить как JSON, не как строку.
-
-Обычный per-request access log отсутствует. Для поддержанного Chat Completions
-request создаётся только safe aggregate `policy.shadow_decision`; остальные
-traffic observations остаются в metrics/traces.
-
-Настройка уровня (единственная runtime-настройка логов):
-
-- `VIGILANT_LOG_LEVEL` - `TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR`, `OFF`; по умолчанию `INFO`.
-
-Запрещено логировать на любом уровне, включая `DEBUG` и `TRACE`: request/response body и content preview, query string, `Authorization`/`Proxy-Authorization`, cookies, API keys, полные наборы headers, raw URI.
-
-### Ответственность deployment
-
-Docker/container runtime обязан захватывать stdout, использовать неблокирующий delivery mode и ограничивать локальные log files. Пример Docker Compose:
-
-```yaml
-services:
-  vigilant:
-    logging:
-      driver: json-file
-      options:
-        mode: non-blocking
-        max-buffer-size: 4m
-        max-size: 10m
-        max-file: "3"
-```
-
-Для OpenTelemetry требуется отдельный Collector (например, daemonset с presets `logsCollection` и `kubernetesAttributes`), который читает stdout контейнеров, парсит внутренний JSONL (уровень - в severity, `formattedMessage` - в body, KVP/MDC - в attributes, ресурсный атрибут `service.name=vigilant`) и экспортирует по OTLP, исключая собственные логи. Конфигурация Collector не входит в приложение.
-
-## Проверки качества
-
-Что входит в `./gradlew build`:
-
-- компиляция в режиме warnings-as-errors - любое предупреждение Kotlin ломает сборку;
-- E2E-тесты (реальные Armeria-серверы на эфемерных портах);
-- статический анализ detekt (правила проекта: `config/detekt/detekt.yml`).
-
-Отдельные проверки:
-
-```bash
-./gradlew pitest                  # мутационное тестирование, отчёт build/reports/pitest/; прогоняется по требованию (не входит в регулярные проверки)
-./gradlew dependencyCheckAnalyze  # CVE-скан зависимостей (только runtimeClasspath)
-./gradlew verifyAll               # полный локальный прогон: build + dependency-check
-```
-
-CVE-скан требует NVD API-ключ (бесплатный: https://nvd.nist.gov/developers/request-an-api-key). Ключ читается из gradle-свойства `nvdApiKey` (например, в `~/.gradle/gradle.properties`) или переменной окружения `NVD_API_KEY`. Первый запуск синхронизирует базу NVD (десятки минут), последующие - секунды. Проверка блокирует сборку для Critical-уязвимостей с CVSS 9.0 и выше. Отчёт: `build/reports/dependency-check/`. Ложные срабатывания подавляются в `config/dependency-check/suppressions.xml` с обоснованием.
-
-Git-хуки и CI:
-
-```bash
-./gradlew installGitHooks        # один раз после клона: pre-push хук (./gradlew build перед пушем)
-```
-
-CI (`.github/workflows/ci.yml`) на каждый push в `main` и PR запускает build, мутационное тестирование и CVE-скан (для CVE-job нужен секрет `NVD_API_KEY`; без него job пропускается).
-
-## JMH baseline PII-детектора
-
-Полная performance-матрица V1 запускается одной явной командой:
-
-```bash
-./gradlew piiJmhBaseline
-```
-
-Команда выполняет 108 комбинаций в JMH `1.37` и режиме `SampleTime`: три
-dataset (`ASCII`, `RUSSIAN`, `MIXED_UNICODE`), три точных UTF-8 размера
-(`1 KiB`, `64 KiB`, `1 MiB`) и 12 scenarios. Scenarios включают worst-case
-no-match в обоих режимах, ранний email, finding каждого последующего типа и
-full scan с несколькими findings каждого типа. Конфигурация baseline: три
-warmup iteration по одной секунде, два fork и пять measurement iteration по
-одной секунде. JMH JSON публикует в том числе p50, p95 и p99.
-
-Dataset задаёт фоновое заполнение payload. Фиксированный positive fragment
-сохраняет символы, обязательные для своего scenario: например,
-`ASCII × RU_PASSPORT` имеет ASCII padding и кириллический паспортный контекст.
-
-В stop-on-first scenario `RU_OMS` включён весь предшествующий канонический
-prefix, кроме `PAYMENT_CARD`: любой валидный 16-значный ОМС одновременно
-проходит Luhn и иначе по контракту возвращается как более ранний
-`PAYMENT_CARD`. Full-scan scenario оставляет оба recognizer включёнными и
-измеряет оба пересекающихся finding.
-
-Артефакты сохраняются в `build/reports/pii/jmh/`: raw baseline
-`baseline.json`, человекочитаемый вывод `baseline.txt` и сведения о CPU, RAM,
-OS, JVM и параметрах прогона в `environment.properties`. Числового release
-gate у baseline нет. Benchmark не входит в `build`, `test`, `check`,
-`verifyAll` или CI. Отдельная быстрая проверка отсутствия JMH в production
-runtime classpath доступна как `./gradlew piiProductionRuntimeClasspathCheck`.
-
-## Нагрузочный тест PERF-01
-
-Воспроизводимый Gatling-прогон одной командой сравнивает direct baseline и
-gateway на одном локальном upstream при 2 000 RPS:
-
-```bash
-./gradlew perfTest
-```
-
-По умолчанию каждый путь получает 60 секунд линейного разгона, 60 секунд
-steady-state прогрева при 2 000 RPS и 120 секунд измерения. Профиль использует
-80% non-streaming / 20% streaming и максимум 64 общих соединения Gatling на
-host. Сценарий сам собирает дистрибутив, запускает upstream и gateway отдельными
-JVM-процессами, а затем сохраняет HTML Gatling в `build/reports/gatling/` и
-краткий итог в `build/reports/perf-01/latest-summary.md`.
-
-Полный нагрузочный тест запускается только вручную для изменений сценария,
-производительности gateway или отдельной проверки SLO. Он не входит в `build`,
-`check`, `verifyAll`, verification pipeline или CI. Быстрый контракт расписания
-без генерации нагрузки доступен отдельно: `./gradlew perfContractTest`.
-Полная методика, параметры smoke-прогона и зафиксированный результат:
-[docs/perf-01-load-test.md](docs/perf-01-load-test.md).
-
-## Определение guardrails
-
-**Guardrails (защитные ограничения)** — это исполняемый слой политик и контрольных механизмов, который удерживает поведение ИИ-агента и последствия его действий в пределах допустимого риска.
-
-Этот слой наблюдает доступный контекст работы агента — входные данные, запрашиваемые операции, вызовы инструментов, изменения состояния и итоговые ответы — и сопоставляет их с явно заданными политиками. По результатам проверки guardrail принимает управляемое решение: разрешить действие, изменить или ограничить его, запросить подтверждение, передать решение человеку, заблокировать действие либо безопасно остановить выполнение. Решение и его основание должны быть доступны для аудита.
-
-Guardrails дополняют возможности агента ограничениями, но не определяют его полезную логику. Агент решает, **как выполнить задачу**; guardrails определяют, **какое поведение допустимо, при каких условиях и кто может разрешить исключение**.
-
-### Назначение
-
-Guardrails должны:
-
-- предотвращать недопустимые действия до наступления последствий;
-- снижать вероятность и масштаб ущерба при ошибках модели, инструментов или конфигурации;
-- обеспечивать соблюдение требований безопасности, приватности, законодательства и внутренних политик;
-- делать решения контроля объяснимыми, наблюдаемыми и воспроизводимыми;
-- сохранять максимальную полезность агента внутри установленной границы риска.
-
-### Обязательные свойства
-
-Механизм считается guardrail, если у него определены:
-
-1. **Защищаемый объект** — пользователь, данные, система, деньги, репутация или иной актив.
-2. **Политика** — явное, версионируемое правило допустимого поведения.
-3. **Точка контроля** — момент, когда правило проверяется до или после значимого действия.
-4. **Решение** — однозначный результат проверки и основание для него.
-5. **Реакция** — разрешение, ограничение, преобразование, подтверждение, эскалация, блокировка или остановка.
-6. **След аудита** — достаточная запись для расследования и оценки качества контроля без избыточного раскрытия чувствительных данных.
-
-Кратко: **guardrails — это проверяемая и исполняемая граница допустимого поведения ИИ-агента, выраженная в политиках, решениях и контролируемых реакциях**.
+~~~
+
+Smoke-тест требует `cmp`, `curl`, Docker и Python 3. Он запускается явно и не
+входит в `build` или CI.
+
+## Observability
+
+- Единственный logging sink - stdout в формате JSON Lines.
+- Тела, query string, credentials, auth/cookie headers и content previews не
+  логируются.
+- Имена входных headers для session ID и W3C `traceparent` настраиваются через
+  `VIGILANT_TRACING_SESSION_HEADER` и `VIGILANT_TRACING_TRACEPARENT_HEADER`.
+- Валидный входящий trace продолжается, отсутствующий или некорректный контекст
+  заменяется новым; effective session и trace context возвращаются клиенту и
+  передаются upstream.
+- Application JSON logs, OTLP/JSON traces и OTLP/JSON metrics пишутся только в
+  stdout. Приложение не подключается к OpenTelemetry Collector.
+- Prometheus scrape endpoint отсутствует.
+
+Имена метрик, JSONL schema, audit events, настройка Collector и правила
+безопасности приведены в [observability reference](docs/observability.md).
+
+## Проверки
+
+~~~bash
+./gradlew build                  # compile, tests, detekt, work-item validation
+./gradlew test                   # тесты
+./gradlew dependencyCheckAnalyze # OWASP CVE scan runtimeClasspath
+./gradlew verifyAll              # build + OWASP dependency check
+./gradlew pitest                 # mutation testing, запускается отдельно
+./gradlew installGitHooks        # установить versioned pre-push hook
+~~~
+
+`build` также проверяет, что JMH не попал в production runtime classpath.
+CI на каждый push в `main` и pull request запускает `build`. OWASP job
+запускается только при наличии секрета `NVD_API_KEY`. Mutation testing в
+текущий CI не входит. Полное описание reports, CVE threshold и локальных
+проверок находится в [development guide](docs/development.md).
+
+## Performance
+
+~~~bash
+./gradlew piiJmhBaseline # JMH baseline fast-pii detector
+./gradlew perfTest       # PERF-01 direct-vs-gateway load test
+~~~
+
+Обе проверки запускаются явно и не входят в `build`, `verifyAll` или CI.
+Описание JMH matrix находится в
+[VIG-02-15](spec/issues/epic_02/issue_02_15_jmh_baseline.md), а нагрузочного
+теста - в [методике PERF-01](docs/perf-01-load-test.md). Зафиксированные
+результаты публикуются в [истории PERF-01](docs/perf-01-result.md).
+
+## Документация проекта
+
+- [Roadmap первого production increment](spec/ROADMAP.md)
+- [Реестр epics и issues](spec/WORK_ITEMS.md)
+- [Функции MVP](spec/MVP_FUNCTIONS.md)
+- [Нефункциональные требования и стек](spec/MVP_NON_FUNCTIONAL_REQUIREMENTS.md)
+- [Функции Stage 1](spec/STAGE_1_FUNCTIONS.md)
+- [Функции вне границ продукта](spec/OUT_OF_SCOPE_FUNCTIONS.md)
+- [Configuration reference](docs/configuration.md)
+- [Runtime contract](docs/runtime-contract.md)
+- [Observability reference](docs/observability.md)
+- [Deployment guide](docs/deployment.md)
+- [Development guide](docs/development.md)
+
+Нормативный scope хранится в `spec/`. README предназначен для быстрого входа
+в проект и не заменяет требования, статусы issues или roadmap.

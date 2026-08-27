@@ -143,8 +143,12 @@ interface AppComponent {
         /** Wraps the shadow proxy with request-scoped tracing and correlation. */
         @Provides
         @SingleIn(AppScope::class)
-        fun tracingService(piiShadowProxyService: PiiShadowProxyService, tracer: Tracer): TracingService =
-            TracingService(piiShadowProxyService, tracer)
+        fun tracingService(
+            piiShadowProxyService: PiiShadowProxyService,
+            tracer: Tracer,
+            appConfig: AppConfig,
+        ): TracingService =
+            TracingService(piiShadowProxyService, tracer, appConfig.tracing)
 
         /** Decorates the traced proxy route with safe traffic measurements. */
         @Provides

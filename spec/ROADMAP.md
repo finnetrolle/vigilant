@@ -220,6 +220,7 @@ Roadmap группирует эти leaves без создания нового 
 | [VIG-14: Strict protocol and gap outcomes](issues/issue_14_strict_protocol_gap_outcomes.md) | Tracer bullet | Malformed/ambiguous input не достигает upstream, известный non-text content forwarding-ится с явным inspection gap | PII shadow request tracer bullet | 2-3 дня | Medium |
 | [VIG-15: Capacity and cancellation outcomes](issues/issue_15_capacity_cancellation_outcomes.md) | Tracer bullet | Per-request/global limits, cancellation и deadlines дают bounded stable outcomes без retained source | PII shadow request tracer bullet | 2-4 дня | Medium |
 | [VIG-16: Packaged shadow proxy evidence](issues/issue_16_packaged_shadow_proxy_evidence.md) | Tracer bullet | `MainKt` и OCI container проходят production-process E2E с real upstream stub, config и JSONL audit | все integration leaves, VIG-09-08 | 3-5 дней | Medium |
+| [VIG-17: Сквозной tracing context и OTLP JSON через stdout](issues/issue_17_request_tracing_stdout_otlp.md) | Observability tracer bullet | Configurable session header и W3C trace context проходят client -> SERVER -> INTERNAL/CLIENT -> response, а application и OTLP JSON records выходят через stdout без прямого Collector connection | VIG-01, VIG-05-06, VIG-05-07, VIG-13 | 3-5 дней | High |
 
 Каждая behavior change выполняется TDD vertical slices: один focused RED через
 указанный public seam, минимальный GREEN, затем следующий behavior. Tests не
@@ -240,6 +241,10 @@ Roadmap группирует эти leaves без создания нового 
   partial upstream forwarding;
 - request, cancellation и shutdown освобождают spool, executor tasks и owned
   resources;
+- session, trace, span и parent lineage сохраняется от клиента через gateway
+  до upstream и обратно, включая корректный context текущего log event;
+- application logs и OTLP trace/metric records выходят отдельными атомарными
+  JSON Lines через stdout без прямого Collector connection;
 - logs и errors не содержат raw PII, body, credentials или reversible values;
 - `./gradlew build`, packaged-process E2E и work-item validator проходят;
 - load report публикует actual throughput, memory, p50/p95/p99 parsing,
@@ -282,9 +287,10 @@ EPIC-04 Done --> global coverage validation -------+
                 protocol/gap outcomes    capacity/cancellation    safe audit
                          +-------------------------+------------------+
                                                    v
-VIG-09-01..09 Done --------------------> packaged OCI evidence
-                                                   |
-                                                   v
+VIG-09-01..09 Done --------------------> packaged OCI evidence ------+
+VIG-01 + VIG-05-06/07 + VIG-13 -------> VIG-17 tracing/OTLP stdout -+
+                                                                    |
+                                                                    v
                                   Production PII shadow proxy
                                                    |
                                                    v
@@ -309,6 +315,10 @@ horizontal logging subsystem.
 - Proxy behavior: real Armeria client, gateway и upstream на ephemeral ports.
 - Logs после response completion: deadline-bounded polling через
   `GatewayTestFixture.awaitUntil`.
+- Tracing: real HTTP custom headers плюс in-memory SDK проверяют session,
+  W3C trace/span/parent propagation и span tree.
+- Telemetry stdout: captured line writer проверяет отдельные application JSONL
+  и OTLP `resourceSpans`/`resourceMetrics` records без byte interleaving.
 - Distribution evidence: packaged `MainKt` child process и OCI container.
 
 ## Текущий roadmap frontier
@@ -323,11 +333,13 @@ integration. EPIC-07 остаётся `In progress` до подтвержден�
 memory/concurrency bounds benchmark или baseline. Identity leaves EPIC-03
 готовы по contract, но не входят в первый production increment.
 
-Все standalone integration issues Stage 3 закрыты: VIG-11..16 имеют status
+Все standalone integration issues Stage 3 закрыты: VIG-11..17 имеют status
 `Done`. Production `MainKt` и OCI image выполняют bounded PII shadow inspection
 для Chat Completions request, exact replay, safe aggregate audit и lifecycle
-gates. Stage 4 production milestone остаётся отдельным frontier до публикации
-предусмотренного им load report.
+gates. Configurable session header и W3C trace context сохраняются через
+SERVER, INTERNAL и CLIENT spans; application и OTLP JSON records передаются
+через stdout. Stage 4 production milestone остаётся отдельным frontier до
+публикации предусмотренного им load report.
 
 Полный repository frontier также сохраняет VIG-01A и VIG-10-03..07. VIG-01A
 проверяет logging-specific PERF-01, а VIG-10-03..07 относятся к Stage 5 и не
@@ -342,6 +354,7 @@ gates. Stage 4 production milestone остаётся отдельным frontier
 - User/group identity extraction и trusted ingress model.
 - Disk spill, encryption at rest и external object storage.
 - Kubernetes manifests, Helm, autoscaling и centralized log storage.
+- Backend-specific Langfuse/MLflow exporters и authentication внутри Vigilant.
 - ML/NER и новые PII taxonomy values.
 - Использование production payload или raw audit data для quality fixtures.
 
@@ -358,6 +371,10 @@ gates. Stage 4 production milestone остаётся отдельным frontier
   increment без сохранения raw PII на disk.
 - Hardcoded default policy отклонён: operator обязан явно предоставить
   validated global coverage policy.
+- Прямой OTLP network exporter из Vigilant отклонён: application logs и
+  OTLP/JSON telemetry передаются через stdout, а delivery выполняет Collector.
+- Proprietary request correlation header отклонён: configurable header несёт
+  стандартное W3C `traceparent`, а session остаётся отдельным opaque ID.
 
 ## Ambiguity Report
 

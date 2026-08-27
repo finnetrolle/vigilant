@@ -1,9 +1,11 @@
 package io.vigilant.gateway.proxy
 
 import com.linecorp.armeria.server.ServiceRequestContext
+import io.opentelemetry.api.trace.Span
 import io.vigilant.context.AnonymousRequestContextAssemblyErrorCode
 import io.vigilant.context.PolicyUrlNormalizationErrorCode
 import io.vigilant.gateway.tracing.RequestTracing
+import io.vigilant.gateway.tracing.withRequestTracingMdc
 import io.vigilant.policy.adapter.FastPiiPolicyAdapter
 import io.vigilant.policy.domain.DetectionResult
 import io.vigilant.policy.domain.Finding
@@ -25,6 +27,7 @@ internal class ShadowAuditLogger {
         normalizedRequest: NormalizedChatCompletionsRequest,
         decisions: List<PolicyDecision>,
         duration: Duration,
+        inspectionSpan: Span?,
     ) {
         val findings = decisions.findings()
         val decision =
@@ -44,6 +47,7 @@ internal class ShadowAuditLogger {
                 findings = findings,
                 evaluationDuration = duration,
             ),
+            inspectionSpan,
         )
     }
 
@@ -51,6 +55,7 @@ internal class ShadowAuditLogger {
     fun error(
         ctx: ServiceRequestContext,
         error: ShadowAuditError,
+        inspectionSpan: Span?,
     ) {
         emit(
             ctx,
@@ -63,6 +68,7 @@ internal class ShadowAuditLogger {
                 evaluationDuration = Duration.ZERO,
                 error = error,
             ),
+            inspectionSpan,
         )
     }
 
@@ -70,6 +76,7 @@ internal class ShadowAuditLogger {
     private fun emit(
         ctx: ServiceRequestContext,
         event: ShadowAuditEvent,
+        inspectionSpan: Span?,
     ) {
         val builder =
             logger.atInfo()
@@ -89,13 +96,15 @@ internal class ShadowAuditLogger {
                 .addKeyValue("findings.by_evidence_strength", event.findings.countsByEvidenceStrength())
                 .addKeyValue("evaluation.duration_ms", event.evaluationDuration.toMillis())
         event.error?.let { error -> builder.addKeyValue("error.code", error.code) }
-        builder.log(
-            if (event.error == null) {
-                "Shadow policy decision completed"
-            } else {
-                "Shadow policy decision failed safely"
-            },
-        )
+        withRequestTracingMdc(ctx, inspectionSpan) {
+            builder.log(
+                if (event.error == null) {
+                    "Shadow policy decision completed"
+                } else {
+                    "Shadow policy decision failed safely"
+                },
+            )
+        }
     }
 }
 

@@ -8,6 +8,7 @@ import com.linecorp.armeria.common.HttpRequest
 import com.linecorp.armeria.common.HttpResponse
 import com.linecorp.armeria.common.HttpStatus
 import com.linecorp.armeria.common.RequestHeaders
+import com.linecorp.armeria.common.RequestHeadersBuilder
 import com.linecorp.armeria.common.ResponseHeaders
 import com.linecorp.armeria.server.HttpService
 import com.linecorp.armeria.server.ServiceRequestContext
@@ -15,10 +16,17 @@ import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.Inject
 import dev.zacsweers.metro.SingleIn
 import io.vigilant.gateway.tracing.RequestTracing
+import io.vigilant.gateway.tracing.RequestTraceContext
+import io.vigilant.gateway.tracing.configuredPropagationHeaderName
 import io.vigilant.gateway.tracing.pathWithoutQuery
+import io.vigilant.gateway.tracing.withRequestTracingMdc
+import io.opentelemetry.api.trace.Span
+import io.opentelemetry.api.trace.SpanKind
+import io.opentelemetry.api.trace.StatusCode
+import io.opentelemetry.api.trace.propagation.W3CTraceContextPropagator
+import io.opentelemetry.context.propagation.TextMapSetter
 import java.net.URI
 import org.slf4j.LoggerFactory
-import org.slf4j.MDC
 
 @SingleIn(AppScope::class)
 @Inject
@@ -43,18 +51,64 @@ class BypassProxyService(
         ctx: ServiceRequestContext,
         request: HttpRequest,
     ): HttpResponse {
-        val outbound = request.mapHeaders(::rewriteRequestHeaders)
+        val traceContext = ctx.attr(RequestTracing.CONTEXT)
+        val clientSpan = traceContext?.let { startClientSpan(request, it) }
+        val outbound = request.mapHeaders { headers ->
+            val rewritten = rewriteRequestHeaders(headers)
+            if (traceContext == null || clientSpan == null) {
+                rewritten
+            } else {
+                propagateTraceContext(rewritten, traceContext, clientSpan)
+            }
+        }
         val upstreamResponse = upstream.execute(outbound)
-            .mapHeaders(::rewriteResponseHeaders)
+            .mapHeaders { headers ->
+                clientSpan?.setAttribute(HTTP_RESPONSE_STATUS_CODE, headers.status().code().toLong())
+                rewriteResponseHeaders(headers)
+            }
         upstreamResponse.whenComplete().whenComplete { _, cause ->
-            if (cause != null) {
-                val failure = observeUpstreamFailure(ctx, cause)
-                logUpstreamFailure(ctx, request, cause, failure)
+            try {
+                if (cause != null) {
+                    clientSpan?.setStatus(StatusCode.ERROR)
+                    clientSpan?.recordException(cause)
+                    val failure = observeUpstreamFailure(ctx, cause)
+                    logUpstreamFailure(ctx, request, cause, failure, clientSpan)
+                }
+            } finally {
+                clientSpan?.end()
             }
         }
         return HttpResponse.of(
             upstreamResponse.recover { cause -> upstreamError(ctx, cause) },
         )
+    }
+
+    /** Starts the outbound HTTP CLIENT span as a direct child of the gateway SERVER span. */
+    private fun startClientSpan(request: HttpRequest, traceContext: RequestTraceContext): Span =
+        traceContext.tracer.spanBuilder("HTTP ${request.method().name}")
+            .setParent(traceContext.serverContext)
+            .setSpanKind(SpanKind.CLIENT)
+            .setAttribute(HTTP_REQUEST_METHOD, request.method().name)
+            .setAttribute(URL_PATH, pathWithoutQuery(request.path()))
+            .setAttribute(SESSION_ID, traceContext.sessionId)
+            .startSpan()
+
+    /** Replaces inbound tracing headers with the effective outbound CLIENT span context. */
+    private fun propagateTraceContext(
+        headers: RequestHeaders,
+        traceContext: RequestTraceContext,
+        clientSpan: Span,
+    ): RequestHeaders {
+        val builder = headers.toBuilder()
+        builder.set(traceContext.settings.sessionHeader, traceContext.sessionId)
+        builder.remove(traceContext.settings.traceparentHeader)
+        builder.remove(TRACESTATE_HEADER)
+        W3C.inject(
+            traceContext.serverContext.with(clientSpan),
+            builder,
+            ConfiguredRequestHeadersSetter(traceContext.settings.traceparentHeader),
+        )
+        return builder.build()
     }
 
     /**
@@ -69,19 +123,14 @@ class BypassProxyService(
         request: HttpRequest,
         cause: Throwable,
         failure: UpstreamFailure,
+        clientSpan: Span?,
     ) {
-        val traceId = ctx.attr(RequestTracing.TRACE_ID)
-        val logEvent = {
+        withRequestTracingMdc(ctx, clientSpan) {
             logger.atWarn()
                 .addKeyValue("event.name", "upstream_request_failed")
                 .addKeyValue("upstream.error", failure.code)
                 .addKeyValue("upstream.cause", cause.javaClass.simpleName)
                 .log("upstream request failed: ${request.method()} ${pathWithoutQuery(request.path())}")
-        }
-        if (traceId == null) {
-            logEvent()
-        } else {
-            MDC.putCloseable(RequestTracing.TRACE_ID_MDC_KEY, traceId).use { logEvent() }
         }
     }
 
@@ -183,6 +232,14 @@ class BypassProxyService(
     }
 
     private companion object {
+        private val HTTP_REQUEST_METHOD =
+            io.opentelemetry.api.common.AttributeKey.stringKey("http.request.method")
+        private val URL_PATH = io.opentelemetry.api.common.AttributeKey.stringKey("url.path")
+        private val HTTP_RESPONSE_STATUS_CODE =
+            io.opentelemetry.api.common.AttributeKey.longKey("http.response.status_code")
+        private val SESSION_ID = io.opentelemetry.api.common.AttributeKey.stringKey("session.id")
+        private const val TRACESTATE_HEADER = "tracestate"
+        private val W3C = W3CTraceContextPropagator.getInstance()
         private val HOP_BY_HOP_HEADERS = setOf(
             HttpHeaderNames.CONNECTION,
             HttpHeaderNames.KEEP_ALIVE,
@@ -194,5 +251,15 @@ class BypassProxyService(
             HttpHeaderNames.UPGRADE,
             HttpHeaderNames.of("proxy-connection"),
         )
+    }
+}
+
+/** Writes W3C request context under the configured `traceparent` header name. */
+private class ConfiguredRequestHeadersSetter(
+    private val traceparentHeader: String,
+) : TextMapSetter<RequestHeadersBuilder> {
+    /** Writes a W3C propagation value, mapping `traceparent` to the configured header name. */
+    override fun set(carrier: RequestHeadersBuilder?, key: String, value: String) {
+        carrier?.set(configuredPropagationHeaderName(key, traceparentHeader), value)
     }
 }

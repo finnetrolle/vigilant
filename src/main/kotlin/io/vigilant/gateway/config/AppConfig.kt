@@ -6,6 +6,7 @@ import com.sksamuel.hoplite.KebabCaseParamMapper
 import com.sksamuel.hoplite.PropertySource
 import com.sksamuel.hoplite.fp.Validated
 import com.sksamuel.hoplite.sources.EnvironmentVariablesPropertySource
+import com.linecorp.armeria.common.HttpHeaderNames
 import io.vigilant.source.RequestSourceLimits
 import java.net.URI
 import java.nio.file.Path
@@ -13,6 +14,8 @@ import java.time.Duration
 import kotlin.io.path.exists
 
 private const val DEFAULT_PORT = 8080
+private const val DEFAULT_SESSION_HEADER = "x-session-id"
+private const val DEFAULT_TRACEPARENT_HEADER = "traceparent"
 private const val MIN_PORT = 1
 private const val MAX_PORT = 65535
 private const val ENV_PREFIX = "VIGILANT_"
@@ -26,7 +29,8 @@ private const val UPSTREAM_RESPONSE_TIMEOUT_ENV = "VIGILANT_UPSTREAM_RESPONSE_TI
 private const val UPSTREAM_CONNECTION_IDLE_TIMEOUT_ENV = "VIGILANT_UPSTREAM_CONNECTION_IDLE_TIMEOUT"
 private const val SHUTDOWN_QUIET_PERIOD_ENV = "VIGILANT_SHUTDOWN_QUIET_PERIOD"
 private const val SHUTDOWN_FORCE_TIMEOUT_ENV = "VIGILANT_SHUTDOWN_FORCE_TIMEOUT"
-private const val OTLP_ENDPOINT_ENV = "VIGILANT_OTLP_ENDPOINT"
+private const val TRACING_SESSION_HEADER_ENV = "VIGILANT_TRACING_SESSION_HEADER"
+private const val TRACING_TRACEPARENT_HEADER_ENV = "VIGILANT_TRACING_TRACEPARENT_HEADER"
 private const val DEFAULT_CONNECT_TIMEOUT_SECONDS = 10L
 private const val DEFAULT_WRITE_TIMEOUT_SECONDS = 30L
 private const val DEFAULT_RESPONSE_TIMEOUT_SECONDS = 300L
@@ -89,8 +93,8 @@ private val DEFAULT_CONFIG_PATHS: List<Path> = listOf(
  * @param upstream validated timeouts and pooling settings of the upstream client.
  * @param shutdown validated graceful shutdown quiet and force bounds.
  * @param inspection bounded in-memory request inspection settings.
- * @param otlp common OTLP export settings for traces and metrics; external
- *   export is active only when [OtlpSettings.enabled] is `true` and an endpoint is set.
+ * @param tracing validated tracing header names.
+ * @param otlp stdout OTLP JSON export settings for traces and metrics.
  */
 data class AppConfig(
     val upstreamUri: URI,
@@ -98,7 +102,19 @@ data class AppConfig(
     val upstream: UpstreamClientSettings,
     val shutdown: ShutdownSettings,
     val inspection: InspectionSettings,
+    val tracing: TracingSettings,
     val otlp: OtlpSettings,
+)
+
+/**
+ * Header names used to receive, forward and return request tracing context.
+ *
+ * @param sessionHeader header carrying the opaque session identifier.
+ * @param traceparentHeader header carrying a W3C `traceparent` value.
+ */
+data class TracingSettings(
+    val sessionHeader: String = DEFAULT_SESSION_HEADER,
+    val traceparentHeader: String = DEFAULT_TRACEPARENT_HEADER,
 )
 
 /** Runtime bounds for request-side body inspection. */
@@ -119,16 +135,12 @@ data class ShutdownSettings(
 )
 
 /**
- * Validated OTLP export settings (spec observability: OTLP exporter configured
- * via `env > file > defaults`, export off when no endpoint is set).
+ * Validated OTLP JSON stdout export settings.
  *
- * @param enabled whether OTLP export is enabled; `true` by default.
- * @param endpoint base endpoint of the OTLP HTTP collector, or `null` when
- *   unset, which keeps the export off.
+ * @param enabled whether traces and metrics are emitted to stdout; `true` by default.
  */
 data class OtlpSettings(
     val enabled: Boolean,
-    val endpoint: URI?,
 )
 
 /**
@@ -172,8 +184,9 @@ internal data class VigilantSettings(
     val inspectionMaxConcurrentRequestSources: Int = DEFAULT_REQUEST_SOURCE_LIMITS.maxConcurrentRequestSources,
     val inspectionMaxRetainedSegmentsPerRequest: Int =
         DEFAULT_REQUEST_SOURCE_LIMITS.maxRetainedSegmentsPerRequest,
+    val tracingSessionHeader: String = DEFAULT_SESSION_HEADER,
+    val tracingTraceparentHeader: String = DEFAULT_TRACEPARENT_HEADER,
     val otlpEnabled: Boolean = true,
-    val otlpEndpoint: String? = null,
 )
 
 /**
@@ -252,11 +265,12 @@ internal fun loadAppConfig(
                     maxRetainedSegmentsPerRequest = root.vigilant.inspectionMaxRetainedSegmentsPerRequest,
                 ),
             ),
+        tracing = validatedTracingSettings(
+            sessionHeader = root.vigilant.tracingSessionHeader,
+            traceparentHeader = root.vigilant.tracingTraceparentHeader,
+        ),
         otlp = OtlpSettings(
             enabled = root.vigilant.otlpEnabled,
-            endpoint = root.vigilant.otlpEndpoint
-                ?.takeUnless(String::isBlank)
-                ?.let(::validatedOtlpEndpoint),
         ),
     )
 }
@@ -332,6 +346,42 @@ internal fun validatedPort(port: Int): Int {
 }
 
 /**
+ * Validates and canonicalizes an HTTP header name used by the tracing contract.
+ *
+ * @param envName environment variable represented by [rawName], for a stable error message.
+ * @param rawName decoded header name from configuration.
+ * @return the canonical lowercase HTTP header name.
+ * @throws IllegalArgumentException if [rawName] is blank, malformed, or a pseudo-header.
+ */
+internal fun validatedHeaderName(envName: String, rawName: String): String {
+    val headerName = try {
+        HttpHeaderNames.of(rawName)
+    } catch (failure: IllegalArgumentException) {
+        throw IllegalArgumentException(
+            "$envName must contain a valid HTTP header name",
+            failure,
+        )
+    }
+    require(!headerName.toString().startsWith(':')) {
+        "$envName must contain a valid HTTP header name"
+    }
+    return headerName.toString()
+}
+
+/** Validates and canonicalizes the complete tracing header contract. */
+internal fun validatedTracingSettings(
+    sessionHeader: String,
+    traceparentHeader: String,
+): TracingSettings {
+    val canonicalSessionHeader = validatedHeaderName(TRACING_SESSION_HEADER_ENV, sessionHeader)
+    val canonicalTraceparentHeader = validatedHeaderName(TRACING_TRACEPARENT_HEADER_ENV, traceparentHeader)
+    require(canonicalSessionHeader != canonicalTraceparentHeader) {
+        "$TRACING_SESSION_HEADER_ENV and $TRACING_TRACEPARENT_HEADER_ENV must be distinct"
+    }
+    return TracingSettings(canonicalSessionHeader, canonicalTraceparentHeader)
+}
+
+/**
  * Validates that a configured duration is strictly positive.
  *
  * @param envName name of the environment variable the value may come from, used in the error message.
@@ -363,32 +413,6 @@ internal fun validatedShutdownSettings(
         "$SHUTDOWN_FORCE_TIMEOUT_ENV must be greater than or equal to $SHUTDOWN_QUIET_PERIOD_ENV"
     }
     return ShutdownSettings(quietPeriod, forceTimeout)
-}
-
-/**
- * Validates the OTLP collector endpoint.
- *
- * @param rawEndpoint decoded value of `vigilant.otlp-endpoint`, from the environment or the file.
- * @return the validated [URI] of the OTLP collector.
- * @throws IllegalArgumentException if [rawEndpoint] is not an absolute HTTP(S) URL, or carries user
- * info, a query, or a fragment.
- */
-internal fun validatedOtlpEndpoint(rawEndpoint: String): URI =
-    URI.create(rawEndpoint).also(::validateOtlpEndpoint)
-
-/**
- * Validates that [uri] is an absolute HTTP(S) URL without user info, query, or fragment;
- * a path is allowed because OTLP collectors may live under a base path.
- *
- * @throws IllegalArgumentException if [uri] fails validation.
- */
-private fun validateOtlpEndpoint(uri: URI) {
-    require(uri.isAbsolute && uri.scheme in setOf("http", "https") && uri.host != null) {
-        "$OTLP_ENDPOINT_ENV must contain an absolute HTTP(S) URL"
-    }
-    require(uri.rawUserInfo == null && uri.rawQuery == null && uri.rawFragment == null) {
-        "$OTLP_ENDPOINT_ENV must not contain user info, query, or fragment"
-    }
 }
 
 /**

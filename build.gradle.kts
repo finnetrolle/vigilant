@@ -47,7 +47,7 @@ dependencies {
     implementation(libs.hoplite.hocon)
     implementation(libs.jackson.databind)
     implementation(libs.opentelemetry.sdk)
-    implementation(libs.opentelemetry.exporter.otlp)
+    implementation(libs.opentelemetry.exporter.logging.otlp)
     implementation(libs.slf4j.api)
     implementation(libs.logback.classic)
     implementation(libs.typesafe.config)

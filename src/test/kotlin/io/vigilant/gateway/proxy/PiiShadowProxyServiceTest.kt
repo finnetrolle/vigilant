@@ -10,7 +10,13 @@ import com.linecorp.armeria.common.HttpStatus
 import com.linecorp.armeria.common.MediaType
 import com.linecorp.armeria.common.RequestHeaders
 import com.linecorp.armeria.common.ResponseHeaders
+import io.opentelemetry.api.common.AttributeKey.stringKey
+import io.opentelemetry.api.trace.SpanKind
+import io.opentelemetry.sdk.common.CompletableResultCode
 import io.opentelemetry.sdk.trace.SdkTracerProvider
+import io.opentelemetry.sdk.trace.data.SpanData
+import io.opentelemetry.sdk.trace.export.SimpleSpanProcessor
+import io.opentelemetry.sdk.trace.export.SpanExporter
 import io.vigilant.gateway.GatewayProcessFixture
 import io.vigilant.gateway.GatewayTestFixture
 import io.vigilant.gateway.chatCompletionsBody
@@ -66,6 +72,20 @@ import org.reactivestreams.Subscription
 class PiiShadowProxyServiceTest {
     private val fixture = GatewayTestFixture()
     private val closeables = mutableListOf<AutoCloseable>()
+    private val spans = CopyOnWriteArrayList<SpanData>()
+    private val spanExporter = object : SpanExporter {
+        /** Collects completed spans for E2E hierarchy assertions. */
+        override fun export(exported: Collection<SpanData>): CompletableResultCode {
+            spans.addAll(exported)
+            return CompletableResultCode.ofSuccess()
+        }
+
+        /** Completes synchronously because the in-memory collector has no queue. */
+        override fun flush(): CompletableResultCode = CompletableResultCode.ofSuccess()
+
+        /** Completes synchronously because the test owns the collected snapshot. */
+        override fun shutdown(): CompletableResultCode = CompletableResultCode.ofSuccess()
+    }
 
     /** Stops real servers and every test-owned inspection/tracing resource. */
     @AfterTest
@@ -104,6 +124,11 @@ class PiiShadowProxyServiceTest {
                     RequestHeaders.builder(HttpMethod.POST, "/v1/chat/completions?client=kept")
                         .contentType(MediaType.JSON)
                         .add("x-request-id", "request-1")
+                        .add("x-session-id", "task-42")
+                        .add(
+                            "traceparent",
+                            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+                        )
                         .build(),
                     HttpData.ofUtf8(originalBody),
                 ),
@@ -134,6 +159,16 @@ class PiiShadowProxyServiceTest {
         assertEquals("FORMAT_ONLY:1", event.keyValue("findings.by_evidence_strength"))
         assertTrue((event.keyValue("evaluation.duration_ms") as? Long ?: -1L) >= 0L)
         assertTrue(event.keyValue("trace.id").toString().matches(Regex("[0-9a-f]{32}")))
+        assertEquals("task-42", event.mdcPropertyMap["session_id"])
+        assertEquals("4bf92f3577b34da6a3ce929d0e0e4736", event.mdcPropertyMap["trace_id"])
+        assertTrue(
+            fixture.awaitUntil(Duration.ofSeconds(5)) { spans.size >= 3 },
+            "expected request spans, saw: ${spans.map { it.kind to it.name }}",
+        )
+        val serverSpan = spans.single { it.kind == SpanKind.SERVER }
+        val inspectionSpan = spans.single { it.kind == SpanKind.INTERNAL }
+        assertEquals(inspectionSpan.spanId, event.mdcPropertyMap["span_id"])
+        assertEquals(serverSpan.spanId, event.mdcPropertyMap["parent_span_id"])
 
         val rendered =
             events.joinToString("\n") { logged ->
@@ -142,6 +177,38 @@ class PiiShadowProxyServiceTest {
         assertFalse(rendered.contains("alice@example.com"))
         assertFalse(rendered.contains("client=kept"))
         assertFalse(rendered.contains("request-1"))
+    }
+
+    /** Verifies SERVER, INTERNAL inspection and CLIENT upstream parentage. */
+    @Test
+    fun `shadow request produces sibling inspection and upstream spans`() {
+        val upstream = fixture.startServer { HttpResponse.of(HttpStatus.OK) }
+        val gateway = startShadowGateway(fixture.serverUri(upstream))
+        val client = WebClient.of(fixture.serverUri(gateway).toString())
+
+        val response = client.execute(
+            HttpRequest.of(
+                RequestHeaders.builder(HttpMethod.POST, "/v1/chat/completions")
+                    .contentType(MediaType.JSON)
+                    .add("x-session-id", "task-42")
+                    .build(),
+                HttpData.ofUtf8(chatCompletionsBody("hello")),
+            ),
+        ).aggregate().join()
+
+        assertEquals(HttpStatus.OK, response.status())
+        assertTrue(
+            fixture.awaitUntil(Duration.ofSeconds(5)) { spans.size >= 3 },
+            "expected SERVER, INTERNAL and CLIENT spans, saw: ${spans.map { it.kind to it.name }}",
+        )
+        val serverSpan = spans.single { it.kind == SpanKind.SERVER }
+        val inspectionSpan = spans.single { it.kind == SpanKind.INTERNAL }
+        val clientSpan = spans.single { it.kind == SpanKind.CLIENT }
+        assertEquals("vigilant.request.inspect", inspectionSpan.name)
+        assertEquals(serverSpan.spanId, inspectionSpan.parentSpanId)
+        assertEquals(serverSpan.spanId, clientSpan.parentSpanId)
+        assertTrue(spans.all { it.traceId == serverSpan.traceId })
+        assertTrue(spans.all { it.attributes.get(stringKey("session.id")) == "task-42" })
     }
 
     /** Verifies descriptor rejection before any upstream request is created. */
@@ -588,7 +655,10 @@ class PiiShadowProxyServiceTest {
                 policyEngine = policyEngine,
                 inspectionExecutor = requestExecutor,
             )
-        val tracerProvider = SdkTracerProvider.builder().build().also(closeables::add)
+        val tracerProvider = SdkTracerProvider.builder()
+            .addSpanProcessor(SimpleSpanProcessor.builder(spanExporter).build())
+            .build()
+            .also(closeables::add)
         return fixture.startServer(
             TracingService(shadowService, tracerProvider.get("io.vigilant.gateway.test")),
         )

@@ -1,6 +1,7 @@
 package io.vigilant.gateway
 
 import dev.zacsweers.metro.createGraph
+import java.util.concurrent.TimeUnit
 import kotlin.system.exitProcess
 
 /**
@@ -10,10 +11,9 @@ import kotlin.system.exitProcess
  * configuration, registers a shutdown hook for graceful stop, and blocks until
  * the server closes. The shutdown hook first marks readiness as draining, so
  * `GET /readyz` answers `503` while the server is still closing, then stops the
- * server, and finally closes both OpenTelemetry SDK providers so queued spans
- * and metric measurements are flushed to the configured endpoint. The
+ * server, and finally flushes and closes both OpenTelemetry SDK providers. The
  * dedicated upstream client factory is closed after server drain and before
- * telemetry providers.
+ * telemetry providers. Telemetry is written to stdout as OTLP JSON Lines.
  */
 fun main() {
     val graph = try {
@@ -47,6 +47,10 @@ fun main() {
                         graph.upstreamClientResources.close()
                     } finally {
                         try {
+                            graph.sdkTracerProvider.forceFlush()
+                                .join(TELEMETRY_FLUSH_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                            graph.sdkMeterProvider.forceFlush()
+                                .join(TELEMETRY_FLUSH_TIMEOUT_SECONDS, TimeUnit.SECONDS)
                             graph.sdkTracerProvider.close()
                         } finally {
                             graph.sdkMeterProvider.close()
@@ -60,3 +64,5 @@ fun main() {
     server.start().join()
     server.whenClosed().join()
 }
+
+private const val TELEMETRY_FLUSH_TIMEOUT_SECONDS = 10L

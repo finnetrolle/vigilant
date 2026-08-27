@@ -1,0 +1,61 @@
+# Minimal Collector Contrib pipeline for Vigilant's mixed container stdout.
+# Replace the debug exporter with deployment-specific Langfuse, MLflow and
+# log-storage exporters. Keep Collector and connector versions pinned.
+
+receivers:
+  filelog/vigilant:
+    include:
+      - /var/log/pods/*/*/*.log
+    include_file_path: true
+    operators:
+      - id: container-parser
+        type: container
+
+connectors:
+  routing/vigilant-stdout:
+    default_pipelines: [logs/vigilant-application]
+    table:
+      # OTLP JSON ExportRequest lines begin with resourceSpans or
+      # resourceMetrics. Application Logback JSON does not.
+      - condition: 'IsMatch(log.body, "^.{0,4}resource(Spans|Metrics)")'
+        pipelines: [logs/vigilant-otlp-json]
+  otlpjson/vigilant:
+
+processors:
+  resource/vigilant:
+    attributes:
+      - key: service.name
+        action: upsert
+        value: vigilant
+
+exporters:
+  debug:
+    verbosity: basic
+
+service:
+  pipelines:
+    logs/vigilant-stdout:
+      receivers: [filelog/vigilant]
+      exporters: [routing/vigilant-stdout]
+
+    logs/vigilant-otlp-json:
+      receivers: [routing/vigilant-stdout]
+      exporters: [otlpjson/vigilant]
+
+    traces/vigilant:
+      receivers: [otlpjson/vigilant]
+      exporters: [debug]
+
+    metrics/vigilant:
+      receivers: [otlpjson/vigilant]
+      exporters: [debug]
+
+    logs/vigilant-otlp:
+      receivers: [otlpjson/vigilant]
+      processors: [resource/vigilant]
+      exporters: [debug]
+
+    logs/vigilant-application:
+      receivers: [routing/vigilant-stdout]
+      processors: [resource/vigilant]
+      exporters: [debug]

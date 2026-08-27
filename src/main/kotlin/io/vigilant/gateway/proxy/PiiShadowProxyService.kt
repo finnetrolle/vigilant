@@ -5,6 +5,11 @@ import com.linecorp.armeria.common.HttpResponse
 import com.linecorp.armeria.common.HttpStatus
 import com.linecorp.armeria.server.HttpService
 import com.linecorp.armeria.server.ServiceRequestContext
+import io.opentelemetry.api.common.AttributeKey
+import io.opentelemetry.api.trace.Span
+import io.opentelemetry.api.trace.SpanKind
+import io.opentelemetry.api.trace.StatusCode
+import io.vigilant.gateway.tracing.RequestTracing
 import io.vigilant.policy.domain.PolicyContext
 import io.vigilant.policy.domain.PolicyDecision
 import io.vigilant.policy.engine.PolicyEngine
@@ -54,18 +59,31 @@ class PiiShadowProxyService(
         ctx: ServiceRequestContext,
         request: HttpRequest,
     ): HttpResponse {
+        val inspectionSpan = startInspectionSpan(ctx)
         if (!protocol.isSupported(request)) {
+            inspectionSpan?.end()
             return stableProxyError(HttpStatus.BAD_REQUEST, "unsupported_schema")
         }
 
         val knownContentLength = request.headers().contentLength().takeIf { length -> length >= 0L }
         return when (val opened = requestSourceQuota.open(knownContentLength)) {
             is RequestSourceOpenResult.Rejected -> {
-                auditLogger.error(ctx, ShadowAuditError.Source(opened.code))
+                auditLogger.error(ctx, ShadowAuditError.Source(opened.code), inspectionSpan)
+                inspectionSpan?.end()
                 InspectionHttpResponses.sourceError(opened.code)
             }
-            is RequestSourceOpenResult.Open -> inspectAndForward(ctx, request, opened.owner)
+            is RequestSourceOpenResult.Open -> inspectAndForward(ctx, request, opened.owner, inspectionSpan)
         }
+    }
+
+    /** Starts the request inspection span as a direct child of the gateway SERVER span. */
+    private fun startInspectionSpan(ctx: ServiceRequestContext): Span? {
+        val traceContext = ctx.attr(RequestTracing.CONTEXT) ?: return null
+        return traceContext.tracer.spanBuilder(INSPECTION_SPAN_NAME)
+            .setParent(traceContext.serverContext)
+            .setSpanKind(SpanKind.INTERNAL)
+            .setAttribute(SESSION_ID, traceContext.sessionId)
+            .startSpan()
     }
 
     /** Ingests the request body with backpressure and schedules all CPU/blocking work off event loop. */
@@ -73,6 +91,7 @@ class PiiShadowProxyService(
         ctx: ServiceRequestContext,
         request: HttpRequest,
         owner: BoundedRequestSourceOwner,
+        inspectionSpan: Span?,
     ): HttpResponse {
         val inspectionTask = AtomicReference<Future<*>?>()
         val inspectionCompletion = AtomicReference<CompletableFuture<HttpResponse>?>()
@@ -93,12 +112,13 @@ class PiiShadowProxyService(
                             taskReference = inspectionTask,
                             completionReference = inspectionCompletion,
                             alreadyCancelled = requestCancelled.isDone,
+                            inspectionSpan = inspectionSpan,
                         )
 
                     is RequestSourceIngestResult.Rejected ->
                         CompletableFuture.completedFuture(
                             InspectionHttpResponses.sourceError(ingestResult.code).also {
-                                auditLogger.error(ctx, ShadowAuditError.Source(ingestResult.code))
+                                auditLogger.error(ctx, ShadowAuditError.Source(ingestResult.code), inspectionSpan)
                             },
                         )
                 }
@@ -106,14 +126,25 @@ class PiiShadowProxyService(
                 owner.close()
                 if (failure.isCancellation()) {
                     InspectionHttpResponses.sourceError(RequestSourceOutcomeCode.CANCELLED).also {
-                        auditLogger.error(ctx, ShadowAuditError.Source(RequestSourceOutcomeCode.CANCELLED))
+                        auditLogger.error(
+                            ctx,
+                            ShadowAuditError.Source(RequestSourceOutcomeCode.CANCELLED),
+                            inspectionSpan,
+                        )
                     }
                 } else {
                     stableProxyError(HttpStatus.INTERNAL_SERVER_ERROR, "inspection_failed").also {
-                        auditLogger.error(ctx, ShadowAuditError.InspectionFailed)
+                        auditLogger.error(ctx, ShadowAuditError.InspectionFailed, inspectionSpan)
                     }
                 }
             }
+        response.whenComplete { _, failure ->
+            if (failure != null && !failure.isCancellation()) {
+                inspectionSpan?.setStatus(StatusCode.ERROR)
+                inspectionSpan?.recordException(failure)
+            }
+            inspectionSpan?.end()
+        }
         return HttpResponse.of(response)
     }
 
@@ -125,13 +156,14 @@ class PiiShadowProxyService(
         taskReference: AtomicReference<Future<*>?>,
         completionReference: AtomicReference<CompletableFuture<HttpResponse>?>,
         alreadyCancelled: Boolean,
+        inspectionSpan: Span?,
     ): CompletableFuture<HttpResponse> {
         val completion = CompletableFuture<HttpResponse>()
         completionReference.set(completion)
         val task =
             inspectionExecutor.submit {
                 try {
-                    completion.complete(processCompleteSource(ctx, request, owner))
+                    completion.complete(processCompleteSource(ctx, request, owner, inspectionSpan))
                 } catch (failure: Throwable) {
                     completion.completeExceptionally(failure)
                 }
@@ -151,6 +183,7 @@ class PiiShadowProxyService(
         ctx: ServiceRequestContext,
         request: HttpRequest,
         owner: BoundedRequestSourceOwner,
+        inspectionSpan: Span?,
     ): HttpResponse {
         var replayOwnsSource = false
         try {
@@ -166,16 +199,16 @@ class PiiShadowProxyService(
             }
             check(replay is RequestSourceReplayResult.Available)
             replayOwnsSource = true
-            auditLogger.decision(ctx, normalizedRequest, decisions, evaluationDuration)
+            auditLogger.decision(ctx, normalizedRequest, decisions, evaluationDuration, inspectionSpan)
             return bypassProxyService.serve(ctx, replayRequest(request, replay.publisher))
         } catch (failure: SafeParseFailure) {
-            auditLogger.error(ctx, ShadowAuditError.Parser(failure.code))
+            auditLogger.error(ctx, ShadowAuditError.Parser(failure.code), inspectionSpan)
             return stableProxyError(HttpStatus.BAD_REQUEST, failure.code.name.lowercase())
         } catch (failure: SafeSourceFailure) {
-            auditLogger.error(ctx, ShadowAuditError.Source(failure.code))
+            auditLogger.error(ctx, ShadowAuditError.Source(failure.code), inspectionSpan)
             return InspectionHttpResponses.sourceError(failure.code)
         } catch (failure: SafeContextFailure) {
-            auditLogger.error(ctx, failure.error)
+            auditLogger.error(ctx, failure.error, inspectionSpan)
             return stableProxyError(HttpStatus.INTERNAL_SERVER_ERROR, "inspection_failed")
         } finally {
             if (!replayOwnsSource) {
@@ -191,6 +224,11 @@ class PiiShadowProxyService(
     ): List<PolicyDecision> {
         val payloads = normalizedRequest.fragments.map { fragment -> fragment.text }.ifEmpty { listOf("") }
         return payloads.map { payload -> runSuspending { policyEngine.evaluate(context, payload) } }
+    }
+
+    private companion object {
+        const val INSPECTION_SPAN_NAME = "vigilant.request.inspect"
+        val SESSION_ID: AttributeKey<String> = AttributeKey.stringKey("session.id")
     }
 
 }

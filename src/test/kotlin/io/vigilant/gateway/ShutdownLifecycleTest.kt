@@ -32,7 +32,6 @@ class ShutdownLifecycleTest {
     /** Active traffic drains after SIGTERM while traffic arriving during drain is rejected locally. */
     @Test
     fun `shutdown drains active stream and rejects new proxy traffic`() {
-        val collector = fixture.startOtlpTestCollector()
         val upstreamPaths = CopyOnWriteArrayList<String>()
         val activeWriter = AtomicReference<HttpResponseWriter>()
         val activeStarted = CountDownLatch(1)
@@ -49,7 +48,6 @@ class ShutdownLifecycleTest {
         val gateway = launchGateway(
             fixture.serverUri(upstream),
             environment = mapOf(
-                "VIGILANT_OTLP_ENDPOINT" to collector.uri.toString(),
                 "VIGILANT_SHUTDOWN_QUIET_PERIOD" to "100ms",
                 "VIGILANT_SHUTDOWN_FORCE_TIMEOUT" to "5s",
             ),
@@ -78,7 +76,6 @@ class ShutdownLifecycleTest {
             gateway.process.waitFor(PROCESS_EXIT_TIMEOUT.toSeconds(), TimeUnit.SECONDS),
             "gateway did not exit after the active stream drained; output: ${gateway.output()}",
         )
-        assertTelemetryFlushed(collector, gateway)
     }
 
     /** A non-terminating exchange receives a bounded drain window and is then force-closed. */
@@ -154,29 +151,6 @@ class ShutdownLifecycleTest {
         assertTrue(
             observed,
             "gateway never exposed draining readiness; last status: $lastStatus; output: ${gateway.output()}",
-        )
-    }
-
-    /** Verifies that completion callbacks reached both OTLP providers before they closed. */
-    private fun assertTelemetryFlushed(collector: OtlpTestCollector, gateway: GatewayProcessFixture) {
-        assertTrue(
-            collector.exports.map(OtlpTestExport::path).containsAll(listOf("/v1/traces", "/v1/metrics")),
-            "completed active exchange telemetry was not flushed after drain; " +
-                "observed exports: ${collector.exports.map(OtlpTestExport::path)}; output: ${gateway.output()}",
-        )
-        assertTrue(
-            collector.exports.any { export ->
-                export.path == "/v1/traces" &&
-                    export.body.containsSubsequence(CHAT_COMPLETIONS_PATH.encodeToByteArray())
-            },
-            "trace export did not contain the completed active stream",
-        )
-        assertTrue(
-            collector.exports.any { export ->
-                export.path == "/v1/metrics" &&
-                    export.body.containsSubsequence("vigilant.proxy.requests".encodeToByteArray())
-            },
-            "metrics export did not contain completed proxy measurements",
         )
     }
 

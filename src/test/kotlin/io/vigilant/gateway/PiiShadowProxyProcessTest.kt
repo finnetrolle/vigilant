@@ -8,6 +8,7 @@ import com.linecorp.armeria.common.HttpRequest
 import com.linecorp.armeria.common.HttpResponse
 import com.linecorp.armeria.common.HttpStatus
 import com.linecorp.armeria.common.MediaType
+import com.linecorp.armeria.common.RequestHeaders
 import java.time.Duration
 import java.util.concurrent.CompletableFuture
 import kotlin.test.AfterTest
@@ -59,6 +60,51 @@ class PiiShadowProxyProcessTest {
         assertEquals("FULLY_INSPECTABLE", event.kvp("coverage"))
         assertEquals("EMAIL_ADDRESS:1", event.kvp("findings.by_type"))
         assertFalse(process.output().contains(secretEmail))
+    }
+
+    /** Verifies configured tracing header names are wired through the production graph. */
+    @Test
+    fun `MainKt propagates configured tracing headers`() {
+        val upstreamHeaders = CompletableFuture<RequestHeaders>()
+        val upstream = fixture.startServer { request ->
+            upstreamHeaders.complete(request.headers())
+            HttpResponse.of(HttpStatus.OK, MediaType.JSON, "{\"ok\":true}")
+        }
+        val sessionHeader = "x-agent-session"
+        val traceparentHeader = "x-agent-traceparent"
+        val traceId = "4bf92f3577b34da6a3ce929d0e0e4736"
+        val process = GatewayProcessFixture.launch(
+            fixture.serverUri(upstream),
+            environment = mapOf(
+                "VIGILANT_TRACING_SESSION_HEADER" to sessionHeader,
+                "VIGILANT_TRACING_TRACEPARENT_HEADER" to traceparentHeader,
+            ),
+        ).also { gateway = it }
+        val client = process.awaitServing()
+        val body = """{"model":"gpt-test","messages":[{"role":"user","content":"hello"}]}"""
+
+        val response = client.execute(
+            HttpRequest.of(
+                RequestHeaders.builder(HttpMethod.POST, "/v1/chat/completions")
+                    .contentType(MediaType.JSON)
+                    .add(sessionHeader, "task-42")
+                    .add(traceparentHeader, "00-$traceId-00f067aa0ba902b7-01")
+                    .build(),
+                HttpData.ofUtf8(body),
+            ),
+        ).aggregate().join()
+
+        assertEquals(HttpStatus.OK, response.status())
+        assertEquals("task-42", response.headers().get(sessionHeader))
+        assertTrue(
+            response.headers().get(traceparentHeader).orEmpty()
+                .matches(Regex("00-$traceId-[0-9a-f]{16}-01")),
+        )
+        assertEquals("task-42", upstreamHeaders.join().get(sessionHeader))
+        assertTrue(
+            upstreamHeaders.join().get(traceparentHeader).orEmpty()
+                .matches(Regex("00-$traceId-[0-9a-f]{16}-01")),
+        )
     }
 
     /** Polls bounded child output until its asynchronous JSONL audit appears. */
