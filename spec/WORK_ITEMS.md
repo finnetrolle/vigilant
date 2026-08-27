@@ -100,7 +100,7 @@ Issue является листом mind map, если:
 | [EPIC-04: Policy engine](epics/epic_04_policy_engine.md) | `Done` | 11/11 | 0 дней осталось |
 | [EPIC-05: v0 hardening](epics/epic_05_v0_hardening.md) | `Done` | 9/9 | 0 дней осталось |
 | [EPIC-06: Разбор LLM-сообщений и извлечение payload](epics/epic_06_llm_message_parsing.md) | `In progress` | 2/2 | 0 дней до request parser; future response scope не оценён |
-| [EPIC-07: Windowed payload processing](epics/epic_07_windowed_payload_processing.md) | `In progress` | 2/2 | benchmark/baseline не оценён |
+| [EPIC-07: Windowed payload processing](epics/epic_07_windowed_payload_processing.md) | `Done` | 2/2 | 0 дней осталось |
 | [EPIC-08: Lossless message spooling and replay](epics/epic_08_message_spooling_replay.md) | `In progress` | 2/2 | 0 дней до request source; future response/disk scope не оценён |
 | [EPIC-09: Закрытие архитектурных рисков v0](epics/epic_09_v0_architecture_closure.md) | `Done` | 9/9 | 0 дней осталось |
 | [EPIC-10: Повышение качества детерминированного PII-распознавания](epics/epic_10_pii_detection_quality.md) | `In progress` | 2/8 | 17-23 дня осталось |
@@ -111,6 +111,7 @@ Issue является листом mind map, если:
 | [VIG-15: Capacity and cancellation outcomes](issues/issue_15_capacity_cancellation_outcomes.md) | `Done` | завершена | 0 дней осталось |
 | [VIG-16: Packaged shadow proxy evidence](issues/issue_16_packaged_shadow_proxy_evidence.md) | `Done` | завершена | 0 дней осталось |
 | [VIG-17: Сквозной tracing context и OTLP JSON через stdout](issues/issue_17_request_tracing_stdout_otlp.md) | `Done` | завершена | 0 дней осталось |
+| [VIG-18: Inspection load baseline and production report](issues/issue_18_inspection_load_report.md) | `Done` | завершена | 0 дней осталось |
 
 ## Как закрывать work item
 

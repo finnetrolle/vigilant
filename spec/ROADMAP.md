@@ -228,6 +228,16 @@ Roadmap группирует эти leaves без создания нового 
 
 ### Stage 4: production milestone
 
+[VIG-18](issues/issue_18_inspection_load_report.md) владеет последним release
+gate: воспроизводимым inspection-load baseline и опубликованным production
+report. Он не превращает advisory latency targets в blockers, но обязан
+подтвердить safety и resource bounds на реальном packaged process.
+
+Gate закрыт 2026-08-27. [Versioned report](../docs/inspection-load-result.md)
+фиксирует `PASS`: `240 000/240 000` measured requests при `2 000 RPS`, HTTP
+p50/p95/p99 `2/3/4 ms`, total inspection `64 KiB` p99 `1.670 ms`, bounded RSS,
+byte-identical replay и полный safe audit. Production milestone достигнут.
+
 `Production PII shadow proxy` достигнут только когда:
 
 - все issues EPIC-09 имеют status `Done`;
@@ -291,6 +301,9 @@ VIG-09-01..09 Done --------------------> packaged OCI evidence ------+
 VIG-01 + VIG-05-06/07 + VIG-13 -------> VIG-17 tracing/OTLP stdout -+
                                                                     |
                                                                     v
+                                                      VIG-18 load baseline
+                                                                    |
+                                                                    v
                                   Production PII shadow proxy
                                                    |
                                                    v
@@ -329,17 +342,17 @@ VIG-10-02 также имеют status `Done`.
 
 Implementation issues Stage 2 закрыты: VIG-03-02, VIG-03-07, VIG-06-02,
 VIG-07-02 и VIG-08-02 имеют status `Done`; независимые module seams готовы к
-integration. EPIC-07 остаётся `In progress` до подтверждения
-memory/concurrency bounds benchmark или baseline. Identity leaves EPIC-03
-готовы по contract, но не входят в первый production increment.
+integration. VIG-18 подтвердил memory/concurrency bounds и phase baseline,
+поэтому EPIC-07 также имеет status `Done`. Identity leaves EPIC-03 готовы по
+contract, но не входят в первый production increment.
 
 Все standalone integration issues Stage 3 закрыты: VIG-11..17 имеют status
 `Done`. Production `MainKt` и OCI image выполняют bounded PII shadow inspection
 для Chat Completions request, exact replay, safe aggregate audit и lifecycle
 gates. Configurable session header и W3C trace context сохраняются через
 SERVER, INTERNAL и CLIENT spans; application и OTLP JSON records передаются
-через stdout. Stage 4 production milestone остаётся отдельным frontier до
-публикации предусмотренного им load report.
+через stdout. VIG-18 и Stage 4 закрыты: versioned load report опубликован,
+обязательные safety gates пройдены, `Production PII shadow proxy` достигнут.
 
 Полный repository frontier также сохраняет VIG-01A и VIG-10-03..07. VIG-01A
 проверяет logging-specific PERF-01, а VIG-10-03..07 относятся к Stage 5 и не

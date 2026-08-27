@@ -1,0 +1,77 @@
+package io.vigilant.perf;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+
+/** Reads only safe aggregate evidence from one packaged gateway JSONL log. */
+final class InspectionAuditLogReader {
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    /** Prevents construction of the audit utility. */
+    private InspectionAuditLogReader() {
+    }
+
+    /**
+     * Counts measured shadow decisions and scans for hard safety failures.
+     *
+     * @param log gateway merged stdout path.
+     * @param measuredSession exact measurement session ID.
+     * @param sensitiveValue known synthetic value forbidden from output.
+     * @return immutable safe observation.
+     */
+    static InspectionAuditObservation read(Path log, String measuredSession, String sensitiveValue) {
+        long matchedDecisions = 0L;
+        long detectedDecisions = 0L;
+        boolean oomDetected = false;
+        boolean sensitiveValueDetected = false;
+        try (BufferedReader reader = Files.newBufferedReader(log)) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                oomDetected |= line.contains("OutOfMemoryError");
+                sensitiveValueDetected |= line.contains(sensitiveValue);
+                JsonNode event = parseJson(line);
+                if (event == null
+                    || !measuredSession.equals(event.path("mdc").path("session_id").asText())
+                    || !"policy.shadow_decision".equals(keyValue(event, "event.name"))) {
+                    continue;
+                }
+                matchedDecisions += 1;
+                if ("DETECTED".equals(keyValue(event, "decision"))) {
+                    detectedDecisions += 1;
+                }
+            }
+        } catch (IOException exception) {
+            throw new IllegalStateException("Failed to read inspection gateway log", exception);
+        }
+        return new InspectionAuditObservation(
+            matchedDecisions,
+            oomDetected,
+            sensitiveValueDetected,
+            detectedDecisions
+        );
+    }
+
+    /** Parses one JSON object or ignores non-JSON JVM diagnostics. */
+    private static JsonNode parseJson(String line) {
+        try {
+            return MAPPER.readTree(line);
+        } catch (JsonProcessingException ignored) {
+            return null;
+        }
+    }
+
+    /** Returns one Logback structured key-value pair from its JSON array representation. */
+    private static String keyValue(JsonNode event, String key) {
+        for (JsonNode pair : event.path("kvpList")) {
+            if (pair.has(key)) {
+                return pair.path(key).asText();
+            }
+        }
+        return null;
+    }
+}

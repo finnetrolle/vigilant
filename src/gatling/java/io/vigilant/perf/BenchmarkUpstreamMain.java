@@ -65,6 +65,10 @@ public final class BenchmarkUpstreamMain {
                     streamChunkDelayMs
                 )
             )
+            .service(
+                "/v1/chat/completions",
+                (ctx, request) -> inspectionResponse(request, nonStreamingBody)
+            )
             .build();
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> server.stop().join(), "perf-upstream-shutdown"));
@@ -83,6 +87,18 @@ public final class BenchmarkUpstreamMain {
                 responseBody
             ))
         );
+    }
+
+    /** Consumes and accepts an inspection request only when its exact byte digest matches. */
+    private static HttpResponse inspectionResponse(HttpRequest request, byte[] responseBody) {
+        String expectedDigest = request.headers().get(InspectionPayload.SHA256_HEADER);
+        return HttpResponse.of(request.aggregate().thenApply(aggregated -> {
+            String actualDigest = InspectionPayload.sha256Hex(aggregated.content().array());
+            if (!actualDigest.equals(expectedDigest)) {
+                return HttpResponse.of(HttpStatus.CONFLICT);
+            }
+            return HttpResponse.of(HttpStatus.OK, MediaType.OCTET_STREAM, responseBody);
+        }));
     }
 
     /**

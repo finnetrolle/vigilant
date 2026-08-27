@@ -4,10 +4,10 @@ Vigilant - OpenAI-совместимый guardrails gateway для платфо�
 проверяет запрос до отправки модели, применяет явно заданные политики и
 формирует безопасный audit event, не раскрывая содержимое запроса.
 
-> Статус: pre-release, версия `0.1.0-SNAPSHOT`. Рабочий инкремент выполняет
-> request-side PII inspection в shadow mode. Production milestone ещё не закрыт:
-> актуальный frontier и недостающие evidence перечислены в
-> [roadmap](spec/ROADMAP.md#текущий-roadmap-frontier).
+> Статус: pre-release, версия `0.1.0-SNAPSHOT`. Первый production milestone
+> request-side PII inspection в shadow mode закрыт. Измерения и safety evidence
+> опубликованы в [inspection-load report](docs/inspection-load-result.md), а
+> следующий frontier перечислен в [roadmap](spec/ROADMAP.md#текущий-roadmap-frontier).
 
 ## Что работает сейчас
 
@@ -157,6 +157,8 @@ CI на каждый push в `main` и pull request запускает `build`. 
 ~~~bash
 ./gradlew piiJmhBaseline # JMH baseline fast-pii detector
 ./gradlew perfTest       # PERF-01 direct-vs-gateway load test
+./gradlew inspectionPhaseBenchmark # parsing/windowing/policy/total p50/p95/p99
+./gradlew inspectionLoadTest       # packaged 2,000 RPS inspection profile
 ~~~
 
 Обе проверки запускаются явно и не входят в `build`, `verifyAll` или CI.
@@ -164,6 +166,8 @@ CI на каждый push в `main` и pull request запускает `build`. 
 [VIG-02-15](spec/issues/epic_02/issue_02_15_jmh_baseline.md), а нагрузочного
 теста - в [методике PERF-01](docs/perf-01-load-test.md). Зафиксированные
 результаты публикуются в [истории PERF-01](docs/perf-01-result.md).
+Результаты production inspection profile опубликованы в
+[inspection-load report](docs/inspection-load-result.md).
 
 ## Документация проекта
 
@@ -178,6 +182,7 @@ CI на каждый push в `main` и pull request запускает `build`. 
 - [Observability reference](docs/observability.md)
 - [Deployment guide](docs/deployment.md)
 - [Development guide](docs/development.md)
+- [Inspection-load baseline](docs/inspection-load-result.md)
 
 Нормативный scope хранится в `spec/`. README предназначен для быстрого входа
 в проект и не заменяет требования, статусы issues или roadmap.

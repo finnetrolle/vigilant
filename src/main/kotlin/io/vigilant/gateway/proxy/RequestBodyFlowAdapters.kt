@@ -49,7 +49,7 @@ private fun requestDataSubscriber(downstream: Subscriber<in ByteBuffer>): Subscr
         },
         onNextCallback = { item ->
             if (item is HttpData) {
-                downstream.onNext(item.byteBuf(ByteBufAccessMode.FOR_IO).nioBuffer().asReadOnlyBuffer())
+                downstream.onNext(item.byteBuf(ByteBufAccessMode.DUPLICATE).nioBuffer().asReadOnlyBuffer())
             } else {
                 upstream.request(1)
             }

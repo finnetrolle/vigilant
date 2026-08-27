@@ -106,6 +106,21 @@ PERF-01 direct-vs-gateway load test:
 [perf-01-load-test.md](perf-01-load-test.md), зафиксированные runs - в
 [perf-01-result.md](perf-01-result.md).
 
+Production inspection phase и packaged load profile:
+
+~~~bash
+./gradlew inspectionPhaseBenchmark
+./gradlew inspectionLoadTest
+~~~
+
+Первый task публикует p50/p95/p99 parsing, windowing, policy evaluation и total
+inspection в `build/reports/inspection/phase/`. Второй запускает packaged
+gateway и upstream отдельными JVM, выполняет полный профиль `2 000 RPS` с
+request `64 KiB` и пишет safe summary в `build/reports/inspection/load/`.
+Оба task запускаются явно и не входят в обычный `build`. Зафиксированный
+production run опубликован в
+[inspection-load-result.md](inspection-load-result.md).
+
 ## Git hooks
 
 ~~~bash
@@ -123,5 +138,5 @@ pull request и push в `main`:
 - обязательный `build` job;
 - OWASP dependency-check job при наличии repository secret `NVD_API_KEY`.
 
-Mutation testing, OCI smoke, JMH baseline и PERF-01 load test в текущий CI не
-входят.
+Mutation testing, OCI smoke, JMH baseline, PERF-01 и inspection load test в
+текущий CI не входят.

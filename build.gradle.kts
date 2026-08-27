@@ -57,6 +57,10 @@ dependencies {
 }
 
 val gatlingSourceSet = sourceSets.named("gatling")
+val jmhSourceSet = sourceSets.named("jmh") {
+    compileClasspath += gatlingSourceSet.get().output
+    runtimeClasspath += gatlingSourceSet.get().output
+}
 val perfContractTestSourceSet = sourceSets.create("perfContractTest") {
     java.srcDir("src/perfContractTest/java")
     compileClasspath += gatlingSourceSet.get().output + sourceSets.test.get().compileClasspath
@@ -92,6 +96,9 @@ val piiJmhReportDirectory = layout.buildDirectory.dir("reports/pii/jmh")
 val piiJmhResultFile = piiJmhReportDirectory.map { directory -> directory.file("baseline.json") }
 val piiJmhHumanOutputFile = piiJmhReportDirectory.map { directory -> directory.file("baseline.txt") }
 val piiJmhEnvironmentFile = piiJmhReportDirectory.map { directory -> directory.file("environment.properties") }
+val inspectionPhaseReportDirectory = layout.buildDirectory.dir("reports/inspection/phase")
+val inspectionPhaseResultFile = inspectionPhaseReportDirectory.map { directory -> directory.file("results.json") }
+val inspectionPhaseSummaryFile = inspectionPhaseReportDirectory.map { directory -> directory.file("summary.md") }
 val piiJmhJavaLauncher =
     javaToolchains.launcherFor {
         languageVersion = JavaLanguageVersion.of(25)
@@ -168,6 +175,10 @@ tasks.named<JavaCompile>("compileGatlingJava") {
     options.release = 21
 }
 
+tasks.named<JavaCompile>("compileJmhJava") {
+    dependsOn(gatlingSourceSet.map { it.classesTaskName })
+}
+
 tasks.named<JavaCompile>(perfContractTestSourceSet.compileJavaTaskName) {
     options.release = 21
 }
@@ -215,6 +226,33 @@ tasks.register("perfTest") {
     dependsOn("gatlingRun")
     group = "verification"
     description = "Runs PERF-01 explicitly; never runs as part of build or check."
+}
+
+tasks.register<io.gatling.gradle.GatlingRunTask>("inspectionLoadTest") {
+    dependsOn("installDist", perfContractTest, gatlingSourceSet.map { it.classesTaskName })
+    group = "verification"
+    description = "Runs the packaged 2,000 RPS PII shadow inspection load profile."
+    setSimulationClassName("io.vigilant.perf.InspectionLoadSimulation")
+    setNonInteractive(true)
+    setRunAllSimulations(false)
+    setJvmArgs(
+        listOf(
+            "-server",
+            "-Xms2g",
+            "-Xmx2g",
+            "-XX:+HeapDumpOnOutOfMemoryError",
+            "--add-opens=java.base/java.lang=ALL-UNNAMED",
+            "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED",
+        ),
+    )
+    setSystemProperties(
+        mapOf(
+            "perf.projectDir" to rootDir.absolutePath,
+            "perf.javaExecutable" to piiJmhJavaLauncher.get().executablePath.asFile.absolutePath,
+        ),
+    )
+    setGatlingRuntimeClasspath(gatlingSourceSet.get().runtimeClasspath)
+    setGatlingReportDir(layout.buildDirectory.dir("reports/gatling").get().asFile)
 }
 
 val redMadRobotMetadataFile =
@@ -316,6 +354,54 @@ tasks.register("piiJmhBaseline") {
     dependsOn(piiProductionRuntimeClasspathCheck, writePiiJmhEnvironment)
     group = "verification"
     description = "Runs the complete non-gating PII detector JMH baseline and records its environment."
+}
+
+val runInspectionPhaseJmh = tasks.register<JavaExec>("runInspectionPhaseJmh") {
+    dependsOn(tasks.named("jmhJar"))
+    group = "verification"
+    description = "Runs the request-inspection phase JMH matrix."
+    classpath(files(tasks.named("jmhJar")), jmhSourceSet.get().runtimeClasspath)
+    mainClass.set("org.openjdk.jmh.Main")
+    javaLauncher.set(piiJmhJavaLauncher)
+    outputs.file(inspectionPhaseResultFile)
+    outputs.upToDateWhen { false }
+    doFirst {
+        inspectionPhaseReportDirectory.get().asFile.mkdirs()
+        inspectionPhaseResultFile.get().asFile.delete()
+    }
+    args(
+        "^io.vigilant.perf.InspectionPipelineBenchmark\\.(parsing|windowing|policyEvaluation|totalInspection)$",
+        "-bm", "sample",
+        "-tu", "us",
+        "-wi", "3",
+        "-w", "1s",
+        "-i", "5",
+        "-r", "1s",
+        "-f", "2",
+        "-t", "1",
+        "-jvmArgsAppend", "-Xms1g -Xmx1g",
+        "-rf", "json",
+        "-rff", inspectionPhaseResultFile.get().asFile.absolutePath,
+    )
+}
+
+val writeInspectionPhaseReport = tasks.register<JavaExec>("writeInspectionPhaseReport") {
+    dependsOn(runInspectionPhaseJmh, gatlingSourceSet.map { it.classesTaskName })
+    group = "verification"
+    description = "Renders the complete inspection phase JMH result as Markdown."
+    classpath = gatlingSourceSet.get().runtimeClasspath
+    mainClass.set("io.vigilant.perf.InspectionPhaseReportMain")
+    outputs.file(inspectionPhaseSummaryFile)
+    args(
+        inspectionPhaseResultFile.get().asFile.absolutePath,
+        inspectionPhaseSummaryFile.get().asFile.absolutePath,
+    )
+}
+
+tasks.register("inspectionPhaseBenchmark") {
+    dependsOn(writeInspectionPhaseReport)
+    group = "verification"
+    description = "Runs and reports the complete request-inspection phase benchmark."
 }
 
 tasks.named("check") {

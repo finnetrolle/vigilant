@@ -2,9 +2,9 @@
 
 **ID:** `EPIC-07`  
 **Тип:** Epic  
-**Статус:** In progress
+**Статус:** Done
 **Приоритет:** High  
-**Предварительная оценка:** implementation issues завершены; benchmark/baseline не оценён
+**Предварительная оценка:** 0 дней осталось
 **Связанные требования:** `PERF-03`, `PERF-04`, `CONC-01`, `CONC-02`, `CONC-03`
 
 ## Подтверждённое решение
@@ -33,6 +33,10 @@ EPIC-07 Windowed payload processing
 
 - [x] [VIG-07-01: Контракт windowed payload processing](../issues/epic_07/issue_07_01_windowing_contract.md) - `Done`
 - [x] [VIG-07-02: Windowed fast PII execution](../issues/epic_07/issue_07_02_windowed_fast_pii_execution.md) - `Done`
+
+Resource bounds и phase latency подтверждены standalone release evidence
+[VIG-18](../issues/issue_18_inspection_load_report.md). Versioned результаты
+опубликованы в [inspection-load baseline](../../docs/inspection-load-result.md).
 
 ## Контекст
 
