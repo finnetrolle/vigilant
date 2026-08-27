@@ -158,6 +158,101 @@ Changes limited to documentation, comments, formatting, build metadata, or test 
 
 After the final slice, run the narrowest affected test suite once, then run `./gradlew build` before declaring implementation complete. Do not run an overlapping broad regression subset immediately before the full build unless diagnosing an earlier failure, the affected scope cannot be selected reliably, or the full build will not be run. Report the command and expected failure that established RED, plus the commands that established local and final GREEN.
 
+## Pre-verification defect prevention
+
+The final verification pipeline is a backstop, not the first time the change
+should be compared with its contract. Apply the following rules while coding.
+They supplement the TDD loop above and do not replace its RED -> GREEN order.
+
+### Build criterion-level evidence
+
+- Before the first slice, read the implementation-ready issue, its parent epic,
+  linked normative specs, dependencies, and explicit non-goals. Keep a working
+  matrix that maps every criterion to the production behavior and exact test or
+  dynamic evidence that will prove it. Update the matrix as the implementation
+  changes.
+- Treat `all`, `each`, `every`, `exact`, `complete`, `exhaustive`, and
+  `deterministic` as quantifiers. Cover every named state, position, ordering,
+  content class, boundary, and lifecycle outcome, preferably with a
+  table-driven test when the issue asks for a matrix. A representative happy
+  path does not satisfy a quantified criterion.
+- Verify that fixtures actually have the property named by the case. For
+  example, an ASCII case must contain only ASCII, a suffix or delimiter case
+  must also occur before trailing content, and a preserved 4xx/5xx response
+  must assert its body as well as its status.
+- When a criterion requires runtime, packaging, performance, or lifecycle
+  evidence, run that evidence. A passing build or static inspection is not a
+  substitute for an OCI smoke test, load run, streaming observation, or process
+  shutdown scenario.
+
+### Preserve scope and failure semantics
+
+- Implement only behavior required by the current implementation-ready issue.
+  Do not add future enforcement reactions, schema containers, configuration
+  switches, compatibility modes, or generic extension points for anticipated
+  work. Record a follow-up issue instead when the need is real but out of scope.
+- Check library defaults and convenience APIs for behavior that crosses the
+  intended boundary, such as external file includes, implicit I/O, permissive
+  coercion, or raw exceptions. User-controlled and upstream-controlled invalid
+  input must follow the issue's typed, stable, and safe failure contract.
+- For stateful, concurrent, and resource-owning code, enumerate ownership and
+  every terminal path before implementation: success, rejection, failure,
+  timeout, cancellation, caller close, peer close, and shutdown. Release quota,
+  leases, buffers, executors, and connections only at the lifecycle point that
+  actually ends their use. Test illegal interleavings, not only sequential use.
+
+### Keep documentation and sources of truth current
+
+- KDoc/Javadoc is part of the slice, not verification cleanup. Document every
+  added or modified Kotlin/Java method, including test methods, named callbacks,
+  fixtures, and lifecycle helpers, plus any broader declarations required by
+  the issue. After a refactor, compare wording about ordering, early return,
+  waiting, cancellation, errors, and ownership with the final code.
+- Before introducing a comparator, invariant, report calculation, serializer,
+  process launcher, polling helper, or raw HTTP fixture, search for the existing
+  canonical implementation. Reuse it when semantics are identical. When two
+  outputs must agree, derive them from one immutable snapshot or one shared
+  rule rather than duplicating the calculation.
+- Do not create abstractions merely to remove superficial test similarity.
+  Extract shared code when duplicated domain semantics or setup obligations
+  could drift; keep independent scenario mechanics local when they differ.
+
+### Make asynchronous and process tests deterministic
+
+- Synchronize on the observation asserted by the test. A client response, a
+  callback entry, or a latch inside a worker is not proof that a later metric,
+  log, published result, or cleanup action is visible. Signal after publication
+  or use deadline-bounded polling that reports the last observed state.
+- Do not prove streaming or ordering with wall-clock timestamp races or sleeps.
+  Use explicit handshakes: hold the final upstream chunk or state transition
+  until the downstream observation has occurred, then release it.
+- Use Armeria `http(0)` for in-process servers. Cross-process tests must use the
+  shared port-reservation fixture or a validated non-ephemeral reservation;
+  never close `ServerSocket(0)` and later ask another process to bind the
+  released port.
+- Keep process launch configuration centralized. Whenever startup gains a
+  mandatory file, environment variable, or resource, audit normal process
+  tests, packaged-process tests, performance fixtures, OCI smoke tests, and
+  distribution launchers in the same change.
+
+### Finish the consistency pass before verification
+
+- Inspect `git status` and the complete diff against the chosen base. Keep
+  unrelated papercuts, Sonar cleanup, generated reports, and other issues out of
+  the current change set unless the user explicitly includes them.
+- Update the issue checklist/status, parent epic membership/progress, dependent
+  issue contracts, and `spec/WORK_ITEMS.md` together. Parent epics describe
+  outcomes and boundaries; they must not copy detailed acceptance rules owned
+  by leaf issues.
+- Do not mark an issue or epic `Done` while required dynamic evidence is
+  missing, a dependency is incomplete, or its decomposition still says
+  otherwise. Run `./gradlew validateWorkItems` before the final build whenever
+  work-item files changed.
+- Before handing the change to `verify-changes`, confirm that the criterion
+  matrix has no unsupported row, required KDoc/Javadoc is current, specialized
+  dynamic evidence has run, the diff contains no unapproved behavior, and all
+  asynchronous tests use deterministic barriers.
+
 ## Protocol compatibility principle
 
 For guardrail-enabled work after bypass-only v0, the OpenAI-compatible protocol layer must be **schema-tolerant, lossless in forwarding, and strict about inspectability**:
