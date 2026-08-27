@@ -214,12 +214,12 @@ Roadmap группирует эти leaves без создания нового 
 
 | Planned leaf | Mode | Observable result | Hard blockers | Estimate | Confidence |
 |---|---|---|---|---:|---|
-| Fast PII policy adapter | Module seam | `FastPiiDetector` доступен как `policy.domain.Detector` с lossless normalized finding metadata | EPIC-02 Done, EPIC-04 Done | 1-2 дня | High |
-| Global shadow coverage validation | Vertical config slice | Process стартует только с валидной global REQUEST policy для `fast-pii` | EPIC-04 Done | 2-3 дня | High |
-| PII shadow request tracer bullet | Tracer bullet | Реальный Chat Completions request с PII проходит через gateway byte-identical и создаёт один safe `DETECTED` event | parser, windowing, spool, context, adapter, coverage leaves | 3-5 дней | Medium |
-| Strict protocol and gap outcomes | Tracer bullet | Malformed/ambiguous input не достигает upstream, известный non-text content forwarding-ится с явным inspection gap | PII shadow request tracer bullet | 2-3 дня | Medium |
-| Capacity and cancellation outcomes | Tracer bullet | Per-request/global limits, cancellation и deadlines дают bounded stable outcomes без retained source | PII shadow request tracer bullet | 2-4 дня | Medium |
-| Packaged shadow proxy evidence | Tracer bullet | `MainKt` и OCI container проходят production-process E2E с real upstream stub, config и JSONL audit | все integration leaves, VIG-09-08 | 3-5 дней | Medium |
+| [VIG-11: Fast PII policy adapter](issues/issue_11_fast_pii_policy_adapter.md) | Module seam | `FastPiiDetector` доступен как `policy.domain.Detector` с lossless normalized finding metadata | EPIC-02 Done, EPIC-04 Done | 1-2 дня | High |
+| [VIG-12: Global shadow coverage validation](issues/issue_12_global_shadow_coverage_validation.md) | Vertical config slice | Process стартует только с валидной global REQUEST policy для `fast-pii` | EPIC-04 Done | 2-3 дня | High |
+| [VIG-13: PII shadow request tracer bullet](issues/issue_13_pii_shadow_request_tracer.md) | Tracer bullet | Реальный Chat Completions request с PII проходит через gateway byte-identical и создаёт один safe `DETECTED` event | parser, windowing, spool, context, adapter, coverage leaves | 3-5 дней | Medium |
+| [VIG-14: Strict protocol and gap outcomes](issues/issue_14_strict_protocol_gap_outcomes.md) | Tracer bullet | Malformed/ambiguous input не достигает upstream, известный non-text content forwarding-ится с явным inspection gap | PII shadow request tracer bullet | 2-3 дня | Medium |
+| [VIG-15: Capacity and cancellation outcomes](issues/issue_15_capacity_cancellation_outcomes.md) | Tracer bullet | Per-request/global limits, cancellation и deadlines дают bounded stable outcomes без retained source | PII shadow request tracer bullet | 2-4 дня | Medium |
+| [VIG-16: Packaged shadow proxy evidence](issues/issue_16_packaged_shadow_proxy_evidence.md) | Tracer bullet | `MainKt` и OCI container проходят production-process E2E с real upstream stub, config и JSONL audit | все integration leaves, VIG-09-08 | 3-5 дней | Medium |
 
 Каждая behavior change выполняется TDD vertical slices: один focused RED через
 указанный public seam, минимальный GREEN, затем следующий behavior. Tests не
@@ -319,9 +319,15 @@ VIG-10-02 также имеют status `Done`.
 
 Implementation issues Stage 2 закрыты: VIG-03-02, VIG-03-07, VIG-06-02,
 VIG-07-02 и VIG-08-02 имеют status `Done`; независимые module seams готовы к
-Stage 3 integration leaves. EPIC-07 остаётся `In progress` до подтверждения
+integration. EPIC-07 остаётся `In progress` до подтверждения
 memory/concurrency bounds benchmark или baseline. Identity leaves EPIC-03
 готовы по contract, но не входят в первый production increment.
+
+Все standalone integration issues Stage 3 закрыты: VIG-11..16 имеют status
+`Done`. Production `MainKt` и OCI image выполняют bounded PII shadow inspection
+для Chat Completions request, exact replay, safe aggregate audit и lifecycle
+gates. Stage 4 production milestone остаётся отдельным frontier до публикации
+предусмотренного им load report.
 
 Полный repository frontier также сохраняет VIG-01A и VIG-10-03..07. VIG-01A
 проверяет logging-specific PERF-01, а VIG-10-03..07 относятся к Stage 5 и не

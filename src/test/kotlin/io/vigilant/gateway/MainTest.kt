@@ -70,6 +70,31 @@ class MainTest {
         assertFalse(result.stderr.contains(secret), "stderr must not expose policy values")
     }
 
+    /** Verifies the process refuses to start when mandatory Fast PII coverage is absent. */
+    @Test
+    fun `missing global shadow coverage exits with code 2`() {
+        val emptyPolicyFile =
+            Files.createTempFile("vigilant-empty-politics", ".conf").also { path ->
+                path.writeText("policies = []")
+            }
+
+        val result =
+            runGateway(
+                mapOf(
+                    "VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081",
+                    "VIGILANT_POLITICS_CONFIG" to emptyPolicyFile.toString(),
+                ),
+            )
+
+        assertEquals(2, result.exitCode)
+        assertTrue(
+            result.stderr.contains(
+                "Policy configuration must contain an enabled global REQUEST policy for detector 'fast-pii'",
+            ),
+        )
+        assertFalse(result.stderr.contains(emptyPolicyFile.toString()))
+    }
+
     /** Runs the production entry point until its expected startup failure. */
     private fun runGateway(environment: Map<String, String>): GatewayExit {
         val process =

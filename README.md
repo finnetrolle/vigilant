@@ -74,9 +74,10 @@ docker run --rm --name vigilant \
 30-секундный graceful shutdown budget без последующего `SIGKILL`.
 
 Полный локальный smoke-тест требует Docker, `curl` и `python3`. Он собирает
-образ и проверяет env/file configuration, read-only mount, `/healthz`, реальное
-проксирование, non-root user, exit code 2 для невалидной конфигурации и
-остановку по SIGTERM:
+образ и проверяет env/file configuration, read-only policy mount, `/healthz`,
+`/readyz`, exact replay реального PII Chat Completions request, safe JSONL
+shadow audit, non-root user, exit code 2 для невалидной application/policy
+configuration и остановку по SIGTERM:
 
 ```bash
 ./scripts/oci-smoke-test
@@ -110,6 +111,12 @@ vigilant {
   # Graceful shutdown; значения ниже - значения по умолчанию.
   shutdown-quiet-period = 5s
   shutdown-force-timeout = 30s
+
+  # Bounded in-memory request source для shadow inspection.
+  inspection-per-request-limit-bytes = 8388608
+  inspection-global-retained-limit-bytes = 67108864
+  inspection-max-concurrent-request-sources = 128
+  inspection-max-retained-segments-per-request = 128
 }
 ```
 
@@ -123,6 +130,10 @@ vigilant {
 - `VIGILANT_UPSTREAM_CONNECTION_IDLE_TIMEOUT` - сколько простаивающее соединение к upstream живёт в пуле, по умолчанию `10s`;
 - `VIGILANT_SHUTDOWN_QUIET_PERIOD` - gap без активных запросов перед закрытием сервера, по умолчанию `5s`;
 - `VIGILANT_SHUTDOWN_FORCE_TIMEOUT` - абсолютный bound graceful shutdown, по умолчанию `30s`, не меньше quiet period;
+- `VIGILANT_INSPECTION_PER_REQUEST_LIMIT_BYTES` - максимум retained bytes одного request, по умолчанию `8388608`;
+- `VIGILANT_INSPECTION_GLOBAL_RETAINED_LIMIT_BYTES` - process-wide максимум retained request bytes, по умолчанию `67108864`, не меньше per-request limit;
+- `VIGILANT_INSPECTION_MAX_CONCURRENT_REQUEST_SOURCES` - максимум одновременно admitted request sources, по умолчанию `128`;
+- `VIGILANT_INSPECTION_MAX_RETAINED_SEGMENTS_PER_REQUEST` - максимум storage segments одного request source, по умолчанию `128`;
 - `VIGILANT_OTLP_ENDPOINT` - базовый HTTP(S) endpoint OTLP-коллектора для экспорта traces; `/v1/traces` добавляется сам; без значения экспорт выключен;
 - `VIGILANT_OTLP_ENABLED` - выключатель OTLP-экспорта, по умолчанию `true`;
 - `VIGILANT_CONFIG` - путь к файлу конфигурации.
@@ -132,17 +143,44 @@ vigilant {
 Policy snapshot загружается отдельно из обязательного `politics.conf`. Путь из
 `VIGILANT_POLITICS_CONFIG` имеет приоритет, иначе используется
 `./politics.conf`. Файл читается и валидируется один раз при startup; hot reload
-отсутствует. Явный пустой snapshot разрешён:
-
-```hocon
-policies = []
-```
-
-Минимальный пример находится в `politics.conf.example`.
+отсутствует. Snapshot обязан содержать хотя бы одну effective enabled global
+`REQUEST` policy с `url=*`, `model=*`, anonymous subject `*` и detector
+`fast-pii`. Все reactions текущего shadow increment обязаны использовать
+`ALLOW` без transformations. Пустой, disabled, overridden или enforcement
+snapshot отклоняется до старта сервера. Минимальный валидный пример находится
+в `politics.conf.example`.
 
 Формат значений длительностей - строки вида `300ms`, `10s`, `5m` (или ISO-8601 `PT5M`). Нулевые и отрицательные значения отклоняются при старте, кроме `shutdown-quiet-period=0s`, который отключает ожидание drain; force timeout всегда должен быть положительным и не меньше quiet period.
 
 Недопустимая или неполная application/policy configuration: сообщение об ошибке в stderr и код завершения 2.
+
+## PII shadow request proxy
+
+Production route поддерживает `POST /v1/chat/completions` с
+`Content-Type: application/json`. Gateway до первого upstream byte полностью
+принимает body в bounded source, разбирает model-visible text, применяет global
+`fast-pii` policy и затем передаёт исходные method, path/query, end-to-end
+headers и body без изменений. Response, включая SSE, остаётся streaming
+pass-through. Найденный PII не блокирует запрос: текущая disposition всегда
+`ALLOW`.
+
+Каждый успешно разобран request создаёт один structured event
+`event.name=policy.shadow_decision` с protocol, phase, decision, disposition,
+coverage, trace ID, policy/detector versions, aggregate finding counts и
+duration. Body, matched text, offsets, locators, query и headers в event не
+попадают. Known non-text content передаётся без изменений с decision
+`INSPECTION_GAP`, а не `CLEAN`.
+
+Fail-closed request outcomes до upstream:
+
+| Ситуация | Статус | Тело (`application/json`) |
+|---|---|---|
+| другой method/path/content type | `400 Bad Request` | `{"error":"unsupported_schema"}` |
+| malformed supported message | `400 Bad Request` | `{"error":"malformed_message"}` |
+| ambiguous content | `400 Bad Request` | `{"error":"ambiguous_content"}` |
+| external или unresolved context | `400 Bad Request` | `{"error":"unresolved_context"}` |
+| per-request byte limit | `413 Payload Too Large` | `{"error":"request_too_large"}` |
+| owner/global retained capacity | `503 Service Unavailable` | `{"error":"inspection_capacity_exhausted"}` |
 
 ## Стабильные proxy-ошибки upstream
 
@@ -192,7 +230,9 @@ Graceful shutdown: по SIGTERM (или иному завершению JVM) rea
 
 Поля записи: `timestamp` (epoch millis), `level`, `threadName`, `loggerName`, `formattedMessage`, `kvpList` (SLF4J key-value pairs), `mdc`, `throwable`. Порядок полей не фиксирован - парсить как JSON, не как строку.
 
-Per-request access log успешных запросов отсутствует: логируется только жизненный цикл самого gateway (startup, shutdown, деградации). Наблюдение трафика - metrics/traces, вводимые позднее стадиями.
+Обычный per-request access log отсутствует. Для поддержанного Chat Completions
+request создаётся только safe aggregate `policy.shadow_decision`; остальные
+traffic observations остаются в metrics/traces.
 
 Настройка уровня (единственная runtime-настройка логов):
 

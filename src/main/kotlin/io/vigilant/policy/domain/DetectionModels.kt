@@ -1,5 +1,11 @@
 package io.vigilant.policy.domain
 
+import java.util.Collections
+import java.util.TreeMap
+
+/** Stable registry ID of the built-in Fast PII detector. */
+val FAST_PII_DETECTOR_ID: DetectorId = DetectorId("fast-pii")
+
 /** Explicit mutually exclusive outcome states returned by a policy detector. */
 enum class DetectionStatus {
     /** The detector completed without findings. */
@@ -19,15 +25,46 @@ enum class DetectionStatus {
  * @property span non-empty UTF-8 byte span in the original payload.
  * @property confidence measured probability, when supplied by a detector.
  */
-data class Finding(
+data class Finding @JvmOverloads constructor(
     val type: FindingType,
     val span: Utf8Span,
     val confidence: Double?,
+    val metadata: FindingMetadata = FindingMetadata.EMPTY,
 ) {
     init {
         require(confidence == null || confidence in 0.0..1.0) {
             "Finding confidence must be within the closed unit interval"
         }
+    }
+}
+
+/**
+ * Immutable detector-defined finding metadata retained without engine interpretation.
+ *
+ * Keys and values are stable non-blank identifiers or enum/version values. Sensitive
+ * payload values, matched text and protocol locators are not valid metadata.
+ */
+class FindingMetadata(
+    attributes: Map<String, String>,
+) : AbstractMap<String, String>() {
+    private val snapshot: Map<String, String> = Collections.unmodifiableMap(TreeMap(attributes))
+
+    init {
+        require(attributes.keys.all(String::isNotBlank)) {
+            "Finding metadata keys must not be blank"
+        }
+        require(attributes.values.all(String::isNotBlank)) {
+            "Finding metadata values must not be blank"
+        }
+    }
+
+    /** Sorted immutable entries exposed through the read-only [Map] contract. */
+    override val entries: Set<Map.Entry<String, String>>
+        get() = snapshot.entries
+
+    companion object {
+        /** Shared immutable empty metadata used by detector-neutral findings. */
+        val EMPTY: FindingMetadata = FindingMetadata(emptyMap<String, String>())
     }
 }
 

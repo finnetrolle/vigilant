@@ -4,6 +4,7 @@ import com.linecorp.armeria.common.HttpResponse
 import com.linecorp.armeria.common.HttpStatus
 import io.vigilant.gateway.GatewayProcessFixture
 import io.vigilant.gateway.GatewayTestFixture
+import io.vigilant.gateway.chatCompletions
 import java.time.Duration
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
@@ -51,7 +52,7 @@ class UpstreamTimeoutMemoryStabilityTest {
                     "gateway exited after ${batch * BATCH_SIZE} requests; output: ${gateway.output()}",
                 )
                 val responses = List(BATCH_SIZE) {
-                    client.get("/v1/models").aggregate()
+                    client.chatCompletions("memory stability").aggregate()
                 }
                 try {
                     CompletableFuture.allOf(*responses.toTypedArray())

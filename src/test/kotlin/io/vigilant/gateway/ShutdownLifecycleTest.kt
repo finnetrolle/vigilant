@@ -5,7 +5,6 @@ import com.linecorp.armeria.common.HttpData
 import com.linecorp.armeria.common.HttpResponse
 import com.linecorp.armeria.common.HttpResponseWriter
 import com.linecorp.armeria.common.HttpStatus
-import com.linecorp.armeria.common.MediaType
 import com.linecorp.armeria.common.ResponseHeaders
 import java.time.Duration
 import java.util.concurrent.CopyOnWriteArrayList
@@ -39,15 +38,12 @@ class ShutdownLifecycleTest {
         val activeStarted = CountDownLatch(1)
         val upstream = fixture.startServer { request ->
             upstreamPaths += request.path()
-            if (request.path() == ACTIVE_PATH) {
-                HttpResponse.streaming().also { response ->
-                    activeWriter.set(response)
-                    response.write(ResponseHeaders.of(HttpStatus.OK))
-                    response.write(HttpData.ofUtf8("first-"))
-                    activeStarted.countDown()
-                }
-            } else {
-                HttpResponse.of(HttpStatus.OK, MediaType.PLAIN_TEXT_UTF_8, "unexpected-upstream")
+            check(request.path() == CHAT_COMPLETIONS_PATH)
+            HttpResponse.streaming().also { response ->
+                activeWriter.set(response)
+                response.write(ResponseHeaders.of(HttpStatus.OK))
+                response.write(HttpData.ofUtf8("first-"))
+                activeStarted.countDown()
             }
         }
         val gateway = launchGateway(
@@ -59,15 +55,19 @@ class ShutdownLifecycleTest {
             ),
         )
         val client = gateway.awaitServing()
-        val activeResponse = client.get(ACTIVE_PATH).aggregate()
+        val activeResponse = client.chatCompletions("active request").aggregate()
         assertTrue(activeStarted.await(5, TimeUnit.SECONDS), "upstream did not start the active stream")
 
         gateway.process.destroy()
         awaitDraining(client, gateway)
 
-        val rejected = client.get(NEW_TRAFFIC_PATH).aggregate().join()
+        val rejected = client.chatCompletions("new request during drain").aggregate().join()
         assertEquals(HttpStatus.SERVICE_UNAVAILABLE, rejected.status())
-        assertEquals(listOf(ACTIVE_PATH), upstreamPaths.toList(), "draining traffic must not reach upstream")
+        assertEquals(
+            listOf(CHAT_COMPLETIONS_PATH),
+            upstreamPaths.toList(),
+            "draining traffic must not reach upstream",
+        )
 
         activeWriter.get().apply {
             write(HttpData.ofUtf8("last"))
@@ -86,7 +86,7 @@ class ShutdownLifecycleTest {
     fun `stuck exchange is force closed within configured shutdown timeout`() {
         val stuckStarted = CountDownLatch(1)
         val upstream = fixture.startServer { request ->
-            check(request.path() == STUCK_PATH)
+            check(request.path() == CHAT_COMPLETIONS_PATH)
             HttpResponse.streaming().also { response ->
                 response.write(ResponseHeaders.of(HttpStatus.OK))
                 response.write(HttpData.ofUtf8("never-finishes"))
@@ -101,7 +101,7 @@ class ShutdownLifecycleTest {
             ),
         )
         val client = gateway.awaitServing()
-        val stuckResponse = client.get(STUCK_PATH).aggregate()
+        val stuckResponse = client.chatCompletions("stuck request").aggregate()
         assertTrue(stuckStarted.await(5, TimeUnit.SECONDS), "upstream did not start the stuck stream")
 
         val shutdownStartedAt = System.nanoTime()
@@ -166,7 +166,8 @@ class ShutdownLifecycleTest {
         )
         assertTrue(
             collector.exports.any { export ->
-                export.path == "/v1/traces" && export.body.containsSubsequence(ACTIVE_PATH.encodeToByteArray())
+                export.path == "/v1/traces" &&
+                    export.body.containsSubsequence(CHAT_COMPLETIONS_PATH.encodeToByteArray())
             },
             "trace export did not contain the completed active stream",
         )
@@ -180,9 +181,6 @@ class ShutdownLifecycleTest {
     }
 
     private companion object {
-        private const val ACTIVE_PATH = "/active"
-        private const val NEW_TRAFFIC_PATH = "/new-during-drain"
-        private const val STUCK_PATH = "/stuck"
         private val DRAINING_TIMEOUT: Duration = Duration.ofSeconds(10)
         private val MINIMUM_DRAIN_OBSERVATION: Duration = Duration.ofMillis(500)
         private val STUCK_FORCE_TIMEOUT: Duration = Duration.ofSeconds(2)

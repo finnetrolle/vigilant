@@ -1,3 +1,23 @@
 # Required immutable startup policy snapshot.
 # VIGILANT_POLITICS_CONFIG selects another file; otherwise ./politics.conf is used.
-policies = []
+policies = [
+  {
+    id = "default-request-pii"
+    version = "1"
+    enabled = true
+    match {
+      url = "*"
+      model = "*"
+      phase = "REQUEST"
+      subject { type = "*", id = "*" }
+    }
+    detectors = ["fast-pii"]
+    deadline = 50ms
+    reactions {
+      detected { disposition = "ALLOW", transformations = [] }
+      clean { disposition = "ALLOW", transformations = [] }
+      error { disposition = "ALLOW", transformations = [] }
+    }
+    overrides = []
+  }
+]

@@ -7,6 +7,7 @@ import io.opentelemetry.sdk.metrics.SdkMeterProvider
 import io.vigilant.gateway.AppComponent
 import io.vigilant.gateway.GatewayProcessFixture
 import io.vigilant.gateway.GatewayTestFixture
+import io.vigilant.gateway.chatCompletions
 import io.vigilant.gateway.config.OtlpSettings
 import io.vigilant.gateway.containsSubsequence
 import io.vigilant.gateway.proxy.BypassProxyService
@@ -78,7 +79,7 @@ class OtlpMetricsExportTest {
         val process = gateway.process
         try {
             val client = gateway.awaitServing("/healthz")
-            val response = client.get("/v1/models")
+            val response = client.chatCompletions("metrics")
                 .aggregate()
                 .join()
             assertEquals(HttpStatus.OK, response.status())

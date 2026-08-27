@@ -104,6 +104,12 @@ Issue является листом mind map, если:
 | [EPIC-08: Lossless message spooling and replay](epics/epic_08_message_spooling_replay.md) | `In progress` | 2/2 | 0 дней до request source; future response/disk scope не оценён |
 | [EPIC-09: Закрытие архитектурных рисков v0](epics/epic_09_v0_architecture_closure.md) | `Done` | 9/9 | 0 дней осталось |
 | [EPIC-10: Повышение качества детерминированного PII-распознавания](epics/epic_10_pii_detection_quality.md) | `In progress` | 2/8 | 17-23 дня осталось |
+| [VIG-11: Fast PII policy adapter](issues/issue_11_fast_pii_policy_adapter.md) | `Done` | завершена | 0 дней осталось |
+| [VIG-12: Global shadow coverage validation](issues/issue_12_global_shadow_coverage_validation.md) | `Done` | завершена | 0 дней осталось |
+| [VIG-13: PII shadow request tracer bullet](issues/issue_13_pii_shadow_request_tracer.md) | `Done` | завершена | 0 дней осталось |
+| [VIG-14: Strict protocol and inspection-gap outcomes](issues/issue_14_strict_protocol_gap_outcomes.md) | `Done` | завершена | 0 дней осталось |
+| [VIG-15: Capacity and cancellation outcomes](issues/issue_15_capacity_cancellation_outcomes.md) | `Done` | завершена | 0 дней осталось |
+| [VIG-16: Packaged shadow proxy evidence](issues/issue_16_packaged_shadow_proxy_evidence.md) | `Done` | завершена | 0 дней осталось |
 
 ## Как закрывать work item
 

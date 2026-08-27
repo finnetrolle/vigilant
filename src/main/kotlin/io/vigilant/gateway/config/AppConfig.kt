@@ -6,6 +6,7 @@ import com.sksamuel.hoplite.KebabCaseParamMapper
 import com.sksamuel.hoplite.PropertySource
 import com.sksamuel.hoplite.fp.Validated
 import com.sksamuel.hoplite.sources.EnvironmentVariablesPropertySource
+import io.vigilant.source.RequestSourceLimits
 import java.net.URI
 import java.nio.file.Path
 import java.time.Duration
@@ -32,6 +33,7 @@ private const val DEFAULT_RESPONSE_TIMEOUT_SECONDS = 300L
 private const val DEFAULT_CONNECTION_IDLE_TIMEOUT_SECONDS = 10L
 private const val DEFAULT_SHUTDOWN_QUIET_PERIOD_SECONDS = 5L
 private const val DEFAULT_SHUTDOWN_FORCE_TIMEOUT_SECONDS = 30L
+private val DEFAULT_REQUEST_SOURCE_LIMITS = RequestSourceLimits()
 
 /**
  * Default time an idle upstream connection may stay pooled; matches Armeria's
@@ -86,6 +88,7 @@ private val DEFAULT_CONFIG_PATHS: List<Path> = listOf(
  * @param port HTTP port the gateway listens on.
  * @param upstream validated timeouts and pooling settings of the upstream client.
  * @param shutdown validated graceful shutdown quiet and force bounds.
+ * @param inspection bounded in-memory request inspection settings.
  * @param otlp common OTLP export settings for traces and metrics; external
  *   export is active only when [OtlpSettings.enabled] is `true` and an endpoint is set.
  */
@@ -94,7 +97,14 @@ data class AppConfig(
     val port: Int,
     val upstream: UpstreamClientSettings,
     val shutdown: ShutdownSettings,
+    val inspection: InspectionSettings,
     val otlp: OtlpSettings,
+)
+
+/** Runtime bounds for request-side body inspection. */
+data class InspectionSettings(
+    /** Exact source owner, byte and retained-segment bounds. */
+    val requestSourceLimits: RequestSourceLimits,
 )
 
 /**
@@ -157,6 +167,11 @@ internal data class VigilantSettings(
     val upstreamConnectionIdleTimeout: Duration = DEFAULT_UPSTREAM_CONNECTION_IDLE_TIMEOUT,
     val shutdownQuietPeriod: Duration = DEFAULT_SHUTDOWN_QUIET_PERIOD,
     val shutdownForceTimeout: Duration = DEFAULT_SHUTDOWN_FORCE_TIMEOUT,
+    val inspectionPerRequestLimitBytes: Long = DEFAULT_REQUEST_SOURCE_LIMITS.perRequestLimitBytes,
+    val inspectionGlobalRetainedLimitBytes: Long = DEFAULT_REQUEST_SOURCE_LIMITS.globalRetainedLimitBytes,
+    val inspectionMaxConcurrentRequestSources: Int = DEFAULT_REQUEST_SOURCE_LIMITS.maxConcurrentRequestSources,
+    val inspectionMaxRetainedSegmentsPerRequest: Int =
+        DEFAULT_REQUEST_SOURCE_LIMITS.maxRetainedSegmentsPerRequest,
     val otlpEnabled: Boolean = true,
     val otlpEndpoint: String? = null,
 )
@@ -228,6 +243,15 @@ internal fun loadAppConfig(
             quietPeriod = root.vigilant.shutdownQuietPeriod,
             forceTimeout = root.vigilant.shutdownForceTimeout,
         ),
+        inspection =
+            InspectionSettings(
+                RequestSourceLimits(
+                    perRequestLimitBytes = root.vigilant.inspectionPerRequestLimitBytes,
+                    globalRetainedLimitBytes = root.vigilant.inspectionGlobalRetainedLimitBytes,
+                    maxConcurrentRequestSources = root.vigilant.inspectionMaxConcurrentRequestSources,
+                    maxRetainedSegmentsPerRequest = root.vigilant.inspectionMaxRetainedSegmentsPerRequest,
+                ),
+            ),
         otlp = OtlpSettings(
             enabled = root.vigilant.otlpEnabled,
             endpoint = root.vigilant.otlpEndpoint

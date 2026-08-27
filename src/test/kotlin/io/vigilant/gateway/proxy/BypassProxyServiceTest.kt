@@ -17,6 +17,7 @@ import com.linecorp.armeria.server.Server
 import com.fasterxml.jackson.databind.ObjectMapper
 import io.vigilant.gateway.GatewayProcessFixture
 import io.vigilant.gateway.assertUpstreamFailureWarning
+import io.vigilant.gateway.chatCompletionsBody
 import io.vigilant.gateway.renderForSecretScan
 import io.vigilant.gateway.withTestPolicyConfiguration
 import java.net.URI
@@ -352,9 +353,10 @@ class BypassProxyServiceTest {
      * request with sentinel values through it, and returns everything the process
      * wrote to stdout and stderr.
      */
+    @Suppress("LongMethod")
     private fun runGatewaySession(logLevel: String?): GatewayRun {
         val upstream = startServer { request ->
-            if (request.path().startsWith("/fail")) {
+            if (request.headers().get("x-test-outcome") == "fail") {
                 HttpResponse.of(
                     HttpStatus.INTERNAL_SERVER_ERROR,
                     MediaType.PLAIN_TEXT_UTF_8,
@@ -381,19 +383,38 @@ class BypassProxyServiceTest {
             val client = awaitGateway(process, gatewayPort, stderr)
             val ok = client.execute(
                 HttpRequest.of(
-                    RequestHeaders.builder(HttpMethod.POST, "/v1/chat?token=query-secret-1C6A")
-                        .contentType(MediaType.PLAIN_TEXT_UTF_8)
+                    RequestHeaders.builder(
+                        HttpMethod.POST,
+                        "/v1/chat/completions?token=query-secret-1C6A",
+                    )
+                        .contentType(MediaType.JSON)
                         .add(HttpHeaderNames.AUTHORIZATION, "Bearer auth-secret-5F1C")
                         .add(HttpHeaderNames.PROXY_AUTHORIZATION, "Bearer proxy-secret-9A2E")
                         .add(HttpHeaderNames.COOKIE, "session=cookie-secret-7B4D")
                         .add("x-api-key", "api-key-secret-6B23")
                         .build(),
-                    HttpData.ofUtf8("request body-secret-8D07"),
+                    HttpData.ofUtf8(
+                        chatCompletionsBody("request body-secret-8D07"),
+                    ),
                 ),
             ).aggregate().join()
             assertEquals(HttpStatus.OK, ok.status())
 
-            val failed = client.get("/fail?token=query-secret-1C6A").aggregate().join()
+            val failed =
+                client.execute(
+                    HttpRequest.of(
+                        RequestHeaders.builder(
+                            HttpMethod.POST,
+                            "/v1/chat/completions?token=query-secret-1C6A",
+                        )
+                            .contentType(MediaType.JSON)
+                            .add("x-test-outcome", "fail")
+                            .build(),
+                        HttpData.ofUtf8(
+                            chatCompletionsBody("failure"),
+                        ),
+                    ),
+                ).aggregate().join()
             assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, failed.status())
         } finally {
             process.destroy()

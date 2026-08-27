@@ -56,6 +56,28 @@ class AppConfigLoadingTest {
         assertEquals(18082, config.port)
     }
 
+    /** Verifies environment overrides for every bounded request-source limit. */
+    @Test
+    fun `inspection source bounds are configurable through environment`() {
+        val config =
+            loadAppConfig(
+                env =
+                    mapOf(
+                        "VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081",
+                        "VIGILANT_INSPECTION_PER_REQUEST_LIMIT_BYTES" to "1024",
+                        "VIGILANT_INSPECTION_GLOBAL_RETAINED_LIMIT_BYTES" to "4096",
+                        "VIGILANT_INSPECTION_MAX_CONCURRENT_REQUEST_SOURCES" to "7",
+                        "VIGILANT_INSPECTION_MAX_RETAINED_SEGMENTS_PER_REQUEST" to "8",
+                    ),
+                defaultConfigPaths = emptyList(),
+            )
+
+        assertEquals(1024, config.inspection.requestSourceLimits.perRequestLimitBytes)
+        assertEquals(4096, config.inspection.requestSourceLimits.globalRetainedLimitBytes)
+        assertEquals(7, config.inspection.requestSourceLimits.maxConcurrentRequestSources)
+        assertEquals(8, config.inspection.requestSourceLimits.maxRetainedSegmentsPerRequest)
+    }
+
     @Test
     fun `env only without file is backward compatible`() {
         val config = loadAppConfig(

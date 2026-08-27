@@ -20,17 +20,24 @@ import io.vigilant.gateway.health.TrafficAdmissionService
 import io.vigilant.gateway.metrics.MetricsService
 import io.vigilant.gateway.metrics.buildSdkMeterProvider
 import io.vigilant.gateway.proxy.BypassProxyService
+import io.vigilant.gateway.proxy.InspectionResources
+import io.vigilant.gateway.proxy.PiiShadowProxyService
 import io.vigilant.gateway.proxy.UpstreamClientResources
 import io.vigilant.gateway.tracing.TracingService
 import io.vigilant.gateway.tracing.buildSdkTracerProvider
 import io.vigilant.policy.config.loadPolicySnapshot
-import io.vigilant.policy.domain.DetectorId
+import io.vigilant.policy.domain.FAST_PII_DETECTOR_ID
+import io.vigilant.policy.decision.ReactionAggregator
+import io.vigilant.policy.engine.PolicyEngine
+import io.vigilant.policy.execution.DetectorExecutionCoordinator
+import io.vigilant.policy.execution.DetectorExecutor
 import io.vigilant.policy.provider.DummyPolicyProvider
 import io.vigilant.policy.provider.PolicyProvider
+import io.vigilant.policy.selection.PolicySelector
 import java.net.URI
 
 /** Built-in detector metadata available while validating the startup policy snapshot. */
-private val STARTUP_DETECTOR_IDS: Set<DetectorId> = setOf(DetectorId("fast-pii"))
+private val STARTUP_DETECTOR_IDS = setOf(FAST_PII_DETECTOR_ID)
 
 /**
  * Application-wide dependency graph: configuration, the owned upstream
@@ -44,12 +51,16 @@ interface AppComponent {
 
     /** Exposes application-owned upstream resources for ordered shutdown after server drain. */
     val upstreamClientResources: UpstreamClientResources
+
+    /** Exposes application-owned inspection resources for ordered shutdown after server drain. */
+    val inspectionResources: InspectionResources
     val sdkTracerProvider: SdkTracerProvider
     val sdkMeterProvider: SdkMeterProvider
 
     /** Complete validated policy snapshot provider resolved eagerly at startup. */
     val policyProvider: PolicyProvider
 
+    @Suppress("TooManyFunctions")
     companion object {
         @Provides
         @SingleIn(AppScope::class)
@@ -70,6 +81,42 @@ interface AppComponent {
         @SingleIn(AppScope::class)
         fun upstreamWebClient(upstreamClientResources: UpstreamClientResources): WebClient =
             upstreamClientResources.webClient
+
+        /** Assembles the policy engine over the immutable startup registry. */
+        @Provides
+        @SingleIn(AppScope::class)
+        fun policyEngine(
+            policyProvider: PolicyProvider,
+            inspectionResources: InspectionResources,
+        ): PolicyEngine =
+            PolicyEngine(
+                policyProvider = policyProvider,
+                policySelector = PolicySelector(),
+                detectorExecutionCoordinator =
+                    DetectorExecutionCoordinator(
+                        DetectorExecutor(
+                            mapOf(FAST_PII_DETECTOR_ID to inspectionResources.fastPiiDetector),
+                        ),
+                    ),
+                reactionAggregator = ReactionAggregator(),
+            )
+
+        /** Connects bounded request inspection to the existing streaming transport proxy. */
+        @Provides
+        @SingleIn(AppScope::class)
+        fun piiShadowProxyService(
+            appConfig: AppConfig,
+            bypassProxyService: BypassProxyService,
+            inspectionResources: InspectionResources,
+            policyEngine: PolicyEngine,
+        ): PiiShadowProxyService =
+            PiiShadowProxyService(
+                upstreamUri = appConfig.upstreamUri,
+                bypassProxyService = bypassProxyService,
+                requestSourceQuota = inspectionResources.requestSourceQuota,
+                policyEngine = policyEngine,
+                inspectionExecutor = inspectionResources.requestExecutor,
+            )
 
         @Provides
         @SingleIn(AppScope::class)
@@ -93,10 +140,11 @@ interface AppComponent {
         fun meter(sdkMeterProvider: SdkMeterProvider): Meter =
             sdkMeterProvider.get("io.vigilant.gateway")
 
+        /** Wraps the shadow proxy with request-scoped tracing and correlation. */
         @Provides
         @SingleIn(AppScope::class)
-        fun tracingService(bypassProxyService: BypassProxyService, tracer: Tracer): TracingService =
-            TracingService(bypassProxyService, tracer)
+        fun tracingService(piiShadowProxyService: PiiShadowProxyService, tracer: Tracer): TracingService =
+            TracingService(piiShadowProxyService, tracer)
 
         /** Decorates the traced proxy route with safe traffic measurements. */
         @Provides

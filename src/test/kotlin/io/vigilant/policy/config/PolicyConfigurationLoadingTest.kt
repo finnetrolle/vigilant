@@ -15,8 +15,8 @@ class PolicyConfigurationLoadingTest {
     /** Verifies that the explicit environment path takes precedence over the default file. */
     @Test
     fun `environment policy config path takes precedence over the default`() {
-        val environmentFile = writeConfig(completePolicyConfig("environment-policy"))
-        val defaultFile = writeConfig(completePolicyConfig("default-policy"))
+        val environmentFile = writeConfig(shadowPolicyConfig("environment-policy"))
+        val defaultFile = writeConfig(shadowPolicyConfig("default-policy"))
 
         val policies =
             loadPolicySnapshot(
@@ -31,7 +31,7 @@ class PolicyConfigurationLoadingTest {
     /** Verifies the documented `./politics.conf` resolution path when no override exists. */
     @Test
     fun `default policy config path is used without an environment override`() {
-        val defaultFile = writeConfig(completePolicyConfig("default-policy"))
+        val defaultFile = writeConfig(shadowPolicyConfig("default-policy"))
 
         val policies =
             loadPolicySnapshot(
@@ -43,19 +43,69 @@ class PolicyConfigurationLoadingTest {
         assertEquals("default-policy", policies.single().reference.id.value)
     }
 
-    /** Verifies that only an explicit valid empty policy list produces an empty snapshot. */
+    /** Verifies that production startup cannot silently run without global PII coverage. */
     @Test
-    fun `explicitly empty policy configuration loads successfully`() {
+    fun `explicitly empty policy configuration is rejected without shadow coverage`() {
         val configFile = writeConfig("policies = []")
 
-        val policies =
+        val exception = assertFailsWith<IllegalArgumentException> {
             loadPolicySnapshot(
                 env = mapOf("VIGILANT_POLITICS_CONFIG" to configFile.toString()),
                 defaultConfigPath = Path.of("unused-politics.conf"),
                 availableDetectorIds = setOf(DetectorId("fast-pii")),
             )
+        }
 
-        assertEquals(emptyList(), policies)
+        assertEquals(
+            "Policy configuration must contain an enabled global REQUEST policy for detector 'fast-pii'",
+            exception.message,
+        )
+    }
+
+    /** Verifies the first increment cannot activate blocking or transforming reactions. */
+    @Test
+    fun `non shadow reactions are rejected before startup`() {
+        val configFile = writeConfig(completePolicyConfig("non-shadow-policy"))
+
+        val exception = assertFailsWith<IllegalArgumentException> {
+            loadPolicySnapshot(
+                env = mapOf("VIGILANT_POLITICS_CONFIG" to configFile.toString()),
+                defaultConfigPath = Path.of("unused-politics.conf"),
+                availableDetectorIds = setOf(DetectorId("fast-pii")),
+            )
+        }
+
+        assertEquals(
+            "Shadow-only policy configuration requires ALLOW reactions without transformations",
+            exception.message,
+        )
+    }
+
+    /** Verifies a matching policy cannot remove the only mandatory coverage policy. */
+    @Test
+    fun `overridden global coverage policy is rejected`() {
+        val configFile =
+            writeConfig(
+                """
+                policies = [
+                  ${shadowPolicyEntry("coverage")},
+                  ${shadowPolicyEntry("overrider", overrides = listOf("coverage")).replace("model = \"*\"", "model = \"gpt-4\"")}
+                ]
+                """.trimIndent(),
+            )
+
+        val exception = assertFailsWith<IllegalArgumentException> {
+            loadPolicySnapshot(
+                env = mapOf("VIGILANT_POLITICS_CONFIG" to configFile.toString()),
+                defaultConfigPath = Path.of("unused-politics.conf"),
+                availableDetectorIds = setOf(DetectorId("fast-pii")),
+            )
+        }
+
+        assertEquals(
+            "Global Fast PII coverage policy must not be overridden",
+            exception.message,
+        )
     }
 
     /** Verifies that absence of the mandatory default file produces a stable safe failure. */
@@ -112,7 +162,7 @@ class PolicyConfigurationLoadingTest {
     /** Verifies that startup loading includes semantic validation against detector metadata. */
     @Test
     fun `policy configuration is validated against available detector ids`() {
-        val configFile = writeConfig(completePolicyConfig("unknown-detector-policy"))
+        val configFile = writeConfig(shadowPolicyConfig("unknown-detector-policy"))
 
         val exception = assertFailsWith<PolicyValidationException> {
             loadPolicySnapshot(

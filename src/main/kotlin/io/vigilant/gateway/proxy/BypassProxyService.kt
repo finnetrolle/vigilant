@@ -7,7 +7,6 @@ import com.linecorp.armeria.common.HttpHeadersBuilder
 import com.linecorp.armeria.common.HttpRequest
 import com.linecorp.armeria.common.HttpResponse
 import com.linecorp.armeria.common.HttpStatus
-import com.linecorp.armeria.common.MediaType
 import com.linecorp.armeria.common.RequestHeaders
 import com.linecorp.armeria.common.ResponseHeaders
 import com.linecorp.armeria.server.HttpService
@@ -28,9 +27,7 @@ class BypassProxyService(
     private val upstream: WebClient,
 ) : HttpService {
     private val logger = LoggerFactory.getLogger(BypassProxyService::class.java)
-    private val upstreamScheme = upstreamUri.scheme
-    private val upstreamAuthority = requireNotNull(upstreamUri.rawAuthority)
-    private val upstreamBasePath = upstreamUri.rawPath.orEmpty().trimEnd('/')
+    private val upstreamAddress = UpstreamRequestAddress(upstreamUri)
 
     /**
      * Forwards the request to the upstream as a streaming pass-through: only the
@@ -95,7 +92,7 @@ class BypassProxyService(
      */
     private fun upstreamError(ctx: ServiceRequestContext, cause: Throwable): HttpResponse {
         val failure = observeUpstreamFailure(ctx, cause)
-        return proxyError(failure.status, failure.code)
+        return stableProxyError(failure.status, failure.code)
     }
 
     /** Records a safe request-scoped observation of an upstream failure. */
@@ -109,12 +106,6 @@ class BypassProxyService(
     }
 
     /**
-     * Builds the stable proxy error response for the given status and error code.
-     */
-    private fun proxyError(status: HttpStatus, errorCode: String): HttpResponse =
-        HttpResponse.of(status, MediaType.JSON, """{"error":"$errorCode"}""")
-
-    /**
      * Rewrites the inbound headers for the upstream: sets the upstream scheme,
      * authority, and base path, and strips hop-by-hop headers, including those
      * named in `Connection`.
@@ -122,9 +113,9 @@ class BypassProxyService(
     internal fun rewriteRequestHeaders(headers: RequestHeaders): RequestHeaders {
         val connectionHeaders = connectionHeaderNames(headers)
         val builder = headers.toBuilder()
-            .scheme(upstreamScheme)
-            .authority(upstreamAuthority)
-            .path(upstreamPath(headers.path()))
+            .scheme(upstreamAddress.scheme)
+            .authority(upstreamAddress.authority)
+            .path(upstreamAddress.path(headers.path()))
 
         removeHopByHopHeaders(builder, connectionHeaders)
         return builder.build()
@@ -138,19 +129,6 @@ class BypassProxyService(
         val builder = headers.toBuilder()
         removeHopByHopHeaders(builder, connectionHeaderNames(headers))
         return builder.build()
-    }
-
-    /**
-     * Joins the configured upstream base path with the inbound path.
-     */
-    private fun upstreamPath(inboundPath: String): String {
-        if (upstreamBasePath.isEmpty() || upstreamBasePath == "/") return inboundPath
-
-        return if (inboundPath.startsWith('/')) {
-            upstreamBasePath + inboundPath
-        } else {
-            "$upstreamBasePath/$inboundPath"
-        }
     }
 
     /**

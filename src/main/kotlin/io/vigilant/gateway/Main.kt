@@ -23,6 +23,7 @@ fun main() {
         graph.server
         graph.readinessService
         graph.upstreamClientResources
+        graph.inspectionResources
         graph.sdkTracerProvider
         graph.sdkMeterProvider
         graph
@@ -40,12 +41,16 @@ fun main() {
                 server.stop().join()
             } finally {
                 try {
-                    graph.upstreamClientResources.close()
+                    graph.inspectionResources.close()
                 } finally {
                     try {
-                        graph.sdkTracerProvider.close()
+                        graph.upstreamClientResources.close()
                     } finally {
-                        graph.sdkMeterProvider.close()
+                        try {
+                            graph.sdkTracerProvider.close()
+                        } finally {
+                            graph.sdkMeterProvider.close()
+                        }
                     }
                 }
             }

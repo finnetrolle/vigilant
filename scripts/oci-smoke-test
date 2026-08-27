@@ -8,6 +8,7 @@ IMAGE_TAG="vigilant:smoke-$$"
 CONTAINER_NAME="vigilant-smoke-$$"
 CONFIG_CONTAINER_NAME="${CONTAINER_NAME}-config"
 INVALID_CONTAINER_NAME="${CONTAINER_NAME}-invalid"
+INVALID_POLICY_CONTAINER_NAME="${CONTAINER_NAME}-invalid-policy"
 UPSTREAM_PID=""
 CONTAINER_ID=""
 CONFIG_CONTAINER_ID=""
@@ -20,6 +21,7 @@ cleanup() {
         docker rm --force "$CONFIG_CONTAINER_ID" >/dev/null 2>&1 || true
     fi
     docker rm --force "$INVALID_CONTAINER_NAME" >/dev/null 2>&1 || true
+    docker rm --force "$INVALID_POLICY_CONTAINER_NAME" >/dev/null 2>&1 || true
     if [[ -n "$UPSTREAM_PID" ]]; then
         kill "$UPSTREAM_PID" >/dev/null 2>&1 || true
         wait "$UPSTREAM_PID" >/dev/null 2>&1 || true
@@ -30,12 +32,101 @@ cleanup() {
 
 trap cleanup EXIT
 
-for COMMAND in curl docker python3; do
+for COMMAND in cmp curl docker python3; do
     if ! command -v "$COMMAND" >/dev/null 2>&1; then
         echo "$COMMAND is required for the OCI smoke test" >&2
         exit 1
     fi
 done
+
+await_gateway() {
+    local gateway_port="$1"
+    for _ in {1..120}; do
+        if curl --fail --silent "http://127.0.0.1:$gateway_port/healthz" >/dev/null &&
+            curl --fail --silent "http://127.0.0.1:$gateway_port/readyz" >/dev/null; then
+            return
+        fi
+        sleep 0.25
+    done
+    curl --fail --silent "http://127.0.0.1:$gateway_port/healthz" >/dev/null
+    curl --fail --silent "http://127.0.0.1:$gateway_port/readyz" >/dev/null
+}
+
+shadow_log_is_valid() {
+    local log_file="$1"
+    python3 - "$log_file" <<'PY'
+import json
+import pathlib
+import sys
+
+text = pathlib.Path(sys.argv[1]).read_text(errors="replace")
+if "oci-secret@example.com" in text:
+    raise SystemExit("sensitive request content appeared in container logs")
+
+events = []
+for line in text.splitlines():
+    try:
+        node = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    pairs = node.get("kvpList", [])
+    values = {key: str(value) for pair in pairs for key, value in pair.items()}
+    if values.get("event.name") == "policy.shadow_decision":
+        events.append(values)
+
+if len(events) != 1:
+    raise SystemExit("expected one policy.shadow_decision JSONL event")
+expected = {
+    "protocol": "openai.chat_completions",
+    "phase": "REQUEST",
+    "decision": "DETECTED",
+    "disposition": "ALLOW",
+    "coverage": "FULLY_INSPECTABLE",
+    "detector.id": "fast-pii",
+    "detector.version": "fast-pii@1",
+    "findings.by_type": "EMAIL_ADDRESS:1",
+}
+mismatches = {
+    key: (expected_value, events[0].get(key))
+    for key, expected_value in expected.items()
+    if events[0].get(key) != expected_value
+}
+if mismatches:
+    raise SystemExit(f"unexpected shadow audit fields: {mismatches}")
+PY
+}
+
+assert_shadow_exchange() {
+    local container_id="$1"
+    local gateway_port="$2"
+    local log_file="$3"
+    local response_file="$4"
+
+    curl --fail --silent --show-error \
+        --request POST \
+        --header 'content-type: application/json' \
+        --data-binary "@$TMP_DIR/request.json" \
+        --output "$response_file" \
+        "http://127.0.0.1:$gateway_port/v1/chat/completions?oci=kept"
+    if ! cmp --silent "$TMP_DIR/request.json" "$TMP_DIR/upstream.body"; then
+        echo "OCI gateway did not replay the exact request body" >&2
+        exit 1
+    fi
+    if [[ "$(<"$response_file")" != '{"ok":true}' ]]; then
+        echo "unexpected proxied response: $(<"$response_file")" >&2
+        exit 1
+    fi
+
+    for _ in {1..40}; do
+        docker logs "$container_id" >"$log_file" 2>&1
+        if shadow_log_is_valid "$log_file" 2>/dev/null; then
+            break
+        fi
+        sleep 0.25
+    done
+
+    shadow_log_is_valid "$log_file"
+}
 
 cd "$PROJECT_DIR"
 ./gradlew --no-daemon ociArtifact
@@ -46,24 +137,48 @@ if [[ -z "$ARTIFACT" ]]; then
     exit 1
 fi
 
-mkdir -p "$TMP_DIR/upstream"
-printf 'proxied-by-vigilant\n' > "$TMP_DIR/upstream/proxy-smoke"
-printf 'policies = []\n' > "$TMP_DIR/politics.conf"
+cp politics.conf.example "$TMP_DIR/politics.conf"
 chmod 0444 "$TMP_DIR/politics.conf"
+printf '%s' \
+    '{ "model":"gpt-test", "messages":[{"role":"user","content":"contact oci-secret@example.com"}], "unknown":{"keep":true} }' \
+    >"$TMP_DIR/request.json"
 POLICY_CONFIG_ARGS=(
     --env VIGILANT_POLITICS_CONFIG=/etc/vigilant/politics.conf
     --mount "type=bind,src=$TMP_DIR/politics.conf,dst=/etc/vigilant/politics.conf,readonly"
 )
 python3 -u -c '
-import functools
 import http.server
+import pathlib
 import sys
 
-handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=sys.argv[1])
-with http.server.ThreadingHTTPServer(("0.0.0.0", 0), handler) as server:
+body_path = pathlib.Path(sys.argv[1])
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path != "/health":
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"ok")
+
+    def do_POST(self):
+        if self.path != "/v1/chat/completions?oci=kept":
+            self.send_error(404)
+            return
+        body = self.rfile.read(int(self.headers.get("content-length", "0")))
+        body_path.write_bytes(body)
+        response = b"{\"ok\":true}"
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(response)))
+        self.end_headers()
+        self.wfile.write(response)
+
+with http.server.ThreadingHTTPServer(("0.0.0.0", 0), Handler) as server:
     print(server.server_port, flush=True)
     server.serve_forever()
-' "$TMP_DIR/upstream" >"$TMP_DIR/upstream.port" 2>"$TMP_DIR/upstream.log" &
+' "$TMP_DIR/upstream.body" >"$TMP_DIR/upstream.port" 2>"$TMP_DIR/upstream.log" &
 UPSTREAM_PID="$!"
 
 for _ in {1..40}; do
@@ -74,12 +189,12 @@ for _ in {1..40}; do
 done
 UPSTREAM_PORT="$(head -n 1 "$TMP_DIR/upstream.port")"
 for _ in {1..40}; do
-    if curl --fail --silent "http://127.0.0.1:$UPSTREAM_PORT/proxy-smoke" >/dev/null; then
+    if curl --fail --silent "http://127.0.0.1:$UPSTREAM_PORT/health" >/dev/null; then
         break
     fi
     sleep 0.25
 done
-curl --fail --silent "http://127.0.0.1:$UPSTREAM_PORT/proxy-smoke" >/dev/null
+curl --fail --silent "http://127.0.0.1:$UPSTREAM_PORT/health" >/dev/null
 
 docker build --tag "$IMAGE_TAG" .
 
@@ -100,19 +215,17 @@ CONTAINER_ID="$(
 )"
 GATEWAY_PORT="$(docker port "$CONTAINER_ID" 8080/tcp | sed -E 's/.*:([0-9]+)$/\1/' | head -n 1)"
 
-for _ in {1..120}; do
-    if curl --fail --silent "http://127.0.0.1:$GATEWAY_PORT/healthz" >/dev/null; then
-        break
-    fi
-    sleep 0.25
-done
-curl --fail --silent "http://127.0.0.1:$GATEWAY_PORT/healthz" >/dev/null
-
-PROXIED_BODY="$(curl --fail --silent "http://127.0.0.1:$GATEWAY_PORT/proxy-smoke")"
-if [[ "$PROXIED_BODY" != "proxied-by-vigilant" ]]; then
-    echo "unexpected proxied response: $PROXIED_BODY" >&2
+await_gateway "$GATEWAY_PORT"
+POLICY_MOUNT_RW="$(
+    docker inspect --format \
+        '{{range .Mounts}}{{if eq .Destination "/etc/vigilant/politics.conf"}}{{.RW}}{{end}}{{end}}' \
+        "$CONTAINER_ID"
+)"
+if [[ "$POLICY_MOUNT_RW" != "false" ]]; then
+    echo "policy configuration mount must be read-only" >&2
     exit 1
 fi
+assert_shadow_exchange "$CONTAINER_ID" "$GATEWAY_PORT" "$TMP_DIR/env-container.log" "$TMP_DIR/env-response.json"
 
 docker stop --timeout 35 "$CONTAINER_ID" >/dev/null
 STOP_EXIT_CODE="$(docker inspect --format '{{.State.ExitCode}}' "$CONTAINER_ID")"
@@ -128,7 +241,7 @@ printf '%s\n' \
     "  upstream-url = \"http://host.docker.internal:$UPSTREAM_PORT\"" \
     '  port = 8080' \
     '}' \
-    > "$TMP_DIR/vigilant.conf"
+    >"$TMP_DIR/vigilant.conf"
 chmod 0444 "$TMP_DIR/vigilant.conf"
 
 CONFIG_CONTAINER_ID="$(
@@ -152,17 +265,12 @@ fi
 CONFIG_GATEWAY_PORT="$(
     docker port "$CONFIG_CONTAINER_ID" 8080/tcp | sed -E 's/.*:([0-9]+)$/\1/' | head -n 1
 )"
-for _ in {1..120}; do
-    if curl --fail --silent "http://127.0.0.1:$CONFIG_GATEWAY_PORT/healthz" >/dev/null; then
-        break
-    fi
-    sleep 0.25
-done
-CONFIG_PROXIED_BODY="$(curl --fail --silent "http://127.0.0.1:$CONFIG_GATEWAY_PORT/proxy-smoke")"
-if [[ "$CONFIG_PROXIED_BODY" != "proxied-by-vigilant" ]]; then
-    echo "unexpected response with read-only configuration: $CONFIG_PROXIED_BODY" >&2
-    exit 1
-fi
+await_gateway "$CONFIG_GATEWAY_PORT"
+assert_shadow_exchange \
+    "$CONFIG_CONTAINER_ID" \
+    "$CONFIG_GATEWAY_PORT" \
+    "$TMP_DIR/file-container.log" \
+    "$TMP_DIR/file-response.json"
 docker stop --timeout 35 "$CONFIG_CONTAINER_ID" >/dev/null
 docker rm "$CONFIG_CONTAINER_ID" >/dev/null
 CONFIG_CONTAINER_ID=""
@@ -175,10 +283,36 @@ docker run --name "$INVALID_CONTAINER_NAME" \
 INVALID_CONFIG_EXIT="$?"
 set -e
 if [[ "$INVALID_CONFIG_EXIT" != "2" ]]; then
-    echo "invalid configuration exited with $INVALID_CONFIG_EXIT instead of 2" >&2
-    cat "$TMP_DIR/invalid-config.log" >&2
+    echo "invalid application configuration exited with $INVALID_CONFIG_EXIT instead of 2" >&2
+    sed -n '1,80p' "$TMP_DIR/invalid-config.log" >&2
+    exit 1
+fi
+if grep -q 'invalid.example' "$TMP_DIR/invalid-config.log"; then
+    echo "invalid application configuration leaked its raw value" >&2
     exit 1
 fi
 docker rm "$INVALID_CONTAINER_NAME" >/dev/null
 
-echo "OCI smoke passed: artifact, env, read-only config, proxy, non-root, invalid config, SIGTERM"
+sed 's/id = "default-request-pii"/id = "secret-policy-value"/; s/disposition = "ALLOW"/disposition = "BLOCK"/' \
+    politics.conf.example >"$TMP_DIR/invalid-politics.conf"
+chmod 0444 "$TMP_DIR/invalid-politics.conf"
+set +e
+docker run --name "$INVALID_POLICY_CONTAINER_NAME" \
+    --env "VIGILANT_UPSTREAM_URL=http://host.docker.internal:$UPSTREAM_PORT" \
+    --env VIGILANT_POLITICS_CONFIG=/etc/vigilant/politics.conf \
+    --mount "type=bind,src=$TMP_DIR/invalid-politics.conf,dst=/etc/vigilant/politics.conf,readonly" \
+    "$IMAGE_TAG" >"$TMP_DIR/invalid-policy.log" 2>&1
+INVALID_POLICY_EXIT="$?"
+set -e
+if [[ "$INVALID_POLICY_EXIT" != "2" ]]; then
+    echo "invalid policy configuration exited with $INVALID_POLICY_EXIT instead of 2" >&2
+    sed -n '1,80p' "$TMP_DIR/invalid-policy.log" >&2
+    exit 1
+fi
+if grep -q 'secret-policy-value' "$TMP_DIR/invalid-policy.log"; then
+    echo "invalid policy configuration leaked its sensitive policy ID" >&2
+    exit 1
+fi
+docker rm "$INVALID_POLICY_CONTAINER_NAME" >/dev/null
+
+echo "OCI smoke passed: artifact, env/file config, read-only policy, health/readiness, exact shadow forwarding, JSONL audit, non-root, invalid config, SIGTERM"
