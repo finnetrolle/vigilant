@@ -79,6 +79,19 @@ Upstream failure создаёт один structured WARN event
 `event.name=upstream_request_failed` с bounded category и safe cause class.
 Request/response data и exception details клиенту не раскрываются.
 
+## Policy engine events
+
+Policy engine пишет дополнительные safe structured events:
+
+- `event.name=detector.failed` на каждый actual detector outcome `ERROR` с
+  detector ID, bounded error code/message и списком затронутых policy IDs;
+- `event.name=policy.deadline_exceeded` для policy, чей detector-set deadline
+  исчерпан, с policy ID/version, deadline и unfinished detector IDs.
+
+Эти события не содержат payload, matched text, offsets или protocol locators.
+Итог того же request остаётся в единственном aggregate
+`policy.shadow_decision` с decision `ERROR` и disposition `ALLOW`.
+
 ## Request completion event
 
 Каждый proxy exchange создаёт structured INFO event

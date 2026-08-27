@@ -16,8 +16,16 @@
 ./gradlew build
 ./gradlew test
 ./gradlew test --tests "io.vigilant.gateway.proxy.BypassProxyServiceTest"
+./gradlew run
 ./gradlew installDist
+./gradlew ociArtifact
 ~~~
+
+`run` компилирует и запускает `io.vigilant.gateway.MainKt` прямо из Gradle;
+ему нужны те же environment variables и `politics.conf`, что packaged
+application. `installDist` создаёт локальный runnable distribution в
+`build/install/vigilant/`. `ociArtifact` создаёт reproducible versioned tar в
+`build/distributions/`, который использует Dockerfile.
 
 `./gradlew build` включает:
 
@@ -42,6 +50,44 @@ Proxy behavior tests используют реальные Armeria servers на 
 ~~~
 
 `verifyAll` объединяет `build` и OWASP dependency check.
+
+## PII quality
+
+Canonical synthetic corpus является gating частью обычного `test`. Отдельный
+human-readable и machine-readable отчёт создаётся командой:
+
+~~~bash
+./gradlew piiQualityReport
+~~~
+
+Результаты находятся в `build/reports/pii/canonical/`. Исходные synthetic
+fixtures лежат в
+`src/test/resources/io/vigilant/detectors/pii/quality/canonical/` и могут быть
+детерминированно пересозданы командой:
+
+~~~bash
+./scripts/generate-canonical-pii-corpora
+~~~
+
+Изменять corpus следует только вместе с соответствующим recognizer contract и
+focused tests.
+
+Внешний non-gating benchmark RedMadRobot запускается явно:
+
+~~~bash
+./gradlew redMadRobotPiiBenchmark
+~~~
+
+Task скачивает и проверяет pinned dataset, затем пишет отчёты в
+`build/reports/pii/redmadrobot/`. Для offline run путь к заранее полученному
+dataset передаётся через Gradle property `redMadRobotPiiDataset`:
+
+~~~bash
+./gradlew redMadRobotPiiBenchmark \
+  -PredMadRobotPiiDataset=/absolute/path/to/test.csv
+~~~
+
+Dataset не входит в repository и не попадает в production runtime classpath.
 
 ## OWASP dependency check
 
@@ -130,6 +176,20 @@ production run опубликован в
 Команда устанавливает versioned pre-push hook из `config/git/hooks/`. Hook
 запускает `./gradlew build` перед push.
 
+## Локальные pipeline scripts
+
+~~~bash
+./scripts/pipeline-verify
+./scripts/pipeline-sonar
+~~~
+
+`pipeline-verify` последовательно выполняет `build` и `verifyAll`; второй шаг
+повторно использует результаты Gradle и добавляет OWASP scan. `pipeline-sonar`
+поднимает локальный SonarQube в Docker, запускает tests, JaCoCo и Sonar analysis,
+а затем фильтрует blocking findings по текущему verification scope. Для него
+нужны Docker, `curl`, `jq`, Git и локальный `.claude/sonar.env`; подробные
+требования и exit codes приведены в комментариях самого script.
+
 ## CI
 
 [GitHub Actions workflow](../.github/workflows/ci.yml) запускается для каждого
@@ -138,5 +198,5 @@ pull request и push в `main`:
 - обязательный `build` job;
 - OWASP dependency-check job при наличии repository secret `NVD_API_KEY`.
 
-Mutation testing, OCI smoke, JMH baseline, PERF-01 и inspection load test в
-текущий CI не входят.
+Mutation testing, PII report/внешний benchmark, OCI smoke, JMH baseline,
+PERF-01, inspection phase/load и SonarQube pipeline в текущий CI не входят.

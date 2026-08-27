@@ -12,14 +12,19 @@ Vigilant is a guardrails system for AI agent platforms. The product specs live i
 - `spec/epics/*` - large outcomes decomposed into linked issues
 - `spec/issues/**` - standalone and epic-scoped issues I can ask you to implement
 
-The project has moved beyond bypass-only v0 and is now developing its first
-guardrail: the deterministic PII detector from EPIC-02. The completed v0 proxy
-remains the runtime foundation, and the current HTTP request path still forwards
-bodies without inspection. Implementation-ready issues may add isolated
-guardrail-domain components within their documented boundaries. Do not connect
-detectors or policies to the gateway, aggregate or parse HTTP bodies, add plugin
-workers, or otherwise change runtime proxy behavior unless a dedicated
-implementation-ready issue explicitly requires it.
+The project has moved beyond bypass-only v0 and completed its first production
+guardrail increment: bounded request-side PII inspection for OpenAI Chat
+Completions in shadow mode. The v0 proxy remains the transport foundation, but
+the production request path now retains a bounded complete request source,
+derives a lossless normalized inspection view, evaluates the immutable startup
+policy snapshot with `fast-pii`, emits a safe aggregate decision, and replays
+the original body upstream byte-for-byte. Response bodies remain streaming.
+
+The current startup contract enforces shadow-only `ALLOW` reactions without
+transformations. Do not add enforcement (`BLOCK`, `MASK`, `REMOVE`), response
+inspection, new protocol routes, trusted identity, disk spill, plugin workers,
+or other runtime behavior unless a dedicated implementation-ready issue
+explicitly requires it.
 
 ## Commands
 
@@ -27,7 +32,9 @@ implementation-ready issue explicitly requires it.
 ./gradlew build                 # compile + tests
 ./gradlew test                  # tests only
 ./gradlew test --tests "io.vigilant.gateway.proxy.BypassProxyServiceTest"  # single test class
+./gradlew run                   # run MainKt directly; same config requirements as the distribution
 ./gradlew installDist           # build distributable into build/install/vigilant/
+./gradlew ociArtifact           # reproducible versioned tar consumed by the Dockerfile
 
 # Run env-only (VIGILANT_UPSTREAM_URL is required; VIGILANT_PORT optional, default 8080)
 VIGILANT_UPSTREAM_URL=http://127.0.0.1:18081 VIGILANT_PORT=18080 ./build/install/vigilant/bin/vigilant
@@ -40,6 +47,7 @@ VIGILANT_CONFIG=./vigilant.conf.example ./build/install/vigilant/bin/vigilant
 ./gradlew pitest                 # mutation testing against io.vigilant.* classes; on-demand only (analyze-pitest skill), not part of regular checks
 ./gradlew dependencyCheckAnalyze # OWASP CVE scan of the dependency tree
 ./gradlew validateWorkItems       # work-item graph consistency; also wired into check
+./gradlew piiQualityReport        # canonical synthetic PII quality JSON/Markdown report
 ./gradlew verifyAll              # full local verification: build + dependency check
 ./gradlew installGitHooks        # one-time after clone: installs pre-push hook from config/git/hooks/
 ```
@@ -98,11 +106,22 @@ When the problem is solved, preserve the reusable approach in the resolution:
 
 Stack: Kotlin 2.4.10, JVM toolchain 25, Armeria (HTTP server + client), Metro DI (compile-time, via Kotlin compiler plugin), Gradle Kotlin DSL. No Spring.
 
-Request path: `Client -> Armeria Server -> BypassProxyService -> WebClient -> Upstream`.
+Request path:
+
+`Client -> TrafficAdmissionService -> MetricsService -> TracingService -> PiiShadowProxyService -> BypassProxyService -> WebClient -> Upstream`.
+
+The maintained architectural overview is `docs/architecture.md`; use it with
+`docs/runtime-contract.md`, `docs/configuration.md`, and
+`docs/observability.md` when changing runtime behavior.
 
 Key gateway and policy files under `src/main/kotlin/io/vigilant/`:
 
-- `proxy/BypassProxyService.kt` - catch-all `HttpService`. Rewrites headers via `rewriteRequestHeaders` (sets upstream scheme/authority/path, strips hop-by-hop headers including those named in `Connection`) and `rewriteResponseHeaders` (strips hop-by-hop). The body is never aggregated - `HttpRequest`/`HttpResponse` stay streaming publishers end to end, which is what keeps streaming responses and backpressure working (spec PROXY-01).
+- `proxy/PiiShadowProxyService.kt` - production inspection boundary. Validates the supported Chat Completions descriptor before body demand, ingests the body into a quota-controlled source, parses a separate normalized view, assembles anonymous URL/model context, evaluates each independent text fragment, logs one safe aggregate shadow decision, and transfers source ownership to exact replay.
+- `source/BoundedRequestSource.kt` - process-wide owner/byte/segment quota plus one-request lifecycle. It receives the request with backpressure, exposes one sequential parser view and one demand-driven exact replay lease, and releases every reservation on completion or cancellation.
+- `protocol/openai/ChatCompletionsRequestParser.kt` - schema-tolerant parser for model-visible Chat Completions content. It preserves unknown fields by never rebuilding the original body, records recognized non-text inspection gaps, and fails closed for malformed or ambiguous content-bearing shapes.
+- `policy/engine/PolicyEngine.kt` / `policy/selection/PolicySelector.kt` / `policy/execution/DetectorExecutionCoordinator.kt` - deterministic policy matching, simultaneous overrides, deduplicated detector execution, per-policy deadlines, fail-fast blocking semantics in the domain layer, and complete decision explanations. Runtime startup currently restricts all configured reactions to shadow-only `ALLOW`.
+- `detectors/pii/fast/FastPiiDetector.kt` / `windowing/WindowedFastPiiExecutor.kt` - built-in deterministic detector and UTF-8-safe window execution for large logical fragments. CPU work runs on the bounded pool owned by `InspectionResources`.
+- `proxy/BypassProxyService.kt` - transport stage after inspection. Rewrites request headers (upstream scheme/authority/path and hop-by-hop stripping), strips hop-by-hop response headers, preserves exact request replay and streaming responses, and maps upstream failures to stable proxy errors.
 - `config/AppConfig.kt` - config loading via Hoplite: optional HOCON file (`VIGILANT_CONFIG`, else `./vigilant.conf`, else `/etc/vigilant/vigilant.conf`) with `VIGILANT_*` env overrides on top (env > file > defaults), then post-decode validation (`loadAppConfig`, `validatedUpstreamUri`, `validatedPort`). Unit-tested directly without a running server.
 - `policy/config/PolicyConfiguration.kt` - resolves mandatory `politics.conf` (`VIGILANT_POLITICS_CONFIG`, else `./politics.conf`), reads it once, and composes the strict parser with semantic validation into an immutable startup snapshot.
 - `policy/provider/PolicyProvider.kt` - suspend provider contract and `DummyPolicyProvider`, which retains one complete immutable startup snapshot without I/O, filtering, or hot reload.
@@ -150,15 +169,15 @@ For guardrail-enabled work after bypass-only v0, the OpenAI-compatible protocol 
 - Do not silently coerce non-conformant request shapes. Use an explicit, versioned compatibility adapter when Vigilant intentionally accepts a format that the selected upstream does not accept directly.
 - Forward only end-to-end headers. Vigilant remains responsible for upstream authentication and for rewriting `Host`, `Content-Length`, and hop-by-hop headers.
 
-This principle applies when an implementation-ready issue introduces body
-inspection. Until then, the runtime request path must continue forwarding bodies
-as uninterpreted byte streams without aggregation or JSON parsing.
+This principle is implemented by the current request-side shadow inspection
+path. Keep the normalized inspection view separate from the quota-controlled
+original source, and always replay the original bytes for an allowed request.
 
 ## Constraints to preserve when editing
 
 - Follow YAGNI and SOLID principles: implement only currently required functionality and keep designs focused, cohesive, extensible, and dependent on appropriate abstractions.
 - Always document added or modified Kotlin/Java methods with the language-standard doc format: KDoc (`/** */`) for Kotlin, Javadoc for Java. Follow the existing style in this codebase (see `BypassProxyService.kt`, `AppConfig.kt`).
-- Do not aggregate request/response bodies or parse JSON in the data path (spec: bodies pass as a byte stream).
+- Do not aggregate response bodies. Request-side inspection may retain only the bounded complete source owned by `RequestSourceQuota`; parse a separate view and replay the original bytes without DTO reserialization.
 - Hop-by-hop header handling must follow the HTTP proxy rules, including headers listed in `Connection`.
 - Keep Netty event loops free of blocking calls; blocking work belongs on virtual threads or bounded executors (spec CONC-01..03).
 - Upstream errors must surface as stable proxy errors, not raw connection exceptions (spec PROXY-03).

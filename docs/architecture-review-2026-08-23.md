@@ -1,5 +1,12 @@
 # Архитектурное ревью Vigilant v0 от 2026-08-23
 
+> Исторический документ. Он фиксирует состояние bypass-only v0 на дату ревью,
+> а не текущую архитектуру. Находки AR-01..09 были закрыты в EPIC-09; актуальный
+> production path уже выполняет bounded request-side PII shadow inspection.
+> Текущее устройство описано в [architecture.md](architecture.md), а
+> подтверждённый PERF-01 run после исправлений - в
+> [perf-01-result.md](perf-01-result.md).
+
 ## Вердикт
 
 Архитектурное ядро bypass proxy построено здраво: data path остаётся потоковым,

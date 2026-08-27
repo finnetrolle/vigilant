@@ -73,8 +73,14 @@ Client
 ~~~
 
 Response body не агрегируется и передаётся клиенту потоково. Подробный
-поддерживаемый контракт, ошибки и модель таймаутов описаны в
+разбор startup, policy engine, threading и resource ownership приведён в
+[описании архитектуры](docs/architecture.md). Поддерживаемый HTTP-контракт,
+ошибки и модель таймаутов описаны в
 [runtime contract](docs/runtime-contract.md).
+
+`fast-pii` распознаёт email, российские телефоны, платёжные карты, IPv4/IPv6,
+IBAN, ИНН, СНИЛС, внутренние паспорта РФ и полисы ОМС. Findings содержат только
+безопасные метаданные и UTF-8 offsets, но не matched text.
 
 ## Конфигурация
 
@@ -142,6 +148,7 @@ Smoke-тест требует `cmp`, `curl`, Docker и Python 3. Он запус
 ./gradlew test                   # тесты
 ./gradlew dependencyCheckAnalyze # OWASP CVE scan runtimeClasspath
 ./gradlew verifyAll              # build + OWASP dependency check
+./gradlew piiQualityReport       # synthetic PII quality gate + reports
 ./gradlew pitest                 # mutation testing, запускается отдельно
 ./gradlew installGitHooks        # установить versioned pre-push hook
 ~~~
@@ -161,7 +168,8 @@ CI на каждый push в `main` и pull request запускает `build`. 
 ./gradlew inspectionLoadTest       # packaged 2,000 RPS inspection profile
 ~~~
 
-Обе проверки запускаются явно и не входят в `build`, `verifyAll` или CI.
+Все performance-проверки запускаются явно и не входят в `build`, `verifyAll`
+или CI.
 Описание JMH matrix находится в
 [VIG-02-15](spec/issues/epic_02/issue_02_15_jmh_baseline.md), а нагрузочного
 теста - в [методике PERF-01](docs/perf-01-load-test.md). Зафиксированные
@@ -178,6 +186,7 @@ CI на каждый push в `main` и pull request запускает `build`. 
 - [Функции Stage 1](spec/STAGE_1_FUNCTIONS.md)
 - [Функции вне границ продукта](spec/OUT_OF_SCOPE_FUNCTIONS.md)
 - [Configuration reference](docs/configuration.md)
+- [Architecture](docs/architecture.md)
 - [Runtime contract](docs/runtime-contract.md)
 - [Observability reference](docs/observability.md)
 - [Deployment guide](docs/deployment.md)

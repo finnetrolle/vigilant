@@ -41,13 +41,27 @@ content-bearing structure обрабатываются fail-closed и не до�
 
 | Ситуация | HTTP status | JSON body |
 |---|---:|---|
+| Некорректный configured session ID | `400` | `{"error":"invalid_session_id"}` |
 | Неподдерживаемые method, path, content type или schema | `400` | `{"error":"unsupported_schema"}` |
 | Malformed supported message | `400` | `{"error":"malformed_message"}` |
 | Ambiguous content | `400` | `{"error":"ambiguous_content"}` |
 | External или unresolved context | `400` | `{"error":"unresolved_context"}` |
+| Некорректный request source, включая несовпадение `Content-Length` | `400` | `{"error":"invalid_request_source"}` |
 | Per-request byte limit | `413` | `{"error":"request_too_large"}` |
 | Owner/global retained capacity | `503` | `{"error":"inspection_capacity_exhausted"}` |
 | Непредвиденный inspection failure | `500` | `{"error":"inspection_failed"}` |
+
+Descriptor validation выполняется до body demand. Некорректный session ID
+отклоняется ещё раньше, в tracing decorator. Для поддержанного descriptor
+создаётся ровно один `policy.shadow_decision`, включая fail-closed parser,
+source и inspection outcomes. Для неподдержанного descriptor и invalid session
+ID shadow audit не создаётся.
+
+Policy deadline или typed detector error отражается как decision `ERROR` с
+disposition `ALLOW`: current shadow policy не блокирует request, поэтому при
+успешной orchestration исходный body всё равно отправляется upstream.
+`500 inspection_failed` предназначен для непредвиденного сбоя самой
+orchestration или context assembly.
 
 Client cancellation отменяет ingest, inspection task и replay, освобождая
 retained capacity. Отменённому соединению delivery HTTP error не
