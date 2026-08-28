@@ -1,5 +1,6 @@
 package io.vigilant.detectors.pii.benchmark.redmadrobot
 
+import io.vigilant.detectors.pii.EvidenceStrength
 import io.vigilant.detectors.pii.PiiType
 import io.vigilant.detectors.pii.quality.PiiQualityMatchMode
 import io.vigilant.detectors.pii.quality.PiiQualityMetric
@@ -8,7 +9,6 @@ import io.vigilant.detectors.pii.quality.PiiQualityScoreReport
 import io.vigilant.detectors.pii.quality.PiiQualityScorer
 import io.vigilant.detectors.pii.quality.PiiQualityScoringCase
 import io.vigilant.detectors.pii.quality.PiiQualitySpan
-import io.vigilant.detectors.pii.quality.PiiQualityTypeScore
 import io.vigilant.detectors.pii.quality.QualityScoreCounts
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
@@ -18,6 +18,7 @@ data class RedMadRobotPredictedSpan(
     val type: PiiType,
     val startUtf8: Long,
     val endUtf8: Long,
+    val evidenceStrength: EvidenceStrength = EvidenceStrength.FORMAT_ONLY,
 )
 
 /** Expected and predicted spans that share one external case coordinate space. */
@@ -25,6 +26,9 @@ data class RedMadRobotScoringCase(
     val expected: List<RedMadRobotGoldSpan>,
     val predicted: List<RedMadRobotPredictedSpan>,
     val caseId: String,
+    val productAlignedExpected: List<RedMadRobotGoldSpan> = expected,
+    val productAlignmentAdjustments: Map<RedMadRobotProductAdjustment, Int> =
+        RedMadRobotProductAdjustment.entries.associateWith { 0 },
 )
 
 /** Supported external span matching modes. */
@@ -48,26 +52,36 @@ typealias RedMadRobotMetric = PiiQualityMetric
 /** External scorer compatibility name for an exact/relaxed metric pair. */
 typealias RedMadRobotMetricPair = PiiQualityMetricPair
 
-/** External scorer compatibility name for one per-type score. */
-typealias RedMadRobotTypeScore = PiiQualityTypeScore
-
-/** Full and frozen-partition views of one external benchmark run. */
-data class RedMadRobotScoreReport(
+/** Full and frozen-partition scores plus safe diagnostics for one alignment view. */
+data class RedMadRobotAlignmentScoreView(
     val full: PiiQualityScoreReport,
     val tuning: PiiQualityScoreReport,
     val evaluation: PiiQualityScoreReport,
     val fullDiagnostics: RedMadRobotMismatchDiagnostics,
     val tuningDiagnostics: RedMadRobotMismatchDiagnostics,
     val evaluationDiagnostics: RedMadRobotMismatchDiagnostics,
-) {
-    /** Preserves the existing aggregate source-aligned metric access. */
-    val aggregate: RedMadRobotMetricPair
-        get() = full.aggregate
+    val fullEvidenceContributions: List<RedMadRobotEvidenceContribution>,
+    val tuningEvidenceContributions: List<RedMadRobotEvidenceContribution>,
+    val evaluationEvidenceContributions: List<RedMadRobotEvidenceContribution>,
+)
 
-    /** Preserves the existing per-type source-aligned metric access. */
-    val perType: List<RedMadRobotTypeScore>
-        get() = full.perType
-}
+/** Payload-free prediction and match counts for one PII type and evidence path. */
+data class RedMadRobotEvidenceContribution(
+    val type: PiiType,
+    val evidenceStrength: EvidenceStrength,
+    val predictions: Int,
+    val exactMatches: Int,
+    val exactFalsePositives: Int,
+    val relaxedMatches: Int,
+    val relaxedFalsePositives: Int,
+)
+
+/** Independent source and product views of one external benchmark run. */
+data class RedMadRobotScoreReport(
+    val sourceAligned: RedMadRobotAlignmentScoreView,
+    val productAligned: RedMadRobotAlignmentScoreView,
+    val productAlignmentAdjustments: Map<RedMadRobotProductAdjustment, Int>,
+)
 
 /** Safe aggregate reasons for unmatched source-aligned spans. */
 enum class RedMadRobotMismatchBucket {
@@ -140,17 +154,95 @@ class RedMadRobotScorer {
 
     /** Scores cases without allowing matches across external case boundaries. */
     fun score(cases: List<RedMadRobotScoringCase>): RedMadRobotScoreReport {
-        val byPartition = cases.groupBy { scoringCase -> RedMadRobotFrozenSplit.partition(scoringCase.caseId) }
+        val sourceAligned = scoreView(cases)
+        val productCases =
+            cases.map { scoringCase ->
+                scoringCase.copy(expected = scoringCase.productAlignedExpected)
+            }
         return RedMadRobotScoreReport(
-            full = scoreCases(cases),
-            tuning = scoreCases(byPartition[RedMadRobotPartition.TUNING].orEmpty()),
-            evaluation = scoreCases(byPartition[RedMadRobotPartition.EVALUATION].orEmpty()),
-            fullDiagnostics = mismatchDiagnostics(cases),
-            tuningDiagnostics = mismatchDiagnostics(byPartition[RedMadRobotPartition.TUNING].orEmpty()),
-            evaluationDiagnostics =
-                mismatchDiagnostics(byPartition[RedMadRobotPartition.EVALUATION].orEmpty()),
+            sourceAligned = sourceAligned,
+            productAligned = scoreView(productCases),
+            productAlignmentAdjustments = aggregateProductAdjustments(cases),
         )
     }
+
+    /** Scores one already aligned case list into full and frozen partition views. */
+    private fun scoreView(cases: List<RedMadRobotScoringCase>): RedMadRobotAlignmentScoreView {
+        val byPartition = cases.groupBy { scoringCase -> RedMadRobotFrozenSplit.partition(scoringCase.caseId) }
+        val tuningCases = byPartition[RedMadRobotPartition.TUNING].orEmpty()
+        val evaluationCases = byPartition[RedMadRobotPartition.EVALUATION].orEmpty()
+        return RedMadRobotAlignmentScoreView(
+            full = scoreCases(cases),
+            tuning = scoreCases(tuningCases),
+            evaluation = scoreCases(evaluationCases),
+            fullDiagnostics = mismatchDiagnostics(cases),
+            tuningDiagnostics = mismatchDiagnostics(tuningCases),
+            evaluationDiagnostics = mismatchDiagnostics(evaluationCases),
+            fullEvidenceContributions = evidenceContributions(cases),
+            tuningEvidenceContributions = evidenceContributions(tuningCases),
+            evaluationEvidenceContributions = evidenceContributions(evaluationCases),
+        )
+    }
+
+    /** Aggregates prediction outcomes by type and evidence without retaining case or span data. */
+    private fun evidenceContributions(
+        cases: List<RedMadRobotScoringCase>,
+    ): List<RedMadRobotEvidenceContribution> =
+        cases
+            .flatMap(::evidenceEvents)
+            .groupBy { event -> event.type to event.evidenceStrength }
+            .map { (key, events) ->
+                RedMadRobotEvidenceContribution(
+                    type = key.first,
+                    evidenceStrength = key.second,
+                    predictions = events.size,
+                    exactMatches = events.count(EvidenceEvent::exactMatch),
+                    exactFalsePositives = events.count { event -> !event.exactMatch },
+                    relaxedMatches = events.count(EvidenceEvent::relaxedMatch),
+                    relaxedFalsePositives = events.count { event -> !event.relaxedMatch },
+                )
+            }.sortedWith(
+                compareBy(
+                    RedMadRobotEvidenceContribution::type,
+                    RedMadRobotEvidenceContribution::evidenceStrength,
+                ),
+            )
+
+    /** Classifies every prediction in one case under both deterministic matching modes. */
+    private fun evidenceEvents(scoringCase: RedMadRobotScoringCase): List<EvidenceEvent> {
+        val exactMatchedPredictions =
+            match(scoringCase.expected, scoringCase.predicted, RedMadRobotMatchMode.EXACT)
+                .mapTo(mutableSetOf(), RedMadRobotMatch::predictedIndex)
+        val relaxedMatchedPredictions =
+            match(scoringCase.expected, scoringCase.predicted, RedMadRobotMatchMode.RELAXED)
+                .mapTo(mutableSetOf(), RedMadRobotMatch::predictedIndex)
+        return scoringCase.predicted.mapIndexed { index, prediction ->
+            EvidenceEvent(
+                type = prediction.type,
+                evidenceStrength = prediction.evidenceStrength,
+                exactMatch = index in exactMatchedPredictions,
+                relaxedMatch = index in relaxedMatchedPredictions,
+            )
+        }
+    }
+
+    /** Temporary aggregate event that contains no source coordinates or case identity. */
+    private data class EvidenceEvent(
+        val type: PiiType,
+        val evidenceStrength: EvidenceStrength,
+        val exactMatch: Boolean,
+        val relaxedMatch: Boolean,
+    )
+
+    /** Sums every versioned product adjustment before scoring while retaining zero-count rules. */
+    private fun aggregateProductAdjustments(
+        cases: List<RedMadRobotScoringCase>,
+    ): Map<RedMadRobotProductAdjustment, Int> =
+        RedMadRobotProductAdjustment.entries.associateWith { adjustment ->
+            cases.sumOf { scoringCase ->
+                scoringCase.productAlignmentAdjustments.getOrDefault(adjustment, 0)
+            }
+        }
 
     /** Classifies both source-aligned matching modes with the same stable buckets. */
     private fun mismatchDiagnostics(cases: List<RedMadRobotScoringCase>): RedMadRobotMismatchDiagnostics =

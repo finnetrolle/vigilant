@@ -27,12 +27,15 @@ object RedMadRobotBenchmarkMain {
                                 finding.type,
                                 finding.startUtf8,
                                 finding.endUtf8,
+                                finding.evidenceStrength,
                             )
                         }
                 RedMadRobotScoringCase(
                     expected = benchmarkCase.goldSpans,
                     predicted = predicted,
                     caseId = benchmarkCase.caseId,
+                    productAlignedExpected = benchmarkCase.productAlignedGoldSpans,
+                    productAlignmentAdjustments = benchmarkCase.productAlignmentAdjustments,
                 )
             }
         val scores = RedMadRobotScorer().score(scoringCases)

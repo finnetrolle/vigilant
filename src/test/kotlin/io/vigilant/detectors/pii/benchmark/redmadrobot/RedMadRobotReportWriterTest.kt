@@ -12,6 +12,80 @@ import kotlin.test.assertTrue
 
 /** Artifact contract tests for the external benchmark report writer. */
 class RedMadRobotReportWriterTest {
+    /** Publishes independent source and product views with versioned pre-scoring adjustment counts. */
+    @Test
+    fun `writer separates product aligned metrics and adjustment provenance`(@TempDir output: Path) {
+        val sensitiveText = "1234567890 PRIVATE_PRODUCT_VALUE"
+        val reports = writeProductAlignedReport(output, sensitiveText)
+
+        val jsonText = Files.readString(reports.json)
+        val markdown = Files.readString(reports.markdown)
+        val json = ObjectMapper().readTree(jsonText)
+        assertEquals(
+            1,
+            json.at("/sourceAligned/metrics/aggregate/exact/falseNegatives").intValue(),
+        )
+        assertEquals(
+            0,
+            json.at("/productAligned/metrics/aggregate/exact/falseNegatives").intValue(),
+        )
+        assertEquals(1, json.at("/productAligned/adjustments/version").intValue())
+        assertEquals(
+            "LEGAL_ENTITY_INN_TAXONOMY_MISMATCH",
+            json.at("/productAligned/adjustments/rules/0/id").textValue(),
+        )
+        assertEquals(1, json.at("/productAligned/adjustments/rules/0/count").intValue())
+        assertEquals(0, json.at("/productAligned/adjustments/rules/1/count").intValue())
+        assertTrue(markdown.contains("## Source-aligned metrics"))
+        assertTrue(markdown.contains("## Product-aligned view"))
+        assertTrue(markdown.contains("LEGAL_ENTITY_INN_TAXONOMY_MISMATCH"))
+        assertFalse((jsonText + markdown).contains(sensitiveText))
+        assertFalse((jsonText + markdown).contains("product-private-case"))
+        assertFalse(jsonText.contains("\"startUtf8\":"))
+        assertFalse(jsonText.contains("\"endUtf8\":"))
+    }
+
+    /** Writes one synthetic product-aligned fixture while retaining the source-aligned denominator. */
+    private fun writeProductAlignedReport(
+        output: Path,
+        sensitiveText: String,
+    ): RedMadRobotReportPaths {
+        val benchmarkCase =
+            RedMadRobotCase(
+                caseId = "product-private-case",
+                text = sensitiveText,
+                goldSpans = listOf(RedMadRobotGoldSpan(PiiType.RU_INN, 0, 10)),
+                productAlignedGoldSpans = emptyList(),
+                productAlignmentAdjustments =
+                    mapOf(
+                        RedMadRobotProductAdjustment.LEGAL_ENTITY_INN_TAXONOMY_MISMATCH to 1,
+                        RedMadRobotProductAdjustment.PASSPORT_SERIES_NUMBER_MERGE to 0,
+                    ),
+            )
+        val corpus =
+            RedMadRobotCorpus(
+                processedCases = listOf(benchmarkCase),
+                totalCases = 1,
+                totalEntitySpans = 1,
+                mappedEntitySpans = 1,
+                scoredMappedEntitySpans = 1,
+            )
+        val scores =
+            RedMadRobotScorer().score(
+                listOf(
+                    RedMadRobotScoringCase(
+                        expected = benchmarkCase.goldSpans,
+                        productAlignedExpected = benchmarkCase.productAlignedGoldSpans,
+                        productAlignmentAdjustments = benchmarkCase.productAlignmentAdjustments,
+                        predicted = emptyList(),
+                        caseId = benchmarkCase.caseId,
+                    ),
+                ),
+            )
+
+        return RedMadRobotReportWriter().write(output, corpus, scores)
+    }
+
     /** Verifies safe aggregate mismatch reports and privacy-filtered type details. */
     @Test
     fun `writer publishes reason coded diagnostics without scored case data`(@TempDir output: Path) {

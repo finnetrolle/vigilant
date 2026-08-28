@@ -96,6 +96,20 @@ val piiJmhReportDirectory = layout.buildDirectory.dir("reports/pii/jmh")
 val piiJmhResultFile = piiJmhReportDirectory.map { directory -> directory.file("baseline.json") }
 val piiJmhHumanOutputFile = piiJmhReportDirectory.map { directory -> directory.file("baseline.txt") }
 val piiJmhEnvironmentFile = piiJmhReportDirectory.map { directory -> directory.file("environment.properties") }
+val piiQualificationReportDirectory = layout.buildDirectory.dir("reports/pii/qualification")
+val piiQualificationJmhResultFile =
+    piiQualificationReportDirectory.map { directory -> directory.file("current-jmh.json") }
+val piiQualificationJmhEnvironmentFile =
+    piiQualificationReportDirectory.map { directory -> directory.file("current-environment.properties") }
+val piiQualificationBaselineDirectory = providers.gradleProperty("piiQualificationBaselineDirectory")
+val currentGitRevision =
+    providers.exec {
+        commandLine("git", "rev-parse", "HEAD")
+    }.standardOutput.asText.map(String::trim)
+val currentWorktreeDirty =
+    providers.exec {
+        commandLine("git", "status", "--porcelain=v1", "--untracked-files=all")
+    }.standardOutput.asText.map { status -> status.isNotBlank() }
 val inspectionPhaseReportDirectory = layout.buildDirectory.dir("reports/inspection/phase")
 val inspectionPhaseResultFile = inspectionPhaseReportDirectory.map { directory -> directory.file("results.json") }
 val inspectionPhaseSummaryFile = inspectionPhaseReportDirectory.map { directory -> directory.file("summary.md") }
@@ -299,6 +313,109 @@ tasks.register<JavaExec>("piiQualityReport") {
     args(
         layout.buildDirectory.dir("reports/pii/canonical").get().asFile.absolutePath,
     )
+}
+
+val runPiiQualificationJmh = tasks.register<JavaExec>("runPiiQualificationJmh") {
+    dependsOn(tasks.named("jmhJar"))
+    group = "verification"
+    description = "Runs the mandatory paired EPIC-10 no-match and full-scan JMH scenarios."
+    classpath(files(tasks.named("jmhJar")), jmhSourceSet.get().runtimeClasspath)
+    mainClass.set("org.openjdk.jmh.Main")
+    javaLauncher.set(piiJmhJavaLauncher)
+    outputs.file(piiQualificationJmhResultFile)
+    outputs.upToDateWhen { false }
+    doFirst {
+        piiQualificationReportDirectory.get().asFile.mkdirs()
+        piiQualificationJmhResultFile.get().asFile.delete()
+    }
+    args(
+        "^io.vigilant.detectors.pii.fast.FastPiiDetectorBenchmark.detect$",
+        "-bm", piiJmhMode,
+        "-tu", "us",
+        "-wi", piiJmhWarmupIterations.toString(),
+        "-w", piiJmhWarmupTime,
+        "-i", piiJmhMeasurementIterations.toString(),
+        "-r", piiJmhMeasurementTime,
+        "-f", piiJmhForks.toString(),
+        "-t", "1",
+        "-jvmArgsAppend", piiJmhJvmArgs.joinToString(" "),
+        "-p", "scenario=NO_MATCH_FULL_SCAN,FULL_SCAN",
+        "-rf", "json",
+        "-rff", piiQualificationJmhResultFile.get().asFile.absolutePath,
+    )
+}
+
+val writePiiQualificationJmhEnvironment =
+    tasks.register<JavaExec>("writePiiQualificationJmhEnvironment") {
+        dependsOn(runPiiQualificationJmh)
+        group = "verification"
+        description = "Writes environment metadata for the current EPIC-10 paired JMH run."
+        classpath = sourceSets.named("jmh").get().runtimeClasspath
+        mainClass.set("io.vigilant.detectors.pii.fast.PiiBenchmarkEnvironmentMain")
+        javaLauncher.set(piiJmhJavaLauncher)
+        jvmArgs(piiJmhJvmArgs)
+        outputs.file(piiQualificationJmhEnvironmentFile)
+        outputs.upToDateWhen { false }
+        args(
+            piiQualificationJmhEnvironmentFile.get().asFile.absolutePath,
+            piiQualificationJmhResultFile.get().asFile.name,
+            piiJmhVersion,
+            piiJmhMode,
+            piiJmhWarmupIterations.toString(),
+            piiJmhWarmupTime,
+            piiJmhForks.toString(),
+            piiJmhMeasurementIterations.toString(),
+            piiJmhMeasurementTime,
+        )
+    }
+
+tasks.register<JavaExec>("piiQualityQualification") {
+    dependsOn(
+        tasks.named("redMadRobotPiiBenchmark"),
+        tasks.named("piiQualityReport"),
+        writePiiQualificationJmhEnvironment,
+    )
+    group = "verification"
+    description = "Evaluates EPIC-10 quality floors and paired JMH regression evidence."
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("io.vigilant.detectors.pii.quality.PiiQualityQualificationMain")
+    outputs.files(
+        piiQualificationReportDirectory.map { directory -> directory.file("pii-quality-qualification.json") },
+        piiQualificationReportDirectory.map { directory -> directory.file("pii-quality-qualification.md") },
+    )
+    outputs.upToDateWhen { false }
+    doFirst {
+        val baselineDirectory =
+            piiQualificationBaselineDirectory.orNull?.let(::file)
+                ?: error("Set -PpiiQualificationBaselineDirectory to the reviewed baseline artifacts")
+        val baselineRevisionFile = baselineDirectory.resolve("revision.txt")
+        val requiredFiles =
+            listOf(
+                baselineDirectory.resolve("redmadrobot-pii-benchmark.json"),
+                baselineDirectory.resolve("jmh.json"),
+                baselineDirectory.resolve("environment.properties"),
+                baselineRevisionFile,
+            )
+        check(requiredFiles.all(File::isFile)) { "Qualification baseline directory is incomplete" }
+        setArgs(
+            listOf(
+                layout.buildDirectory
+                    .file("reports/pii/redmadrobot/redmadrobot-pii-benchmark.json")
+                    .get()
+                    .asFile.absolutePath,
+                requiredFiles[0].absolutePath,
+                layout.buildDirectory.file("reports/pii/canonical/pii-quality-report.json").get().asFile.absolutePath,
+                requiredFiles[1].absolutePath,
+                piiQualificationJmhResultFile.get().asFile.absolutePath,
+                requiredFiles[2].absolutePath,
+                piiQualificationJmhEnvironmentFile.get().asFile.absolutePath,
+                piiQualificationReportDirectory.get().asFile.absolutePath,
+                currentGitRevision.get(),
+                baselineRevisionFile.readText().trim(),
+                currentWorktreeDirty.get().toString(),
+            ),
+        )
+    }
 }
 
 val piiProductionRuntimeClasspathCheck = tasks.register("piiProductionRuntimeClasspathCheck") {

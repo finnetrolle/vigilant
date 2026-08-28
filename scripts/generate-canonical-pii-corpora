@@ -25,15 +25,15 @@ class Metadata:
 
 
 METADATA = {
-    "EMAIL_ADDRESS": Metadata("FORMAT_ONLY", "fast.email_address", "1.0.0"),
-    "PHONE_NUMBER": Metadata("FORMAT_ONLY", "fast.phone_number.ru", "1.0.0"),
+    "EMAIL_ADDRESS": Metadata("FORMAT_ONLY", "fast.email_address", "1.1.0"),
+    "PHONE_NUMBER": Metadata("FORMAT_ONLY", "fast.phone_number.ru", "1.1.0"),
     "PAYMENT_CARD": Metadata("VALIDATED", "fast.payment_card.luhn", "1.0.0"),
     "IP_ADDRESS": Metadata("VALIDATED", "fast.ip_address", "1.1.0"),
     "IBAN": Metadata("VALIDATED", "fast.iban", "1.0.0+iban-registry.102"),
     "RU_INN": Metadata("VALIDATED", "fast.ru_inn", "1.0.0"),
-    "RU_SNILS": Metadata("VALIDATED", "fast.ru_snils", "1.0.0"),
+    "RU_SNILS": Metadata("VALIDATED", "fast.ru_snils", "1.1.0"),
     "RU_PASSPORT": Metadata("CONTEXTUAL", "fast.ru_passport", "1.0.0"),
-    "RU_OMS": Metadata("VALIDATED", "fast.ru_oms", "1.0.0"),
+    "RU_OMS": Metadata("VALIDATED", "fast.ru_oms", "1.1.0"),
 }
 
 
@@ -50,7 +50,13 @@ def wrapped(index: int, value: str, *, right_context: str = "") -> tuple[str, st
     return f"😀 тест {index}: {value};{right_context}", value
 
 
-def expected_finding(pii_type: str, payload: str, span_value: str) -> str:
+def expected_finding(
+    pii_type: str,
+    payload: str,
+    span_value: str,
+    *,
+    evidence: str | None = None,
+) -> str:
     """Build canonical metadata from independently known payload byte coordinates."""
 
     character_start = payload.index(span_value)
@@ -58,7 +64,7 @@ def expected_finding(pii_type: str, payload: str, span_value: str) -> str:
     end = start + len(span_value.encode("utf-8"))
     metadata = METADATA[pii_type]
     return (
-        f"{pii_type},{start},{end},{metadata.evidence},"
+        f"{pii_type},{start},{end},{evidence or metadata.evidence},"
         f"{metadata.recognizer_id},{metadata.version}"
     )
 
@@ -75,10 +81,17 @@ def positive_record(
     pii_type: str,
     payload: str,
     span_value: str,
+    *,
+    evidence: str | None = None,
 ) -> str:
     """Encode one positive record with an explicit full finding contract."""
 
-    return record(case_id, pii_type, payload, expected_finding(pii_type, payload, span_value))
+    return record(
+        case_id,
+        pii_type,
+        payload,
+        expected_finding(pii_type, payload, span_value, evidence=evidence),
+    )
 
 
 def write_corpus(pii_type: str, category: str, records: list[str]) -> None:
@@ -115,8 +128,46 @@ def write_mixed_corpus(records: list[str]) -> None:
     target.write_text(HEADER + "\n" + "\n".join(records) + "\n", encoding="utf-8")
 
 
+def obfuscated_email_value(index: int) -> str:
+    """Create a strict email with one to three spaces at every allowed gap kind."""
+
+    local = f"user{index}"
+    spaces = " " * (index % 3 + 1)
+    return (
+        f"{local}{spaces}@example.com",
+        f"{local}@{spaces}example.com",
+        f"{local}@example{spaces}.com",
+        f"{local}@example.{spaces}com",
+        f"{local}{spaces}@{spaces}example{spaces}.{spaces}com",
+        f"{local}{spaces}@{spaces}пример{spaces}.{spaces}рф",
+    )[index % 6]
+
+
+def email_hard_negative(index: int) -> str:
+    """Create one forbidden whitespace, prose, local-part, or DNS surface."""
+
+    return (
+        f"user{index}    @example.com",
+        f"user{index}@    example.com",
+        f"user{index}@example    .com",
+        f"user{index}@example.    com",
+        "word @ word",
+        f"total + tax{index} @ rate . unit",
+        f"user . name{index} @ example.com",
+        f"user..name{index} @ example.com",
+        f"user{index} @ singlelabel",
+        f"user{index} @ exam ple.com",
+        f"алиса-user{index} @ example.com",
+        f"user{index}\t@example.com",
+        f"user{index}@\texample.com",
+        f"user{index}\u00A0@example.com",
+        f"user{index}@\u200Bexample.com",
+        f"user{index} @ -example . com",
+    )[index % 16]
+
+
 def email_corpora() -> tuple[list[str], list[str]]:
-    """Create dot-atom, symbol, IDN, boundary, and invalid-label email cases."""
+    """Create canonical and obfuscated strict emails plus matched hard negatives."""
 
     positives = []
     negatives = []
@@ -131,6 +182,8 @@ def email_corpora() -> tuple[list[str], list[str]]:
             value = f"{'a' * 64}@{'b' * 63}.{'c' * 63}.{'d' * 61}"
         elif index in (21, 22, 23):
             value = f"user{index}@example{('。', '．', '｡')[index - 21]}com"
+        elif index >= 24:
+            value = obfuscated_email_value(index)
         else:
             values = (
                 f"user{index}@example.com",
@@ -140,45 +193,88 @@ def email_corpora() -> tuple[list[str], list[str]]:
                 f"user{index}@example。com",
             )
             value = values[variant]
-        invalid_values = (
-            f"user..{index}@example.com",
-            f".user{index}@example.com",
-            f"user{index}.@example.com",
-            f"user{index}@-example.com",
-            f"user{index}@example",
-        )
         payload, span = wrapped(index, value)
-        negative_payload, _ = wrapped(index, invalid_values[variant])
+        negative_payload = email_hard_negative(index)
         positives.append(positive_record(f"email-positive-{index + 1:03d}", "EMAIL_ADDRESS", payload, span))
         negatives.append(record(f"email-hard-negative-{index + 1:03d}", "EMAIL_ADDRESS", negative_payload))
     return positives, negatives
 
 
-def phone_value(index: int) -> str:
-    """Create one unique synthetic Russian phone in all documented layouts."""
+def phone_surface(index: int) -> tuple[str, str, str]:
+    """Create one unique phone value, its context-qualified payload, and evidence."""
 
     area = 900 + index
     subscriber = f"{1_000_000 + index:07d}"
     groups = (subscriber[:3], subscriber[3:5], subscriber[5:])
+    compact_national = f"{area}{subscriber}"
+    separator = ("\u00A0", "\u2009", "\u2010", "\u2011", "\u2013")[index % 5]
+    variant = index % 10
+    if variant == 0:
+        value = f"+7{compact_national}"
+        payload, _ = wrapped(index, value)
+        return value, payload, "FORMAT_ONLY"
+    if variant == 1:
+        value = f"8 ({area}) {groups[0]}-{groups[1]}-{groups[2]}"
+        payload, _ = wrapped(index, value)
+        return value, payload, "FORMAT_ONLY"
+    if variant in (2, 3, 4):
+        prefix = "+7" if variant % 2 == 0 else "8"
+        value = f"{prefix}{separator}({area}){separator}{groups[0]}{separator}{groups[1]}{separator}{groups[2]}"
+        payload, _ = wrapped(index, value)
+        return value, payload, "FORMAT_ONLY"
+    if variant == 5:
+        value = compact_national
+        return value, f"😀 Мобильный: {value}.", "CONTEXTUAL"
+    if variant == 6:
+        value = f"({area}) {groups[0]}-{groups[1]}-{groups[2]}"
+        return value, f"телефон: {value} доб. 42", "CONTEXTUAL"
+    if variant == 7:
+        value = f"7{compact_national}"
+        return value, f"{value}; PHONE", "CONTEXTUAL"
+    if variant == 8:
+        value = f"7{separator}{area}{separator}{groups[0]}{separator}{groups[1]}{separator}{groups[2]}"
+        return value, f"Contact: {value} ext. 42", "CONTEXTUAL"
+    value = f"8 {area} {groups[0]}-{groups[1]}-{groups[2]}"
+    payload, _ = wrapped(index, value)
+    return value, payload, "FORMAT_ONLY"
+
+
+def phone_hard_negative(index: int) -> str:
+    """Create one hard negative from every required non-phone numeric class."""
+
+    compact_national = f"{900 + index}{1_000_000 + index:07d}"
+    wrong_country = "+1" + compact_national
     return (
-        f"+7{area}{subscriber}",
-        f"8 ({area}) {groups[0]}-{groups[1]}-{groups[2]}",
-        f"+7 ({area}) {groups[0]}-{groups[1]}-{groups[2]}",
-        f"8 {area} {groups[0]}-{groups[1]}-{groups[2]}",
-    )[index % 4]
+        wrong_country,
+        compact_national,
+        "7" + compact_national,
+        f"xphone {compact_national}",
+        "phone 2026-08-28 10:15:30",
+        f"order-{compact_national}",
+        f"version {compact_national}.1",
+        f"1.{compact_national} phone",
+        f"phone {compact_national}0",
+        f"тел.{('😀' * 29)}{compact_national}",
+    )[index % 10]
 
 
 def phone_corpora() -> tuple[list[str], list[str]]:
-    """Create supported Russian phone layouts and wrong-country hard negatives."""
+    """Create the complete versioned Russian phone surface and hard-negative matrix."""
 
     positives = []
     negatives = []
     for index in range(100):
-        value = phone_value(index)
-        payload, span = wrapped(index, value)
-        wrong_country = "+1" + f"{900 + index}{1_000_000 + index:07d}"
-        negative_payload, _ = wrapped(index, wrong_country)
-        positives.append(positive_record(f"phone-positive-{index + 1:03d}", "PHONE_NUMBER", payload, span))
+        value, payload, evidence = phone_surface(index)
+        negative_payload = phone_hard_negative(index)
+        positives.append(
+            positive_record(
+                f"phone-positive-{index + 1:03d}",
+                "PHONE_NUMBER",
+                payload,
+                value,
+                evidence=evidence,
+            )
+        )
         negatives.append(record(f"phone-hard-negative-{index + 1:03d}", "PHONE_NUMBER", negative_payload))
     return positives, negatives
 
@@ -369,28 +465,80 @@ def snils_value(index: int) -> str:
 
 
 def snils_form(compact: str, variant: int) -> str:
-    """Render compact and both documented SNILS separator layouts."""
+    """Render every compact, legacy, and alternate SNILS separator layout."""
 
-    if variant == 0:
+    groups = (compact[:3], compact[3:6], compact[6:9], compact[9:])
+    normalized_variant = variant % 9
+    if normalized_variant == 0:
         return compact
-    separator = "-" if variant == 1 else " "
-    return f"{compact[:3]}-{compact[3:6]}-{compact[6:9]}{separator}{compact[9:]}"
+    separators = (
+        ("-", "-", "-"),
+        ("-", "-", " "),
+        (".", ".", " "),
+        (" ", " ", " "),
+        ("\u00a0", "\u00a0", "\u00a0"),
+        ("\u2009", "\u2009", "\u2009"),
+        ("\u2010", "\u2010", "\u2010"),
+        ("\u2011", "\u2011", "\u2011"),
+    )[normalized_variant - 1]
+    return "".join((groups[0], separators[0], groups[1], separators[1], groups[2], separators[2], groups[3]))
+
+
+def contextual_snils_payload(index: int, value: str) -> tuple[str, str]:
+    """Place exact whole-word SNILS context on alternating sides of an invalid checksum."""
+
+    if index % 2 == 0:
+        return f"СНИЛС: {value}.", value
+    return f"😀 Значение {value}, снилс", value
+
+
+def snils_hard_negative(index: int, invalid: str) -> str:
+    """Cover standalone, repeated, partial, distant, and mixed-separator contextual negatives."""
+
+    mode = index % 5
+    if mode == 0:
+        return invalid
+    if mode == 1:
+        return f"снилсы {invalid}"
+    if mode == 2:
+        return "СНИЛС 11111111111"
+    if mode == 3:
+        return "снилс" + "😀" * 28 + invalid
+    return f"снилс {invalid[:3]}-{invalid[3:6]} {invalid[6:9]}-{invalid[9:]}"
 
 
 def snils_corpora() -> tuple[list[str], list[str]]:
-    """Create all SNILS forms and checksum-invalid hard negatives."""
+    """Create validated/contextual positives and exhaustive contextual hard negatives."""
 
     positives = []
     negatives = []
     for index in range(100):
         compact = snils_value(index)
         invalid_compact = compact[:-1] + str((int(compact[-1]) + 1) % 10)
-        value = snils_form(compact, index % 3)
-        invalid = snils_form(invalid_compact, index % 3)
-        payload, span = wrapped(index, value)
-        negative_payload, _ = wrapped(index, invalid)
-        positives.append(positive_record(f"snils-positive-{index + 1:03d}", "RU_SNILS", payload, span))
-        negatives.append(record(f"snils-hard-negative-{index + 1:03d}", "RU_SNILS", negative_payload))
+        value = snils_form(compact, index % 9)
+        invalid = snils_form(invalid_compact, index % 9)
+        if index % 5 == 4:
+            payload, span = contextual_snils_payload(index, invalid)
+            evidence = "CONTEXTUAL"
+        else:
+            payload, span = wrapped(index, value)
+            evidence = "VALIDATED"
+        positives.append(
+            positive_record(
+                f"snils-positive-{index + 1:03d}",
+                "RU_SNILS",
+                payload,
+                span,
+                evidence=evidence,
+            )
+        )
+        negatives.append(
+            record(
+                f"snils-hard-negative-{index + 1:03d}",
+                "RU_SNILS",
+                snils_hard_negative(index, invalid),
+            )
+        )
     return positives, negatives
 
 
@@ -455,20 +603,76 @@ def oms_value(index: int) -> str:
     return base + oms_check_digit(base)
 
 
+def oms_form(compact: str, variant: int) -> str:
+    """Render compact or one consistently separated four-by-four OMS layout."""
+
+    normalized_variant = variant % 7
+    if normalized_variant == 0:
+        return compact
+    separator = (" ", "-", "\u2010", "\u2011", "\u00a0", "\u2009")[normalized_variant - 1]
+    return grouped(compact, separator)
+
+
+def contextual_oms_payload(index: int, value: str) -> tuple[str, str]:
+    """Place exact acronym or policy-phrase context on alternating sides of an invalid checksum."""
+
+    contexts = (
+        f"ОМС: {value}.",
+        f"{value}, омс",
+        f"Полис обязательного медицинского страхования: {value}.",
+        f"😀 {value}, полис обязательного медицинского страхования",
+    )
+    return contexts[index % len(contexts)], value
+
+
+def oms_hard_negative(index: int, invalid: str) -> str:
+    """Cover standalone, repeated, partial, distant, and mixed-separator contextual negatives."""
+
+    mode = index % 5
+    if mode == 0:
+        return invalid
+    if mode == 1:
+        return f"омский {invalid}"
+    if mode == 2:
+        return "ОМС 1111111111111111"
+    if mode == 3:
+        phrase = "полис обязательного медицинского страхования"
+        return phrase + "." * (49 - len(phrase)) + invalid
+    return f"омс {invalid[:4]}-{invalid[4:8]} {invalid[8:12]}-{invalid[12:]}"
+
+
 def oms_corpora() -> tuple[list[str], list[str]]:
-    """Create compact/grouped OMS forms and checksum-invalid hard negatives."""
+    """Create validated/contextual OMS positives and exhaustive contextual hard negatives."""
 
     positives = []
     negatives = []
     for index in range(100):
         compact = oms_value(index)
         invalid_compact = compact[:-1] + str((int(compact[-1]) + 1) % 10)
-        value = compact if index % 2 == 0 else grouped(compact, " ")
-        invalid = invalid_compact if index % 2 == 0 else grouped(invalid_compact, " ")
-        payload, span = wrapped(index, value)
-        negative_payload, _ = wrapped(index, invalid)
-        positives.append(positive_record(f"oms-positive-{index + 1:03d}", "RU_OMS", payload, span))
-        negatives.append(record(f"oms-hard-negative-{index + 1:03d}", "RU_OMS", negative_payload))
+        value = oms_form(compact, index % 7)
+        invalid = oms_form(invalid_compact, index % 7)
+        if index % 5 == 4:
+            payload, span = contextual_oms_payload(index, invalid)
+            evidence = "CONTEXTUAL"
+        else:
+            payload, span = wrapped(index, value)
+            evidence = "VALIDATED"
+        positives.append(
+            positive_record(
+                f"oms-positive-{index + 1:03d}",
+                "RU_OMS",
+                payload,
+                span,
+                evidence=evidence,
+            )
+        )
+        negatives.append(
+            record(
+                f"oms-hard-negative-{index + 1:03d}",
+                "RU_OMS",
+                oms_hard_negative(index, invalid),
+            )
+        )
     return positives, negatives
 
 

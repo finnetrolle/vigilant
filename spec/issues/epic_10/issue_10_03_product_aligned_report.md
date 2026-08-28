@@ -1,6 +1,6 @@
 # VIG-10-03: Product-aligned external quality report
 
-**Статус:** Ready for implementation
+**Статус:** Done
 **Epic:** [EPIC-10](../../epics/epic_10_pii_detection_quality.md)
 **Ветка:** Evidence > product-aligned semantic view
 **Зависит от:** [VIG-10-01](issue_10_01_quality_diagnostics.md)
@@ -36,20 +36,20 @@ External quality report рядом с неизменёнными source-aligned 
 
 ## Критерии готовности
 
-- [ ] Source-aligned JSON/Markdown metrics и matching rules остаются доступны
+- [x] Source-aligned JSON/Markdown metrics и matching rules остаются доступны
       без изменения исходной семантики.
-- [ ] Product-aligned section имеет отдельные aggregate/per-type metrics и не
+- [x] Product-aligned section имеет отдельные aggregate/per-type metrics и не
       смешивается с headline source-aligned result.
-- [ ] Synthetic tests покрывают legal-entity INN mismatch, physical-person INN,
+- [x] Synthetic tests покрывают legal-entity INN mismatch, physical-person INN,
       mergeable/non-mergeable passport pairs и ambiguous gaps.
-- [ ] Passport adjustment выполняет deterministic one-to-one grouping и не
+- [x] Passport adjustment выполняет deterministic one-to-one grouping и не
       объединяет три entities, reversed pair или entities через произвольный
       текст.
-- [ ] Report публикует counts каждого adjustment до scoring, чтобы изменение
+- [x] Report публикует counts каждого adjustment до scoring, чтобы изменение
       denominator не могло остаться незаметным.
-- [ ] Product-aligned failures и reports не содержат raw spans, text, tokens,
+- [x] Product-aligned failures и reports не содержат raw spans, text, tokens,
       digit values или reversible fingerprints.
-- [ ] `./gradlew redMadRobotPiiBenchmark`, focused tests и `./gradlew build`
+- [x] `./gradlew redMadRobotPiiBenchmark`, focused tests и `./gradlew build`
       проходят.
 
 ## Test/demo seam

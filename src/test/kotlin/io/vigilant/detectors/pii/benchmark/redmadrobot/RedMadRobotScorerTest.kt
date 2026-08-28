@@ -1,11 +1,58 @@
 package io.vigilant.detectors.pii.benchmark.redmadrobot
 
+import io.vigilant.detectors.pii.EvidenceStrength
 import io.vigilant.detectors.pii.PiiType
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /** Focused behavior tests for source-span benchmark scoring. */
 class RedMadRobotScorerTest {
+    /** Attributes matched and unmatched predictions to validated and contextual paths separately. */
+    @Test
+    fun `scoring publishes per evidence contributions without spans`() {
+        val benchmarkCase =
+            RedMadRobotScoringCase(
+                expected =
+                    listOf(
+                        gold(PiiType.RU_SNILS, 0, 11),
+                        gold(PiiType.RU_SNILS, 20, 31),
+                    ),
+                predicted =
+                    listOf(
+                        predicted(PiiType.RU_SNILS, 0, 11, EvidenceStrength.VALIDATED),
+                        predicted(PiiType.RU_SNILS, 20, 30, EvidenceStrength.CONTEXTUAL),
+                        predicted(PiiType.RU_SNILS, 40, 51, EvidenceStrength.CONTEXTUAL),
+                    ),
+                caseId = "evidence-synthetic",
+            )
+
+        val contributions = RedMadRobotScorer().score(listOf(benchmarkCase)).sourceAligned.fullEvidenceContributions
+
+        assertEquals(
+            listOf(
+                RedMadRobotEvidenceContribution(
+                    PiiType.RU_SNILS,
+                    EvidenceStrength.VALIDATED,
+                    predictions = 1,
+                    exactMatches = 1,
+                    exactFalsePositives = 0,
+                    relaxedMatches = 1,
+                    relaxedFalsePositives = 0,
+                ),
+                RedMadRobotEvidenceContribution(
+                    PiiType.RU_SNILS,
+                    EvidenceStrength.CONTEXTUAL,
+                    predictions = 2,
+                    exactMatches = 0,
+                    exactFalsePositives = 2,
+                    relaxedMatches = 1,
+                    relaxedFalsePositives = 1,
+                ),
+            ),
+            contributions,
+        )
+    }
+
     /** Verifies exact pinned case counts independently of iteration order. */
     @Test
     fun `frozen split has pinned full tuning and evaluation case counts`() {
@@ -47,7 +94,7 @@ class RedMadRobotScorerTest {
                 predicted = emptyList(),
             )
 
-        val exact = RedMadRobotScorer().score(common + rare).fullDiagnostics.exact
+        val exact = RedMadRobotScorer().score(common + rare).sourceAligned.fullDiagnostics.exact
 
         assertEquals(6, exact.totals.getValue(RedMadRobotMismatchBucket.NO_OVERLAPPING_FINDING))
         assertEquals(
@@ -98,7 +145,7 @@ class RedMadRobotScorerTest {
                 ),
             )
 
-        val diagnostics = RedMadRobotScorer().score(cases).fullDiagnostics
+        val diagnostics = RedMadRobotScorer().score(cases).sourceAligned.fullDiagnostics
 
         assertEquals(
             mapOf(
@@ -140,15 +187,15 @@ class RedMadRobotScorerTest {
 
         assertEquals(
             ScoreCounts(truePositives = 1, falsePositives = 0, falseNegatives = 1),
-            report.full.aggregate.exact.counts,
+            report.sourceAligned.full.aggregate.exact.counts,
         )
         assertEquals(
             ScoreCounts(truePositives = 1, falsePositives = 0, falseNegatives = 0),
-            report.tuning.aggregate.exact.counts,
+            report.sourceAligned.tuning.aggregate.exact.counts,
         )
         assertEquals(
             ScoreCounts(truePositives = 0, falsePositives = 0, falseNegatives = 1),
-            report.evaluation.aggregate.exact.counts,
+            report.sourceAligned.evaluation.aggregate.exact.counts,
         )
     }
 
@@ -176,15 +223,17 @@ class RedMadRobotScorerTest {
 
         assertEquals(
             ScoreCounts(truePositives = 1, falsePositives = 2, falseNegatives = 2),
-            report.aggregate.exact.counts,
+            report.sourceAligned.full.aggregate.exact.counts,
         )
         assertEquals(
             ScoreCounts(truePositives = 3, falsePositives = 0, falseNegatives = 0),
-            report.aggregate.relaxed.counts,
+            report.sourceAligned.full.aggregate.relaxed.counts,
         )
         assertEquals(
             ScoreCounts(truePositives = 2, falsePositives = 0, falseNegatives = 0),
-            report.perType.single { score -> score.type == PiiType.EMAIL_ADDRESS }.relaxed.counts,
+            report.sourceAligned.full.perType
+                .single { score -> score.type == PiiType.EMAIL_ADDRESS }
+                .relaxed.counts,
         )
         assertEquals(
             listOf(
@@ -212,7 +261,8 @@ class RedMadRobotScorerTest {
         type: PiiType,
         start: Long,
         end: Long,
-    ): RedMadRobotPredictedSpan = RedMadRobotPredictedSpan(type, start, end)
+        evidenceStrength: EvidenceStrength = EvidenceStrength.FORMAT_ONLY,
+    ): RedMadRobotPredictedSpan = RedMadRobotPredictedSpan(type, start, end, evidenceStrength)
 
     /** Creates one identified case so diagnostics never cross payload boundaries. */
     private fun scoringCase(

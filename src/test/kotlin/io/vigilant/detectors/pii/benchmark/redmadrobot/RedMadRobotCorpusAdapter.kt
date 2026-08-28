@@ -10,6 +10,7 @@ import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
 import java.util.Collections
 import java.util.LinkedHashSet
+import java.util.Locale
 
 /** Stable error codes for malformed external corpus input. */
 enum class RedMadRobotCorpusError {
@@ -56,11 +57,37 @@ data class RedMadRobotGoldSpan(
     val endUtf8: Long,
 )
 
+/** Versioned product-alignment rules whose aggregate counts are safe to publish. */
+enum class RedMadRobotProductAdjustment(
+    val ruleVersion: Int,
+    val provenance: String,
+) {
+    LEGAL_ENTITY_INN_TAXONOMY_MISMATCH(
+        ruleVersion = 1,
+        provenance = "Exclude an upstream INN containing exactly ten ASCII digits from product scoring.",
+    ),
+    PASSPORT_SERIES_NUMBER_MERGE(
+        ruleVersion = 1,
+        provenance =
+            "Merge adjacent four- then six-digit PASSPORT entities through at most 32 code points " +
+                "of whitespace, punctuation, or ordered серия/номер words.",
+    ),
+}
+
 /** One safely processed external benchmark case. */
 data class RedMadRobotCase(
     val caseId: String,
     val text: String,
     val goldSpans: List<RedMadRobotGoldSpan>,
+    val productAlignedGoldSpans: List<RedMadRobotGoldSpan> = goldSpans,
+    val productAlignmentAdjustments: Map<RedMadRobotProductAdjustment, Int> =
+        RedMadRobotProductAdjustment.entries.associateWith { 0 },
+)
+
+/** Product-aligned expected spans and payload-free aggregate rule counts for one record. */
+private data class RedMadRobotProductAlignment(
+    val goldSpans: List<RedMadRobotGoldSpan>,
+    val adjustments: Map<RedMadRobotProductAdjustment, Int>,
 )
 
 /** Safe reason codes for cases excluded from external scoring. */
@@ -111,11 +138,15 @@ class RedMadRobotCorpusAdapter {
                     rejectedCases += RedMadRobotRejectedCase(caseId, failure.reason)
                     return@forEachIndexed
                 }
+            val sourceAlignedGoldSpans = mappedSpans(parsed.text, parsed.tags, tokenSpans)
+            val productAlignment = productAlignment(parsed.text, sourceAlignedGoldSpans)
             processedCases +=
                 RedMadRobotCase(
                     caseId = caseId,
                     text = parsed.text,
-                    goldSpans = mappedSpans(parsed.text, parsed.tags, tokenSpans),
+                    goldSpans = sourceAlignedGoldSpans,
+                    productAlignedGoldSpans = productAlignment.goldSpans,
+                    productAlignmentAdjustments = productAlignment.adjustments,
                 )
         }
         return RedMadRobotCorpus(
@@ -269,6 +300,140 @@ class RedMadRobotCorpusAdapter {
         return spans
     }
 
+    /** Applies the complete version-one product alignment before any detector scoring. */
+    private fun productAlignment(
+        text: String,
+        sourceAligned: List<RedMadRobotGoldSpan>,
+    ): RedMadRobotProductAlignment {
+        val productAligned = mutableListOf<RedMadRobotGoldSpan>()
+        val adjustmentCounts = RedMadRobotProductAdjustment.entries.associateWith { 0 }.toMutableMap()
+        var index = 0
+        while (index < sourceAligned.size) {
+            val current = sourceAligned[index]
+            when {
+                isLegalEntityInn(text, current) -> {
+                    adjustmentCounts.increment(
+                        RedMadRobotProductAdjustment.LEGAL_ENTITY_INN_TAXONOMY_MISMATCH,
+                    )
+                    index += 1
+                }
+                index + 1 < sourceAligned.size &&
+                    isMergeablePassportPair(text, current, sourceAligned[index + 1]) -> {
+                    val next = sourceAligned[index + 1]
+                    productAligned +=
+                        RedMadRobotGoldSpan(
+                            type = PiiType.RU_PASSPORT,
+                            startUtf8 = current.startUtf8,
+                            endUtf8 = next.endUtf8,
+                        )
+                    adjustmentCounts.increment(
+                        RedMadRobotProductAdjustment.PASSPORT_SERIES_NUMBER_MERGE,
+                    )
+                    index += 2
+                }
+                else -> {
+                    productAligned += current
+                    index += 1
+                }
+            }
+        }
+        return RedMadRobotProductAlignment(productAligned, adjustmentCounts.toMap())
+    }
+
+    /** Classifies only a mapped RU_INN span whose complete source surface is ten ASCII digits. */
+    private fun isLegalEntityInn(
+        text: String,
+        span: RedMadRobotGoldSpan,
+    ): Boolean = span.type == PiiType.RU_INN && sourceSlice(text, span).isAsciiDigits(LEGAL_ENTITY_INN_DIGITS)
+
+    /** Accepts one adjacent ordered non-overlapping four- then six-digit passport pair. */
+    private fun isMergeablePassportPair(
+        text: String,
+        series: RedMadRobotGoldSpan,
+        number: RedMadRobotGoldSpan,
+    ): Boolean =
+        series.type == PiiType.RU_PASSPORT &&
+            number.type == PiiType.RU_PASSPORT &&
+            series.endUtf8 <= number.startUtf8 &&
+            sourceSlice(text, series).isAsciiDigits(PASSPORT_SERIES_DIGITS) &&
+            sourceSlice(text, number).isAsciiDigits(PASSPORT_NUMBER_DIGITS) &&
+            isApprovedPassportGap(sourceSlice(text, series.endUtf8, number.startUtf8))
+
+    /** Checks the bounded punctuation or ordered Russian-word grammar between passport parts. */
+    private fun isApprovedPassportGap(gap: String): Boolean =
+        gap.codePointCount(0, gap.length) <= MAX_PASSPORT_GAP_CODE_POINTS &&
+            passportGapWords(gap) in APPROVED_PASSPORT_GAP_WORDS
+
+    /** Parses gap words while rejecting every character outside letters, whitespace, and punctuation. */
+    private fun passportGapWords(gap: String): List<String>? {
+        val words = mutableListOf<String>()
+        var index = 0
+        var valid = true
+        while (index < gap.length && valid) {
+            val codePoint = gap.codePointAt(index)
+            if (Character.isLetter(codePoint)) {
+                val (word, nextIndex) = passportGapWord(gap, index)
+                words += word
+                index = nextIndex
+            } else {
+                valid = Character.isWhitespace(codePoint) || isPunctuation(codePoint)
+                index += Character.charCount(codePoint)
+            }
+        }
+        return words.takeIf { valid }
+    }
+
+    /** Reads one lowercase Unicode-letter word and the following source index. */
+    private fun passportGapWord(
+        gap: String,
+        start: Int,
+    ): Pair<String, Int> {
+        val word = StringBuilder()
+        var index = start
+        while (index < gap.length && Character.isLetter(gap.codePointAt(index))) {
+            val codePoint = gap.codePointAt(index)
+            word.appendCodePoint(Character.toLowerCase(codePoint))
+            index += Character.charCount(codePoint)
+        }
+        return word.toString().lowercase(Locale.ROOT) to index
+    }
+
+    /** Reports whether one Unicode code point belongs to a punctuation category. */
+    private fun isPunctuation(codePoint: Int): Boolean =
+        Character.getType(codePoint) in PUNCTUATION_TYPES
+
+    /** Returns the exact UTF-8 source slice covered by one gold span. */
+    private fun sourceSlice(
+        text: String,
+        span: RedMadRobotGoldSpan,
+    ): String = sourceSlice(text, span.startUtf8, span.endUtf8)
+
+    /** Returns one trusted half-open UTF-8 byte interval as text. */
+    private fun sourceSlice(
+        text: String,
+        startUtf8: Long,
+        endUtf8: Long,
+    ): String {
+        val bytes = text.toByteArray(StandardCharsets.UTF_8)
+        return String(
+            bytes,
+            startUtf8.toInt(),
+            (endUtf8 - startUtf8).toInt(),
+            StandardCharsets.UTF_8,
+        )
+    }
+
+    /** Reports whether this complete source surface has the requested ASCII-digit width. */
+    private fun String.isAsciiDigits(expectedLength: Int): Boolean =
+        length == expectedLength && all { character -> character in '0'..'9' }
+
+    /** Increments one required adjustment counter without creating unversioned keys. */
+    private fun MutableMap<RedMadRobotProductAdjustment, Int>.increment(
+        adjustment: RedMadRobotProductAdjustment,
+    ) {
+        this[adjustment] = getValue(adjustment) + 1
+    }
+
     /** One token's half-open character interval in the source text. */
     private data class CharacterSpan(
         val start: Int,
@@ -300,6 +465,27 @@ class RedMadRobotCorpusAdapter {
         const val TEXT_COLUMN = 0
         const val TOKENS_COLUMN = 1
         const val TAGS_COLUMN = 2
+        const val LEGAL_ENTITY_INN_DIGITS = 10
+        const val PASSPORT_SERIES_DIGITS = 4
+        const val PASSPORT_NUMBER_DIGITS = 6
+        const val MAX_PASSPORT_GAP_CODE_POINTS = 32
+        val APPROVED_PASSPORT_GAP_WORDS =
+            setOf(
+                emptyList(),
+                listOf("серия"),
+                listOf("номер"),
+                listOf("серия", "номер"),
+            )
+        val PUNCTUATION_TYPES =
+            setOf(
+                Character.CONNECTOR_PUNCTUATION.toInt(),
+                Character.DASH_PUNCTUATION.toInt(),
+                Character.START_PUNCTUATION.toInt(),
+                Character.END_PUNCTUATION.toInt(),
+                Character.INITIAL_QUOTE_PUNCTUATION.toInt(),
+                Character.FINAL_QUOTE_PUNCTUATION.toInt(),
+                Character.OTHER_PUNCTUATION.toInt(),
+            )
     }
 }
 

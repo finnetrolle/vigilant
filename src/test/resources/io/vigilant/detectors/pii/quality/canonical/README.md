@@ -7,8 +7,12 @@ derived from user data.
 Each per-type `positive` and `hard-negative` TSV contains 100 records. Positive
 records cover supported representations, payload boundaries, ASCII, Cyrillic,
 emoji/supplementary UTF-8 offsets, checksum variants, email punctuation/IDN
-forms, IPv4/IPv6 forms, and every country in the pinned IBAN release-102
-registry. `mixed.tsv` is separate scoring evidence with multiple types,
+forms, Russian phone Unicode separators and contextual national forms, bounded
+email whitespace obfuscation, validated SNILS Unicode separator forms,
+contextual checksum fallback, validated OMS grouped Unicode separators and
+bounded policy context, IPv4/IPv6 forms, and every country in the pinned IBAN
+release-102 registry.
+`mixed.tsv` is separate scoring evidence with multiple types,
 punctuation, Cyrillic, emoji, hard negatives, and a real cross-type span overlap.
 
 All TSV files use the `# pii-corpus-v1` format fixed by EPIC-02. Regenerate them

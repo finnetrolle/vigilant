@@ -1,6 +1,6 @@
 # VIG-10-05: Расширенные формы российских телефонов
 
-**Статус:** Ready for implementation
+**Статус:** Done
 **Epic:** [EPIC-10](../../epics/epic_10_pii_detection_quality.md)
 **Ветка:** Obfuscation tolerance > Russian phone surfaces
 **Зависит от:** [VIG-10-01](issue_10_01_quality_diagnostics.md)
@@ -32,23 +32,23 @@ Unicode-разделителями. Десятизначная national form и 
 
 ## Критерии готовности
 
-- [ ] RED tests через `PiiDetector.detect` покрывают Unicode separator и обе
+- [x] RED tests через `PiiDetector.detect` покрывают Unicode separator и обе
       contextual national forms с точными byte offsets.
-- [ ] Standalone 10-digit и `7`-prefixed numbers без phone context остаются
+- [x] Standalone 10-digit и `7`-prefixed numbers без phone context остаются
       hard negatives.
-- [ ] Partial keywords, context за пределом окна, timestamps, order IDs,
+- [x] Partial keywords, context за пределом окна, timestamps, order IDs,
       versions и длинные соседние digit runs не создают findings.
-- [ ] Context matching является whole-word и locale-stable для русского и
+- [x] Context matching является whole-word и locale-stable для русского и
       ASCII vocabulary.
-- [ ] Extension не входит в finding, но candidate перед поддерживаемым
+- [x] Extension не входит в finding, но candidate перед поддерживаемым
       extension delimiter обнаруживается.
-- [ ] Existing `+7`/`8` findings сохраняют прежние offsets/evidence; новые
+- [x] Existing `+7`/`8` findings сохраняют прежние offsets/evidence; новые
       separators включаются в исходный span.
-- [ ] Tuning/evaluation diagnostics показывают рост PHONE recall при exact
+- [x] Tuning/evaluation diagnostics показывают рост PHONE recall при exact
       precision не ниже `0.90` для PHONE_NUMBER.
-- [ ] Scanner остаётся bounded/linear и вызывает cancellation checkpoints.
-- [ ] `recognizerVersion`, KDoc и canonical corpora обновлены.
-- [ ] Focused tests и `./gradlew build` проходят.
+- [x] Scanner остаётся bounded/linear и вызывает cancellation checkpoints.
+- [x] `recognizerVersion`, KDoc и canonical corpora обновлены.
+- [x] Focused tests и `./gradlew build` проходят.
 
 ## Test/demo seam
 

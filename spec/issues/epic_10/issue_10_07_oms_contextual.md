@@ -1,6 +1,6 @@
 # VIG-10-07: Contextual fallback для ОМС
 
-**Статус:** Ready for implementation
+**Статус:** Done
 **Epic:** [EPIC-10](../../epics/epic_10_pii_detection_quality.md)
 **Ветка:** Contextual recovery > OMS
 **Зависит от:** [VIG-10-01](issue_10_01_quality_diagnostics.md)
@@ -30,22 +30,22 @@ structurally plausible 16-digit policy number с ошибочной checksum т�
 
 ## Критерии готовности
 
-- [ ] RED tests через `PiiDetector.detect` покрывают alternate valid separator
+- [x] RED tests через `PiiDetector.detect` покрывают alternate valid separator
       и invalid-checksum contextual candidate.
-- [ ] Existing compact/grouped Mod10-valid cases сохраняют `VALIDATED`, exact
+- [x] Existing compact/grouped Mod10-valid cases сохраняют `VALIDATED`, exact
       offsets и recognizer ID.
-- [ ] Validated path имеет приоритет и не создаёт duplicate contextual finding
+- [x] Validated path имеет приоритет и не создаёт duplicate contextual finding
       на том же span.
-- [ ] Standalone invalid-checksum number, repeated digits, mixed separators,
+- [x] Standalone invalid-checksum number, repeated digits, mixed separators,
       partial keyword и distant context остаются hard negatives.
-- [ ] Context vocabulary сопоставляется whole-word, locale-stable и без
+- [x] Context vocabulary сопоставляется whole-word, locale-stable и без
       включения context в span.
-- [ ] Tuning/evaluation diagnostics разделяют validated/contextual contribution;
+- [x] Tuning/evaluation diagnostics разделяют validated/contextual contribution;
       aggregate exact precision не падает ниже epic floor.
-- [ ] Scanner bounded/linear, cancellation и no-retained-payload invariants
+- [x] Scanner bounded/linear, cancellation и no-retained-payload invariants
       сохраняются.
-- [ ] `recognizerVersion`, KDoc и canonical corpora обновлены.
-- [ ] Focused tests и `./gradlew build` проходят.
+- [x] `recognizerVersion`, KDoc и canonical corpora обновлены.
+- [x] Focused tests и `./gradlew build` проходят.
 
 ## Test/demo seam
 

@@ -90,7 +90,7 @@ class FastPiiPolicyAdapterTest {
                 mapOf(
                     "evidence_strength" to "FORMAT_ONLY",
                     "recognizer_id" to "fast.email_address",
-                    "recognizer_version" to "1.0.0",
+                    "recognizer_version" to "1.1.0",
                 ),
                 finding.metadata,
             )

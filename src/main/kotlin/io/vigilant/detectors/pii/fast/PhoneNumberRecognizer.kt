@@ -26,8 +26,10 @@ internal object PhoneNumberRecognizer : PiiRecognizer {
 
             val scannedEnd = findCandidateEnd(payload, startCharacter)
             val endCharacter = trimTrailingSpaces(payload, startCharacter, scannedEnd)
-            if (PhoneNumberCandidateValidator.isValid(payload, startCharacter, endCharacter)) {
-                recognitions += recognizedPhoneNumber(startCharacter, endCharacter)
+            val evidenceStrength =
+                PhoneNumberCandidateValidator.evidenceStrength(payload, startCharacter, endCharacter)
+            if (evidenceStrength != null) {
+                recognitions += recognizedPhoneNumber(startCharacter, endCharacter, evidenceStrength)
                 if (stopOnFirst) {
                     return recognitions
                 }
@@ -38,7 +40,7 @@ internal object PhoneNumberRecognizer : PiiRecognizer {
         return recognitions
     }
 
-    /** Finds the next possible `+7` or `8` prefix without entering a digit sequence. */
+    /** Finds the next prefixed or national candidate without entering a digit sequence. */
     private fun findCandidateStart(
         payload: String,
         searchFrom: Int,
@@ -46,15 +48,23 @@ internal object PhoneNumberRecognizer : PiiRecognizer {
         var index = searchFrom
         while (index < payload.length) {
             val startsWithPlusSeven = payload[index] == '+' && index + 1 < payload.length && payload[index + 1] == '7'
-            val startsWithEight = payload[index] == '8'
-            val leftBoundary = index == 0 || (!payload[index - 1].isAsciiDigit() && payload[index - 1] != '+')
-            if ((startsWithPlusSeven || startsWithEight) && leftBoundary) {
+            val startsWithDigit = payload[index].isAsciiDigit()
+            val startsWithAreaCode =
+                payload[index] == '(' && index + 1 < payload.length && payload[index + 1].isAsciiDigit()
+            val startsCandidate = startsWithPlusSeven || startsWithDigit || startsWithAreaCode
+            if (startsCandidate && hasLeftCandidateBoundary(payload, index)) {
                 return index
             }
             index += 1
         }
         return -1
     }
+
+    /** Returns whether [index] is not nested inside a longer digit or plus-prefixed sequence. */
+    private fun hasLeftCandidateBoundary(
+        payload: String,
+        index: Int,
+    ): Boolean = index == 0 || (!payload[index - 1].isAsciiDigit() && payload[index - 1] != '+')
 
     /** Scans the maximal run of characters that can belong to a phone candidate. */
     private fun findCandidateEnd(
@@ -68,14 +78,14 @@ internal object PhoneNumberRecognizer : PiiRecognizer {
         return endCharacter
     }
 
-    /** Excludes surrounding text spaces while retaining an invalid trailing hyphen for validation. */
+    /** Excludes supported trailing space separators while retaining a trailing hyphen for validation. */
     private fun trimTrailingSpaces(
         payload: String,
         startCharacter: Int,
         scannedEnd: Int,
     ): Int {
         var endCharacter = scannedEnd
-        while (endCharacter > startCharacter && payload[endCharacter - 1] == ' ') {
+        while (endCharacter > startCharacter && payload[endCharacter - 1].isPhoneSpaceSeparator()) {
             endCharacter -= 1
         }
         return endCharacter
@@ -85,11 +95,12 @@ internal object PhoneNumberRecognizer : PiiRecognizer {
     private fun recognizedPhoneNumber(
         startCharacter: Int,
         endCharacter: Int,
+        evidenceStrength: EvidenceStrength,
     ): RecognizedPii =
         RecognizedPii(
             startCharacter = startCharacter,
             endCharacter = endCharacter,
-            evidenceStrength = EvidenceStrength.FORMAT_ONLY,
+            evidenceStrength = evidenceStrength,
             recognizerId = RECOGNIZER_ID,
             recognizerVersion = RECOGNIZER_VERSION,
         )
@@ -98,48 +109,78 @@ internal object PhoneNumberRecognizer : PiiRecognizer {
     private fun Char.isPhoneCandidateCharacter(): Boolean =
         isAsciiDigit() || isPhoneSeparator() || this == '(' || this == ')'
 
-    /** Returns whether [this] is one of the exact V1 phone separators. */
-    private fun Char.isPhoneSeparator(): Boolean = this == ' ' || this == '-'
-
-    /** Returns whether [this] is an ASCII decimal digit. */
-    private fun Char.isAsciiDigit(): Boolean = this in '0'..'9'
-
     /** Stable rule identifier. */
     private const val RECOGNIZER_ID = "fast.phone_number.ru"
 
-    /** Initial rule version. */
-    private const val RECOGNIZER_VERSION = "1.0.0"
+    /** Rule version including the bounded Unicode separator surface. */
+    private const val RECOGNIZER_VERSION = "1.1.0"
 }
 
 /** Validates one scanner-delimited Russian phone candidate. */
 private object PhoneNumberCandidateValidator {
-    /** Validates prefixes, digit count, separators, optional area-code brackets, and boundaries. */
-    fun isValid(
+    /** Returns the validation basis for a supported prefixed or contextual national candidate. */
+    fun evidenceStrength(
+        payload: String,
+        startCharacter: Int,
+        endCharacter: Int,
+    ): EvidenceStrength? {
+        val form =
+            if (hasBasicCandidateShape(payload, startCharacter, endCharacter)) {
+                classifyForm(payload, startCharacter, endCharacter)
+            } else {
+                null
+            }
+        return if (form == null ||
+            !hasValidSeparators(payload, startCharacter, endCharacter) ||
+            !hasValidAreaCodeParentheses(payload, form.nationalStart, endCharacter)
+        ) {
+            null
+        } else if (form.requiresContext) {
+            EvidenceStrength.CONTEXTUAL.takeIf {
+                BoundedContextMatcher.containsWholeWordOnEitherSide(
+                    payload = payload,
+                    startCharacter = startCharacter,
+                    endCharacter = endCharacter,
+                    codePointLimit = PHONE_CONTEXT_CODE_POINT_LIMIT,
+                    acceptedWords = PHONE_CONTEXT_WORDS,
+                )
+            }
+        } else {
+            EvidenceStrength.FORMAT_ONLY
+        }
+    }
+
+    /** Validates source bounds, digit boundaries, numeric continuations, and separators. */
+    private fun hasBasicCandidateShape(
         payload: String,
         startCharacter: Int,
         endCharacter: Int,
     ): Boolean {
-        val nationalStart = consumePrefix(payload, startCharacter, endCharacter)
-        return endCharacter > startCharacter &&
-            hasDigitBoundaries(payload, startCharacter, endCharacter) &&
-            nationalStart >= 0 &&
-            countDigits(payload, nationalStart, endCharacter) == NATIONAL_NUMBER_DIGITS &&
-            hasValidSeparators(payload, startCharacter, endCharacter) &&
-            hasValidAreaCodeParentheses(payload, nationalStart, endCharacter)
+        val hasBoundedSpan =
+            endCharacter > startCharacter && hasDigitBoundaries(payload, startCharacter, endCharacter)
+        return hasBoundedSpan &&
+            !hasNumericPunctuationContinuation(payload, startCharacter, endCharacter)
     }
 
-    /** Consumes the exact `+7` or `8` prefix and returns the national-number start. */
-    private fun consumePrefix(
+    /** Classifies exact digit counts and identifies the national-number portion. */
+    private fun classifyForm(
         payload: String,
         startCharacter: Int,
         endCharacter: Int,
-    ): Int =
-        when {
-            hasPlusSevenPrefix(payload, startCharacter, endCharacter) ->
-                startCharacter + 2
-            payload[startCharacter] == '8' -> startCharacter + 1
-            else -> -1
+    ): PhoneCandidateForm? {
+        val digitCount = countDigits(payload, startCharacter, endCharacter)
+        return when {
+            hasPlusSevenPrefix(payload, startCharacter, endCharacter) && digitCount == PREFIXED_NUMBER_DIGITS ->
+                PhoneCandidateForm(startCharacter + PHONE_COUNTRY_PREFIX_LENGTH, requiresContext = false)
+            payload[startCharacter] == '8' && digitCount == PREFIXED_NUMBER_DIGITS ->
+                PhoneCandidateForm(startCharacter + 1, requiresContext = false)
+            payload[startCharacter] == '7' && digitCount == PREFIXED_NUMBER_DIGITS ->
+                PhoneCandidateForm(startCharacter + 1, requiresContext = true)
+            payload[startCharacter] != '+' && digitCount == NATIONAL_NUMBER_DIGITS ->
+                PhoneCandidateForm(startCharacter, requiresContext = true)
+            else -> null
         }
+    }
 
     /** Returns whether the candidate begins with the exact `+7` prefix. */
     private fun hasPlusSevenPrefix(
@@ -160,7 +201,7 @@ private object PhoneNumberCandidateValidator {
         (startCharacter == 0 || payload[startCharacter - 1] !in '0'..'9') &&
             (endCharacter == payload.length || payload[endCharacter] !in '0'..'9')
 
-    /** Counts ASCII digits in the national-number portion. */
+    /** Counts ASCII digits in one complete scanner-delimited candidate. */
     private fun countDigits(
         payload: String,
         startCharacter: Int,
@@ -186,7 +227,7 @@ private object PhoneNumberCandidateValidator {
         var valid = true
         var index = startCharacter
         while (valid && index < endCharacter) {
-            if (payload[index] == ' ' || payload[index] == '-') {
+            if (payload[index].isPhoneSeparator()) {
                 val previousIsPart =
                     index > startCharacter &&
                         (payload[index - 1] in '0'..'9' || payload[index - 1] == ')')
@@ -250,7 +291,7 @@ private object PhoneNumberCandidateValidator {
         payload: String,
         startCharacter: Int,
     ): Int =
-        if (payload[startCharacter] == ' ' || payload[startCharacter] == '-') {
+        if (payload[startCharacter].isPhoneSeparator()) {
             startCharacter + 1
         } else {
             startCharacter
@@ -258,6 +299,9 @@ private object PhoneNumberCandidateValidator {
 
     /** Number of digits after the Russian country or trunk prefix. */
     private const val NATIONAL_NUMBER_DIGITS = 10
+
+    /** Total digit count of a country- or trunk-prefixed Russian number. */
+    private const val PREFIXED_NUMBER_DIGITS = 11
 
     /** Required number of digits inside an optional area-code pair. */
     private const val AREA_CODE_DIGITS = 3
@@ -267,5 +311,54 @@ private object PhoneNumberCandidateValidator {
 
     /** Width of the Russian plus-prefixed country prefix. */
     private const val PHONE_COUNTRY_PREFIX_LENGTH = 2
-
 }
+
+/**
+ * Parsed phone form with its national-number start and context requirement.
+ *
+ * @property nationalStart source index where the ten national digits begin.
+ * @property requiresContext whether a bounded phone word must qualify the form.
+ */
+private data class PhoneCandidateForm(
+    val nationalStart: Int,
+    val requiresContext: Boolean,
+)
+
+/** Returns whether this character is one of the supported phone-space separators. */
+private fun Char.isPhoneSpaceSeparator(): Boolean = this == ' ' || this == '\u00A0' || this == '\u2009'
+
+/** Returns whether this character is one of the supported phone-hyphen separators. */
+private fun Char.isPhoneHyphenSeparator(): Boolean =
+    this == '-' || this == '\u2010' || this == '\u2011' || this == '\u2013'
+
+/** Returns whether this character is one supported single phone separator. */
+private fun Char.isPhoneSeparator(): Boolean = isPhoneSpaceSeparator() || isPhoneHyphenSeparator()
+
+/** Rejects a candidate embedded in a timestamp, version, or other punctuated digit run. */
+private fun hasNumericPunctuationContinuation(
+    payload: String,
+    startCharacter: Int,
+    endCharacter: Int,
+): Boolean {
+    val continuesLeft =
+        startCharacter >= 2 &&
+            payload[startCharacter - 1].isNumericPunctuation() &&
+            payload[startCharacter - 2].isAsciiDigit()
+    val continuesRight =
+        endCharacter + 1 < payload.length &&
+            payload[endCharacter].isNumericPunctuation() &&
+            payload[endCharacter + 1].isAsciiDigit()
+    return continuesLeft || continuesRight
+}
+
+/** Returns whether this delimiter commonly continues a structured numeric value. */
+private fun Char.isNumericPunctuation(): Boolean = this == '.' || this == ':' || this == '/'
+
+/** Returns whether this character is an ASCII decimal digit. */
+private fun Char.isAsciiDigit(): Boolean = this in '0'..'9'
+
+/** Maximum Unicode context width on either side of a national phone candidate. */
+private const val PHONE_CONTEXT_CODE_POINT_LIMIT = 32
+
+/** Exact lowercase locale-independent context vocabulary for national phone candidates. */
+private val PHONE_CONTEXT_WORDS = setOf("телефон", "тел", "мобильный", "моб", "phone", "contact")

@@ -1,6 +1,6 @@
 # VIG-10-04: Whitespace-обфускация email
 
-**Статус:** Ready for implementation
+**Статус:** Done
 **Epic:** [EPIC-10](../../epics/epic_10_pii_detection_quality.md)
 **Ветка:** Obfuscation tolerance > email whitespace
 **Зависит от:** [VIG-10-01](issue_10_01_quality_diagnostics.md)
@@ -31,22 +31,22 @@ dot-atom и IDN/DNS проверки, что canonical email.
 
 ## Критерии готовности
 
-- [ ] RED test через `PiiDetector.detect` фиксирует хотя бы по одному gap возле
+- [x] RED test через `PiiDetector.detect` фиксирует хотя бы по одному gap возле
       `@` и domain dot с точными UTF-8 offsets.
-- [ ] Compact canonical email behavior и metadata остаются неизменными.
-- [ ] Допустимые combinations 1..3 spaces распознаются после strict local
+- [x] Compact canonical email behavior и metadata остаются неизменными.
+- [x] Допустимые combinations 1..3 spaces распознаются после strict local
       normalization; четыре и более spaces отклоняются.
-- [ ] Hard negatives покрывают prose `word @ word`, arithmetic-like text,
+- [x] Hard negatives покрывают prose `word @ word`, arithmetic-like text,
       spaced punctuation, invalid local dots, single-label domain и Unicode
       local part.
-- [ ] Scanner не поглощает соседние words и продолжает поиск после invalid
+- [x] Scanner не поглощает соседние words и продолжает поиск после invalid
       obfuscated candidate.
-- [ ] Tuning/evaluation diagnostics показывают рост EMAIL recall, а exact
+- [x] Tuning/evaluation diagnostics показывают рост EMAIL recall, а exact
       precision полного source-aligned report не падает ниже `0.75`.
-- [ ] Алгоритм bounded/linear, поддерживает cancellation и не сохраняет
+- [x] Алгоритм bounded/linear, поддерживает cancellation и не сохраняет
       normalized email вне локальной validation.
-- [ ] `recognizerVersion`, KDoc и canonical corpora обновлены.
-- [ ] Focused tests и `./gradlew build` проходят.
+- [x] `recognizerVersion`, KDoc и canonical corpora обновлены.
+- [x] Focused tests и `./gradlew build` проходят.
 
 ## Test/demo seam
 

@@ -90,13 +90,22 @@ private data class ReportPartition(
     val coverage: ReportPartitionCoverage,
     val metrics: ReportMetrics,
     val diagnostics: RedMadRobotMismatchDiagnostics,
+    val evidenceContributions: List<RedMadRobotEvidenceContribution>,
 )
 
-/** Complete source-aligned views for the full, tuning, and evaluation subsets. */
+/** Complete source- or product-aligned views for the full, tuning, and evaluation subsets. */
 private data class ReportPartitions(
     val full: ReportPartition,
     val tuning: ReportPartition,
     val evaluation: ReportPartition,
+)
+
+/** One versioned product-alignment rule and its pre-scoring aggregate count. */
+private data class ReportProductAdjustment(
+    val id: String,
+    val version: Int,
+    val provenance: String,
+    val count: Int,
 )
 
 /** Complete payload-free content consumed by both report renderers. */
@@ -108,6 +117,9 @@ private data class ReportContent(
     val coverage: ReportCoverage,
     val metrics: ReportMetrics,
     val partitions: ReportPartitions,
+    val productAlignedMetrics: ReportMetrics,
+    val productAlignedPartitions: ReportPartitions,
+    val productAdjustments: List<ReportProductAdjustment>,
     val diagnosticPrivacyFloor: Int,
     val notes: List<String>,
 )
@@ -142,51 +154,29 @@ class RedMadRobotReportWriter {
         scores: RedMadRobotScoreReport,
     ): ReportContent =
         ReportContent(
-            dataset =
-                ReportDataset(
-                    url = RedMadRobotBenchmarkMetadata.DATASET_URL,
-                    revision = RedMadRobotBenchmarkMetadata.REVISION,
-                    sizeBytes = RedMadRobotBenchmarkMetadata.SIZE_BYTES,
-                    sha256 = RedMadRobotBenchmarkMetadata.SHA256,
-                    licenseDeclaration = RedMadRobotBenchmarkMetadata.LICENSE_DECLARATION,
-                    licenseNotice = "Upstream metadata declaration; not a Vigilant legal conclusion.",
-                    attribution = RedMadRobotBenchmarkMetadata.ATTRIBUTION,
-                ),
+            dataset = reportDataset(),
             mapping =
                 RedMadRobotLabelMapping.entries.map { (external, vigilant) ->
                     ReportMapping(external, vigilant.name)
                 },
-            matching =
-                ReportMatching(
-                    exact = "same type and identical startUtf8/endUtf8",
-                    relaxed = "same type and non-empty source-span intersection",
-                    cardinality = "one-to-one maximum-cardinality",
-                    tieBreak = "expected offsets, predicted offsets, then stable source indices",
+            matching = reportMatching(),
+            split = reportSplit(),
+            coverage = reportCoverage(corpus),
+            metrics = reportMetrics(scores.sourceAligned.full),
+            partitions =
+                reportPartitions(
+                    corpus = corpus,
+                    scores = scores.sourceAligned,
+                    expectedSpans = RedMadRobotCase::goldSpans,
                 ),
-            split =
-                ReportSplit(
-                    algorithm = RedMadRobotBenchmarkMetadata.SPLIT_ALGORITHM,
-                    version = RedMadRobotBenchmarkMetadata.SPLIT_VERSION,
-                    salt = RedMadRobotBenchmarkMetadata.SPLIT_SALT,
-                    inputFormat = "UTF-8(salt + NUL + datasetRevision + NUL + caseId)",
-                    evaluationBoundary = RedMadRobotBenchmarkMetadata.SPLIT_EVALUATION_BOUNDARY,
-                    bucketCount = RedMadRobotBenchmarkMetadata.SPLIT_BUCKET_COUNT,
+            productAlignedMetrics = reportMetrics(scores.productAligned.full),
+            productAlignedPartitions =
+                reportPartitions(
+                    corpus = corpus,
+                    scores = scores.productAligned,
+                    expectedSpans = RedMadRobotCase::productAlignedGoldSpans,
                 ),
-            coverage =
-                ReportCoverage(
-                    totalCases = corpus.totalCases,
-                    processedCases = corpus.processedCases.size,
-                    rejectedCases = corpus.rejectedCases.size,
-                    totalEntitySpans = corpus.totalEntitySpans,
-                    mappedEntitySpans = corpus.mappedEntitySpans,
-                    scoredMappedEntitySpans = corpus.scoredMappedEntitySpans,
-                    rejections =
-                        corpus.rejectedCases.map { rejected ->
-                            ReportRejection(rejected.caseId, rejected.reason.name)
-                        },
-                ),
-            metrics = reportMetrics(scores.full),
-            partitions = reportPartitions(corpus, scores),
+            productAdjustments = reportProductAdjustments(scores),
             diagnosticPrivacyFloor = RedMadRobotBenchmarkMetadata.DIAGNOSTIC_PRIVACY_FLOOR,
             notes =
                 listOf(
@@ -195,6 +185,66 @@ class RedMadRobotReportWriter {
                     "Upstream labels are scored as published and do not change Vigilant recognizer contracts.",
                 ),
         )
+
+    /** Builds immutable pinned dataset provenance for both renderers. */
+    private fun reportDataset(): ReportDataset =
+        ReportDataset(
+            url = RedMadRobotBenchmarkMetadata.DATASET_URL,
+            revision = RedMadRobotBenchmarkMetadata.REVISION,
+            sizeBytes = RedMadRobotBenchmarkMetadata.SIZE_BYTES,
+            sha256 = RedMadRobotBenchmarkMetadata.SHA256,
+            licenseDeclaration = RedMadRobotBenchmarkMetadata.LICENSE_DECLARATION,
+            licenseNotice = "Upstream metadata declaration; not a Vigilant legal conclusion.",
+            attribution = RedMadRobotBenchmarkMetadata.ATTRIBUTION,
+        )
+
+    /** Builds unchanged exact and relaxed source matching semantics. */
+    private fun reportMatching(): ReportMatching =
+        ReportMatching(
+            exact = "same type and identical startUtf8/endUtf8",
+            relaxed = "same type and non-empty source-span intersection",
+            cardinality = "one-to-one maximum-cardinality",
+            tieBreak = "expected offsets, predicted offsets, then stable source indices",
+        )
+
+    /** Builds the reproducible frozen split contract. */
+    private fun reportSplit(): ReportSplit =
+        ReportSplit(
+            algorithm = RedMadRobotBenchmarkMetadata.SPLIT_ALGORITHM,
+            version = RedMadRobotBenchmarkMetadata.SPLIT_VERSION,
+            salt = RedMadRobotBenchmarkMetadata.SPLIT_SALT,
+            inputFormat = "UTF-8(salt + NUL + datasetRevision + NUL + caseId)",
+            evaluationBoundary = RedMadRobotBenchmarkMetadata.SPLIT_EVALUATION_BOUNDARY,
+            bucketCount = RedMadRobotBenchmarkMetadata.SPLIT_BUCKET_COUNT,
+        )
+
+    /** Builds source-aligned corpus coverage without changing its established denominator. */
+    private fun reportCoverage(corpus: RedMadRobotCorpus): ReportCoverage =
+        ReportCoverage(
+            totalCases = corpus.totalCases,
+            processedCases = corpus.processedCases.size,
+            rejectedCases = corpus.rejectedCases.size,
+            totalEntitySpans = corpus.totalEntitySpans,
+            mappedEntitySpans = corpus.mappedEntitySpans,
+            scoredMappedEntitySpans = corpus.scoredMappedEntitySpans,
+            rejections =
+                corpus.rejectedCases.map { rejected ->
+                    ReportRejection(rejected.caseId, rejected.reason.name)
+                },
+        )
+
+    /** Builds the complete versioned rule registry with exact pre-scoring counts. */
+    private fun reportProductAdjustments(
+        scores: RedMadRobotScoreReport,
+    ): List<ReportProductAdjustment> =
+        RedMadRobotProductAdjustment.entries.map { adjustment ->
+            ReportProductAdjustment(
+                id = adjustment.name,
+                version = adjustment.ruleVersion,
+                provenance = adjustment.provenance,
+                count = scores.productAlignmentAdjustments.getValue(adjustment),
+            )
+        }
 
     /** Builds the stable machine-readable report without case contents or finding values. */
     private fun json(content: ReportContent): String {
@@ -217,6 +267,14 @@ class RedMadRobotReportWriter {
             },
         )
         root.set<ObjectNode>("partitions", partitionsJson(content.partitions))
+        root.set<ObjectNode>(
+            "sourceAligned",
+            alignmentViewJson(content.metrics, content.partitions),
+        )
+        root.set<ObjectNode>(
+            "productAligned",
+            productAlignmentViewJson(content),
+        )
         root.putArray("notes").apply {
             content.notes.forEach(::add)
         }
@@ -307,6 +365,45 @@ class RedMadRobotReportWriter {
             set<ObjectNode>("evaluation", partitionJson(partitions.evaluation))
         }
 
+    /** Builds one independent alignment view with aggregate, per-type, and partition metrics. */
+    private fun alignmentViewJson(
+        metrics: ReportMetrics,
+        partitions: ReportPartitions,
+    ): ObjectNode =
+        OBJECT_MAPPER.createObjectNode().apply {
+            set<ObjectNode>("metrics", metricsJson(metrics))
+            set<ObjectNode>("partitions", partitionsJson(partitions))
+        }
+
+    /** Builds versioned product adjustments before the independent product-aligned score. */
+    private fun productAlignmentViewJson(content: ReportContent): ObjectNode =
+        OBJECT_MAPPER.createObjectNode().apply {
+            set<ObjectNode>("adjustments", productAdjustmentsJson(content.productAdjustments))
+            set<ObjectNode>("metrics", metricsJson(content.productAlignedMetrics))
+            set<ObjectNode>("partitions", partitionsJson(content.productAlignedPartitions))
+        }
+
+    /** Builds the complete ordered rule registry with exact aggregate counts. */
+    private fun productAdjustmentsJson(adjustments: List<ReportProductAdjustment>): ObjectNode =
+        OBJECT_MAPPER.createObjectNode().apply {
+            put("version", PRODUCT_ALIGNMENT_VERSION)
+            set<ArrayNode>(
+                "rules",
+                OBJECT_MAPPER.createArrayNode().apply {
+                    adjustments.forEach { adjustment ->
+                        add(
+                            OBJECT_MAPPER.createObjectNode().apply {
+                                put("id", adjustment.id)
+                                put("version", adjustment.version)
+                                put("count", adjustment.count)
+                                put("provenance", adjustment.provenance)
+                            },
+                        )
+                    }
+                },
+            )
+        }
+
     /** Builds one scored partition without exposing its case IDs. */
     private fun partitionJson(partition: ReportPartition): ObjectNode =
         OBJECT_MAPPER.createObjectNode().apply {
@@ -319,6 +416,10 @@ class RedMadRobotReportWriter {
             )
             set<ObjectNode>("metrics", metricsJson(partition.metrics))
             set<ObjectNode>("diagnostics", diagnosticsJson(partition.diagnostics))
+            set<ArrayNode>(
+                "evidenceContributions",
+                evidenceContributionsJson(partition.evidenceContributions, OBJECT_MAPPER),
+            )
         }
 
     /** Builds exact and relaxed safe mismatch aggregates without case-level data. */
@@ -393,6 +494,7 @@ class RedMadRobotReportWriter {
             appendIntroduction(content)
             appendFrozenSplit(content)
             appendCoverageAndMetrics(content)
+            appendProductAlignedView(content)
             appendSafeDiagnostics(content)
             content.notes.forEach(::appendLine)
         }
@@ -455,26 +557,52 @@ class RedMadRobotReportWriter {
         appendLine()
         appendLine("Rejected case IDs: ${rejectionSummary(content.coverage.rejections)}.")
         appendLine()
-        appendLine("## Metrics")
+        appendLine("## Source-aligned metrics")
         appendLine()
         appendPartitionMetrics("full", content.partitions.full.metrics)
         appendPartitionMetrics("tuning", content.partitions.tuning.metrics)
         appendPartitionMetrics("evaluation", content.partitions.evaluation.metrics)
+        appendEvidenceContributions("full", content.partitions.full.evidenceContributions)
+        appendEvidenceContributions("tuning", content.partitions.tuning.evidenceContributions)
+        appendEvidenceContributions("evaluation", content.partitions.evaluation.evidenceContributions)
         appendLine()
     }
 
-    /** Appends aggregate mismatch buckets and privacy-filtered type details. */
-    private fun StringBuilder.appendSafeDiagnostics(content: ReportContent) {
-        appendLine("## Safe mismatch diagnostics")
+    /** Appends product rule provenance and its independent aggregate and per-type metrics. */
+    private fun StringBuilder.appendProductAlignedView(content: ReportContent) {
+        appendLine("## Product-aligned view")
         appendLine()
         appendLine(
-            "Privacy floor: `${content.diagnosticPrivacyFloor}` for per-type aggregate categories; " +
-                "bucket totals remain complete.",
+            "Adjustments version `$PRODUCT_ALIGNMENT_VERSION`; counts are computed before scoring.",
         )
         appendLine()
-        appendPartitionDiagnostics("full", content.partitions.full.diagnostics)
-        appendPartitionDiagnostics("tuning", content.partitions.tuning.diagnostics)
-        appendPartitionDiagnostics("evaluation", content.partitions.evaluation.diagnostics)
+        appendLine("| Adjustment | Rule version | Count | Provenance |")
+        appendLine("|---|---:|---:|---|")
+        content.productAdjustments.forEach { adjustment ->
+            appendLine(
+                "| ${adjustment.id} | ${adjustment.version} | ${adjustment.count} | " +
+                    "${adjustment.provenance} |",
+            )
+        }
+        appendLine()
+        appendPartitionMetrics("product-aligned full", content.productAlignedPartitions.full.metrics)
+        appendPartitionMetrics("product-aligned tuning", content.productAlignedPartitions.tuning.metrics)
+        appendPartitionMetrics(
+            "product-aligned evaluation",
+            content.productAlignedPartitions.evaluation.metrics,
+        )
+        appendEvidenceContributions(
+            "product-aligned full",
+            content.productAlignedPartitions.full.evidenceContributions,
+        )
+        appendEvidenceContributions(
+            "product-aligned tuning",
+            content.productAlignedPartitions.tuning.evidenceContributions,
+        )
+        appendEvidenceContributions(
+            "product-aligned evaluation",
+            content.productAlignedPartitions.evaluation.evidenceContributions,
+        )
         appendLine()
     }
 
@@ -491,7 +619,8 @@ class RedMadRobotReportWriter {
     /** Creates full and disjoint partition evidence from stable case IDs. */
     private fun reportPartitions(
         corpus: RedMadRobotCorpus,
-        scores: RedMadRobotScoreReport,
+        scores: RedMadRobotAlignmentScoreView,
+        expectedSpans: (RedMadRobotCase) -> List<RedMadRobotGoldSpan>,
     ): ReportPartitions {
         val tuningCases =
             corpus.processedCases.filter { benchmarkCase ->
@@ -502,10 +631,30 @@ class RedMadRobotReportWriter {
                 RedMadRobotFrozenSplit.partition(benchmarkCase.caseId) == RedMadRobotPartition.EVALUATION
             }
         return ReportPartitions(
-            full = reportPartition(corpus.processedCases, scores.full, scores.fullDiagnostics),
-            tuning = reportPartition(tuningCases, scores.tuning, scores.tuningDiagnostics),
+            full =
+                reportPartition(
+                    corpus.processedCases,
+                    scores.full,
+                    scores.fullDiagnostics,
+                    scores.fullEvidenceContributions,
+                    expectedSpans,
+                ),
+            tuning =
+                reportPartition(
+                    tuningCases,
+                    scores.tuning,
+                    scores.tuningDiagnostics,
+                    scores.tuningEvidenceContributions,
+                    expectedSpans,
+                ),
             evaluation =
-                reportPartition(evaluationCases, scores.evaluation, scores.evaluationDiagnostics),
+                reportPartition(
+                    evaluationCases,
+                    scores.evaluation,
+                    scores.evaluationDiagnostics,
+                    scores.evaluationEvidenceContributions,
+                    expectedSpans,
+                ),
         )
     }
 
@@ -514,15 +663,18 @@ class RedMadRobotReportWriter {
         cases: List<RedMadRobotCase>,
         scores: PiiQualityScoreReport,
         diagnostics: RedMadRobotMismatchDiagnostics,
+        evidenceContributions: List<RedMadRobotEvidenceContribution>,
+        expectedSpans: (RedMadRobotCase) -> List<RedMadRobotGoldSpan>,
     ): ReportPartition =
         ReportPartition(
             coverage =
                 ReportPartitionCoverage(
                     processedCases = cases.size,
-                    scoredMappedEntitySpans = cases.sumOf { benchmarkCase -> benchmarkCase.goldSpans.size },
+                    scoredMappedEntitySpans = cases.sumOf { benchmarkCase -> expectedSpans(benchmarkCase).size },
                 ),
             metrics = reportMetrics(scores),
             diagnostics = diagnostics,
+            evidenceContributions = evidenceContributions,
         )
 
     /** Formats the explicit label mapping in deterministic source order. */
@@ -551,92 +703,155 @@ class RedMadRobotReportWriter {
             .joinToString { rejected -> "`${rejected.caseId}` (${rejected.reason})" }
             .ifEmpty { "none" }
 
-    /** Appends exact and relaxed Markdown table rows for one type or aggregate. */
-    private fun StringBuilder.appendMetricRows(
-        type: String,
-        exact: RedMadRobotMetric,
-        relaxed: RedMadRobotMetric,
-    ) {
-        appendMetricRow(type, "exact", exact)
-        appendMetricRow(type, "relaxed", relaxed)
-    }
-
-    /** Appends the complete aggregate and per-type table for one scored partition. */
-    private fun StringBuilder.appendPartitionMetrics(
-        name: String,
-        metrics: ReportMetrics,
-    ) {
-        appendLine("### $name")
-        appendLine()
-        appendLine("| Type | Mode | TP | FP | FN | Precision | Recall | F1 |")
-        appendLine("|---|---|---:|---:|---:|---:|---:|---:|")
-        appendMetricRows("ALL", metrics.aggregate.exact, metrics.aggregate.relaxed)
-        metrics.perType.forEach { score ->
-            appendMetricRows(score.type, score.exact, score.relaxed)
-        }
-        appendLine()
-    }
-
-    /** Appends aggregate-only reason codes for both matching modes in one partition. */
-    private fun StringBuilder.appendPartitionDiagnostics(
-        name: String,
-        diagnostics: RedMadRobotMismatchDiagnostics,
-    ) {
-        appendLine("### $name")
-        appendLine()
-        appendLine("| Mode | Bucket | Count |")
-        appendLine("|---|---|---:|")
-        appendDiagnosticRows("exact", diagnostics.exact)
-        appendDiagnosticRows("relaxed", diagnostics.relaxed)
-        appendLine()
-        appendLine("Per-type categories at or above the privacy floor:")
-        appendLine()
-        appendLine("| Mode | Bucket | Type | Count |")
-        appendLine("|---|---|---|---:|")
-        appendDiagnosticTypeRows("exact", diagnostics.exact.byType)
-        appendDiagnosticTypeRows("relaxed", diagnostics.relaxed.byType)
-        appendLine()
-    }
-
-    /** Appends all required stable bucket totals for one matching mode. */
-    private fun StringBuilder.appendDiagnosticRows(
-        mode: String,
-        diagnostics: RedMadRobotMismatchModeDiagnostics,
-    ) {
-        diagnostics.totals.forEach { (bucket, count) ->
-            appendLine("| $mode | ${bucket.name} | $count |")
-        }
-    }
-
-    /** Appends only privacy-filtered per-type categories for one matching mode. */
-    private fun StringBuilder.appendDiagnosticTypeRows(
-        mode: String,
-        counts: List<RedMadRobotMismatchTypeCount>,
-    ) {
-        counts.forEach { count ->
-            appendLine("| $mode | ${count.bucket.name} | ${count.type.name} | ${count.count} |")
-        }
-    }
-
-    /** Appends one Markdown metric row using locale-independent decimal formatting. */
-    private fun StringBuilder.appendMetricRow(
-        type: String,
-        mode: String,
-        metric: RedMadRobotMetric,
-    ) {
-        val ratios =
-            "${format(metric.precision)} | ${format(metric.recall)} | ${format(metric.f1)}"
-        appendLine(
-            "| $type | $mode | ${metric.counts.truePositives} | ${metric.counts.falsePositives} | " +
-                "${metric.counts.falseNegatives} | $ratios |",
-        )
-    }
-
-    /** Formats one metric ratio reproducibly. */
-    private fun format(value: Double): String = String.format(Locale.ROOT, "%.6f", value)
-
     /** Holds deterministic serialization support. */
     private companion object {
         val OBJECT_MAPPER = ObjectMapper()
+        const val PRODUCT_ALIGNMENT_VERSION = 1
     }
 }
+
+/** Builds aggregate prediction outcomes for each observed type and evidence path. */
+private fun evidenceContributionsJson(
+    contributions: List<RedMadRobotEvidenceContribution>,
+    objectMapper: ObjectMapper,
+): ArrayNode =
+    objectMapper.createArrayNode().apply {
+        contributions.forEach { contribution ->
+            add(
+                objectMapper.createObjectNode().apply {
+                    put("type", contribution.type.name)
+                    put("evidenceStrength", contribution.evidenceStrength.name)
+                    put("predictions", contribution.predictions)
+                    put("exactMatches", contribution.exactMatches)
+                    put("exactFalsePositives", contribution.exactFalsePositives)
+                    put("relaxedMatches", contribution.relaxedMatches)
+                    put("relaxedFalsePositives", contribution.relaxedFalsePositives)
+                },
+            )
+        }
+    }
+
+/** Appends payload-free aggregate outcomes for each observed type and evidence path. */
+private fun StringBuilder.appendEvidenceContributions(
+    name: String,
+    contributions: List<RedMadRobotEvidenceContribution>,
+) {
+    appendLine("### $name evidence contributions")
+    appendLine()
+    appendLine("| Type | Evidence | Predictions | Exact matches | Exact FP | Relaxed matches | Relaxed FP |")
+    appendLine("|---|---|---:|---:|---:|---:|---:|")
+    contributions.forEach { contribution ->
+        appendLine(
+            "| ${contribution.type.name} | ${contribution.evidenceStrength.name} | " +
+                "${contribution.predictions} | ${contribution.exactMatches} | " +
+                "${contribution.exactFalsePositives} | ${contribution.relaxedMatches} | " +
+                "${contribution.relaxedFalsePositives} |",
+        )
+    }
+    appendLine()
+}
+
+/** Appends aggregate mismatch buckets and privacy-filtered type details. */
+private fun StringBuilder.appendSafeDiagnostics(content: ReportContent) {
+    appendLine("## Safe mismatch diagnostics")
+    appendLine()
+    appendLine(
+        "Privacy floor: `${content.diagnosticPrivacyFloor}` for per-type aggregate categories; " +
+            "bucket totals remain complete.",
+    )
+    appendLine()
+    appendPartitionDiagnostics("full", content.partitions.full.diagnostics)
+    appendPartitionDiagnostics("tuning", content.partitions.tuning.diagnostics)
+    appendPartitionDiagnostics("evaluation", content.partitions.evaluation.diagnostics)
+    appendPartitionDiagnostics("product-aligned full", content.productAlignedPartitions.full.diagnostics)
+    appendPartitionDiagnostics("product-aligned tuning", content.productAlignedPartitions.tuning.diagnostics)
+    appendPartitionDiagnostics(
+        "product-aligned evaluation",
+        content.productAlignedPartitions.evaluation.diagnostics,
+    )
+    appendLine()
+}
+
+/** Appends exact and relaxed Markdown table rows for one type or aggregate. */
+private fun StringBuilder.appendMetricRows(
+    type: String,
+    exact: RedMadRobotMetric,
+    relaxed: RedMadRobotMetric,
+) {
+    appendMetricRow(type, "exact", exact)
+    appendMetricRow(type, "relaxed", relaxed)
+}
+
+/** Appends the complete aggregate and per-type table for one scored partition. */
+private fun StringBuilder.appendPartitionMetrics(
+    name: String,
+    metrics: ReportMetrics,
+) {
+    appendLine("### $name")
+    appendLine()
+    appendLine("| Type | Mode | TP | FP | FN | Precision | Recall | F1 |")
+    appendLine("|---|---|---:|---:|---:|---:|---:|---:|")
+    appendMetricRows("ALL", metrics.aggregate.exact, metrics.aggregate.relaxed)
+    metrics.perType.forEach { score ->
+        appendMetricRows(score.type, score.exact, score.relaxed)
+    }
+    appendLine()
+}
+
+/** Appends aggregate-only reason codes for both matching modes in one partition. */
+private fun StringBuilder.appendPartitionDiagnostics(
+    name: String,
+    diagnostics: RedMadRobotMismatchDiagnostics,
+) {
+    appendLine("### $name")
+    appendLine()
+    appendLine("| Mode | Bucket | Count |")
+    appendLine("|---|---|---:|")
+    appendDiagnosticRows("exact", diagnostics.exact)
+    appendDiagnosticRows("relaxed", diagnostics.relaxed)
+    appendLine()
+    appendLine("Per-type categories at or above the privacy floor:")
+    appendLine()
+    appendLine("| Mode | Bucket | Type | Count |")
+    appendLine("|---|---|---|---:|")
+    appendDiagnosticTypeRows("exact", diagnostics.exact.byType)
+    appendDiagnosticTypeRows("relaxed", diagnostics.relaxed.byType)
+    appendLine()
+}
+
+/** Appends all required stable bucket totals for one matching mode. */
+private fun StringBuilder.appendDiagnosticRows(
+    mode: String,
+    diagnostics: RedMadRobotMismatchModeDiagnostics,
+) {
+    diagnostics.totals.forEach { (bucket, count) ->
+        appendLine("| $mode | ${bucket.name} | $count |")
+    }
+}
+
+/** Appends only privacy-filtered per-type categories for one matching mode. */
+private fun StringBuilder.appendDiagnosticTypeRows(
+    mode: String,
+    counts: List<RedMadRobotMismatchTypeCount>,
+) {
+    counts.forEach { count ->
+        appendLine("| $mode | ${count.bucket.name} | ${count.type.name} | ${count.count} |")
+    }
+}
+
+/** Appends one Markdown metric row using locale-independent decimal formatting. */
+private fun StringBuilder.appendMetricRow(
+    type: String,
+    mode: String,
+    metric: RedMadRobotMetric,
+) {
+    val ratios =
+        "${formatMetric(metric.precision)} | ${formatMetric(metric.recall)} | ${formatMetric(metric.f1)}"
+    appendLine(
+        "| $type | $mode | ${metric.counts.truePositives} | ${metric.counts.falsePositives} | " +
+            "${metric.counts.falseNegatives} | $ratios |",
+    )
+}
+
+/** Formats one metric ratio reproducibly. */
+private fun formatMetric(value: Double): String = String.format(Locale.ROOT, "%.6f", value)

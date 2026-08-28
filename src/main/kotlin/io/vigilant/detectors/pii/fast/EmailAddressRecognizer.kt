@@ -26,10 +26,20 @@ internal object EmailAddressRecognizer : PiiRecognizer {
             }
             cancellationCheckpoint()
 
-            val startCharacter = findLocalPartStart(payload, atCharacter)
-            val endCharacter = findDomainEnd(payload, atCharacter + 1)
-            if (EmailAddressCandidateValidator.isValid(payload, startCharacter, atCharacter, endCharacter)) {
-                recognitions += recognizedEmail(startCharacter, endCharacter)
+            val beforeAtGap = asciiSpaceGapBefore(payload, atCharacter)
+            val afterAtGap = asciiSpaceGapAfter(payload, atCharacter + 1)
+            val startCharacter = findLocalPartStart(payload, beforeAtGap.boundary)
+            val domain = findDomainCandidate(payload, afterAtGap.boundary)
+            val validGaps = beforeAtGap.isValid && afterAtGap.isValid && domain.hasValidGaps
+            if (validGaps &&
+                EmailAddressCandidateValidator.isValid(
+                    payload,
+                    startCharacter,
+                    beforeAtGap.boundary,
+                    domain,
+                )
+            ) {
+                recognitions += recognizedEmail(startCharacter, domain.endCharacter)
                 if (stopOnFirst) {
                     return recognitions
                 }
@@ -43,29 +53,56 @@ internal object EmailAddressRecognizer : PiiRecognizer {
     /** Finds the start of the maximal local-part character run before an at sign. */
     private fun findLocalPartStart(
         payload: String,
-        atCharacter: Int,
+        localEnd: Int,
     ): Int {
-        var startCharacter = atCharacter
+        var startCharacter = localEnd
         while (startCharacter > 0 && isLocalPartCharacter(payload[startCharacter - 1])) {
             startCharacter -= 1
         }
         return startCharacter
     }
 
-    /** Finds the end of the maximal DNS or IDN character run after an at sign. */
-    private fun findDomainEnd(
+    /** Scans a DNS or IDN domain while removing only bounded spaces around its dots. */
+    private fun findDomainCandidate(
         payload: String,
         domainStart: Int,
-    ): Int {
+    ): EmailDomainCandidate {
+        val normalized = StringBuilder()
+        var index = domainStart
         var endCharacter = domainStart
-        while (endCharacter < payload.length) {
-            val codePoint = payload.codePointAt(endCharacter)
-            if (!isDomainCandidateCodePoint(codePoint)) {
-                break
+        var hasValidGaps = true
+        var isScanning = true
+        while (index < payload.length && hasValidGaps && isScanning) {
+            val codePoint = payload.codePointAt(index)
+            when {
+                codePoint in DOMAIN_DOT_CODE_POINTS -> {
+                    normalized.appendCodePoint(codePoint)
+                    index += Character.charCount(codePoint)
+                    val afterDotGap = asciiSpaceGapAfter(payload, index)
+                    hasValidGaps = hasValidGaps && afterDotGap.isValid
+                    index = afterDotGap.boundary
+                    endCharacter = index
+                }
+                codePoint == ASCII_SPACE_CODE_POINT -> {
+                    val beforeDotGap = asciiSpaceGapAfter(payload, index)
+                    if (beforeDotGap.boundary >= payload.length ||
+                        payload.codePointAt(beforeDotGap.boundary) !in DOMAIN_DOT_CODE_POINTS
+                    ) {
+                        isScanning = false
+                    } else {
+                        hasValidGaps = beforeDotGap.isValid
+                        index = beforeDotGap.boundary
+                    }
+                }
+                isDomainCandidateCodePoint(codePoint) -> {
+                    normalized.appendCodePoint(codePoint)
+                    index += Character.charCount(codePoint)
+                    endCharacter = index
+                }
+                else -> isScanning = false
             }
-            endCharacter += Character.charCount(codePoint)
         }
-        return endCharacter
+        return EmailDomainCandidate(endCharacter, normalized.toString(), hasValidGaps)
     }
 
     /** Creates the stable internal recognition metadata for one supported address. */
@@ -83,15 +120,15 @@ internal object EmailAddressRecognizer : PiiRecognizer {
 
     /** Returns whether [character] belongs to the supported ASCII dot-atom subset. */
     private fun isLocalPartCharacter(character: Char): Boolean =
-        character.isAsciiLetterOrDigit() || character in LOCAL_PART_SYMBOLS
+        character.isAsciiLetterOrDigit() || character in EMAIL_LOCAL_PART_SYMBOLS
 
     /** Returns whether [codePoint] can occur inside a DNS or IDN domain candidate. */
     private fun isDomainCandidateCodePoint(codePoint: Int): Boolean {
         val codePointType = Character.getType(codePoint)
         return when {
-            codePoint <= MAX_ASCII_CODE_POINT -> isAsciiDomainCodePoint(codePoint)
+            codePoint <= MAX_EMAIL_ASCII_CODE_POINT -> isAsciiDomainCodePoint(codePoint)
             Character.isLetterOrDigit(codePoint) -> true
-            codePointType in UNICODE_MARK_TYPES -> true
+            codePointType in EMAIL_UNICODE_MARK_TYPES -> true
             codePoint in DOMAIN_DOT_CODE_POINTS -> true
             codePointType in UNICODE_DOMAIN_DELIMITER_TYPES -> false
             else -> doesNotMapToAsciiDelimiter(codePoint)
@@ -114,7 +151,7 @@ internal object EmailAddressRecognizer : PiiRecognizer {
                 Normalizer.Form.NFKC,
             )
         return compatibilityMapping.none { character ->
-            character.code <= MAX_ASCII_CODE_POINT && !isAsciiDomainCodePoint(character.code)
+            character.code <= MAX_EMAIL_ASCII_CODE_POINT && !isAsciiDomainCodePoint(character.code)
         }
     }
 
@@ -122,28 +159,17 @@ internal object EmailAddressRecognizer : PiiRecognizer {
     private fun Char.isAsciiLetterOrDigit(): Boolean =
         this in 'a'..'z' || this in 'A'..'Z' || this in '0'..'9'
 
-    /** Supported non-alphanumeric dot-atom characters. */
-    private const val LOCAL_PART_SYMBOLS = "!#\$%&'*+/=?^_`{|}~.-"
-
     /** ASCII hyphen used inside DNS and IDN labels. */
     private const val HYPHEN_CODE_POINT = '-'.code
-
-    /** Largest ASCII code point. */
-    private const val MAX_ASCII_CODE_POINT = 0x7F
 
     /** Stable rule identifier. */
     private const val RECOGNIZER_ID = "fast.email_address"
 
-    /** Initial rule version. */
-    private const val RECOGNIZER_VERSION = "1.0.0"
+    /** Rule version including bounded ASCII-space obfuscation gaps. */
+    private const val RECOGNIZER_VERSION = "1.1.0"
 
-    /** Unicode character categories that may extend an IDN label. */
-    private val UNICODE_MARK_TYPES =
-        setOf(
-            Character.NON_SPACING_MARK.toInt(),
-            Character.COMBINING_SPACING_MARK.toInt(),
-            Character.ENCLOSING_MARK.toInt(),
-        )
+    /** ASCII space allowed only in the versioned obfuscation positions. */
+    private const val ASCII_SPACE_CODE_POINT = ' '.code
 
     /** Unicode categories that always delimit rather than extend an IDN candidate. */
     private val UNICODE_DOMAIN_DELIMITER_TYPES =
@@ -186,20 +212,42 @@ private object EmailAddressCandidateValidator {
     fun isValid(
         payload: String,
         startCharacter: Int,
-        atCharacter: Int,
-        endCharacter: Int,
+        localEnd: Int,
+        domain: EmailDomainCandidate,
     ): Boolean {
-        val localLength = atCharacter - startCharacter
+        val localLength = localEnd - startCharacter
         val asciiDomain =
-            if (localLength in MIN_LOCAL_LENGTH..MAX_LOCAL_LENGTH && endCharacter > atCharacter + 1) {
-                toAsciiDomain(payload.substring(atCharacter + 1, endCharacter))
+            if (localLength in MIN_LOCAL_LENGTH..MAX_LOCAL_LENGTH && domain.normalized.isNotEmpty()) {
+                toAsciiDomain(domain.normalized)
             } else {
                 null
             }
-        return asciiDomain != null &&
-            localLength + 1 + asciiDomain.length <= MAX_NORMALIZED_EMAIL_LENGTH &&
-            hasValidLocalPartDots(payload, startCharacter, atCharacter) &&
-            hasValidAsciiDomainLabels(asciiDomain)
+        if (asciiDomain == null) {
+            return false
+        }
+        val hasValidLength = localLength + 1 + asciiDomain.length <= MAX_NORMALIZED_EMAIL_LENGTH
+        val hasValidLocalPart =
+            hasValidLocalPartBoundary(payload, startCharacter) &&
+                hasValidLocalPartDots(payload, startCharacter, localEnd)
+        return hasValidLength && hasValidLocalPart && hasValidAsciiDomainLabels(asciiDomain)
+    }
+
+    /** Rejects suffix matches cut out of spaced punctuation or a Unicode local part. */
+    private fun hasValidLocalPartBoundary(
+        payload: String,
+        startCharacter: Int,
+    ): Boolean {
+        if (startCharacter == 0) {
+            return true
+        }
+        val previousCodePoint = payload.codePointBefore(startCharacter)
+        val followsUnicodeLocalPart = previousCodePoint.isUnicodeLocalPartContinuation()
+        val precedingGap = asciiSpaceGapBefore(payload, startCharacter)
+        val followsSpacedLocalSymbol =
+            precedingGap.length > 0 &&
+                precedingGap.boundary > 0 &&
+                payload[precedingGap.boundary - 1] in EMAIL_LOCAL_PART_SYMBOLS
+        return !followsUnicodeLocalPart && !followsSpacedLocalSymbol
     }
 
     /** Converts a Unicode domain through Java IDN using strict STD3 ASCII rules. */
@@ -214,11 +262,11 @@ private object EmailAddressCandidateValidator {
     private fun hasValidLocalPartDots(
         payload: String,
         startCharacter: Int,
-        atCharacter: Int,
+        localEnd: Int,
     ): Boolean {
-        var valid = payload[startCharacter] != '.' && payload[atCharacter - 1] != '.'
+        var valid = payload[startCharacter] != '.' && payload[localEnd - 1] != '.'
         var index = startCharacter + 1
-        while (valid && index < atCharacter) {
+        while (valid && index < localEnd) {
             valid = payload[index] != '.' || payload[index - 1] != '.'
             index += 1
         }
@@ -263,4 +311,81 @@ private object EmailAddressCandidateValidator {
 
     /** Largest supported normalized email length. */
     private const val MAX_NORMALIZED_EMAIL_LENGTH = 254
+}
+
+/**
+ * One bounded run of ASCII spaces adjacent to an allowed email separator.
+ *
+ * @property boundary source boundary on the far side of the scanned spaces.
+ * @property length number of scanned ASCII spaces.
+ */
+private data class EmailAsciiSpaceGap(
+    val boundary: Int,
+    val length: Int,
+) {
+    /** Returns whether the gap contains at most the versioned maximum of three spaces. */
+    val isValid: Boolean
+        get() = length <= MAX_EMAIL_SPACE_GAP
+}
+
+/**
+ * Locally normalized domain and its exact original source boundary.
+ *
+ * @property endCharacter exclusive original-source boundary of the domain.
+ * @property normalized domain with only supported dot-adjacent gaps removed.
+ * @property hasValidGaps whether every encountered internal gap contains at most three spaces.
+ */
+private data class EmailDomainCandidate(
+    val endCharacter: Int,
+    val normalized: String,
+    val hasValidGaps: Boolean,
+)
+
+/** Scans the complete ASCII-space run immediately before [boundary]. */
+private fun asciiSpaceGapBefore(
+    payload: String,
+    boundary: Int,
+): EmailAsciiSpaceGap {
+    var index = boundary
+    while (index > 0 && payload[index - 1] == ' ') {
+        index -= 1
+    }
+    return EmailAsciiSpaceGap(index, boundary - index)
+}
+
+/** Scans the complete ASCII-space run beginning at [boundary]. */
+private fun asciiSpaceGapAfter(
+    payload: String,
+    boundary: Int,
+): EmailAsciiSpaceGap {
+    var index = boundary
+    while (index < payload.length && payload[index] == ' ') {
+        index += 1
+    }
+    return EmailAsciiSpaceGap(index, index - boundary)
+}
+
+/** Maximum count of ASCII spaces in one supported email obfuscation gap. */
+private const val MAX_EMAIL_SPACE_GAP = 3
+
+/** Supported non-alphanumeric dot-atom characters. */
+private const val EMAIL_LOCAL_PART_SYMBOLS = "!#\$%&'*+/=?^_`{|}~.-"
+
+/** Largest ASCII code point used by email scanner boundary checks. */
+private const val MAX_EMAIL_ASCII_CODE_POINT = 0x7F
+
+/** Unicode character categories that may extend an IDN label or unsupported local part. */
+private val EMAIL_UNICODE_MARK_TYPES =
+    setOf(
+        Character.NON_SPACING_MARK.toInt(),
+        Character.COMBINING_SPACING_MARK.toInt(),
+        Character.ENCLOSING_MARK.toInt(),
+    )
+
+/** Returns whether a non-ASCII code point could continue an unsupported Unicode local part. */
+private fun Int.isUnicodeLocalPartContinuation(): Boolean {
+    val characterType = Character.getType(this)
+    val isUnicodeLetterOrDigit = this > MAX_EMAIL_ASCII_CODE_POINT && Character.isLetterOrDigit(this)
+    val isUnicodeMark = this > MAX_EMAIL_ASCII_CODE_POINT && characterType in EMAIL_UNICODE_MARK_TYPES
+    return isUnicodeLetterOrDigit || isUnicodeMark
 }

@@ -2,7 +2,7 @@
 
 **ID:** `EPIC-10`
 **Тип:** Epic
-**Статус:** In progress
+**Статус:** Done
 **Приоритет:** High
 **Суммарная оценка:** 21-29 инженерных дней
 **Связанные требования:** `MVP-15`, `MVP-19`
@@ -54,20 +54,21 @@ EPIC-10 PII detection quality
 
 - [x] [VIG-10-01: Safe quality diagnostics и frozen evaluation split](../issues/epic_10/issue_10_01_quality_diagnostics.md) - `Done`
 - [x] [VIG-10-02: IP перед завершающей пунктуацией](../issues/epic_10/issue_10_02_ip_candidate_boundaries.md) - `Done`
-- [ ] [VIG-10-03: Product-aligned external quality report](../issues/epic_10/issue_10_03_product_aligned_report.md) - `Ready for implementation`
-- [ ] [VIG-10-04: Whitespace-обфускация email](../issues/epic_10/issue_10_04_email_obfuscation.md) - `Ready for implementation`
-- [ ] [VIG-10-05: Расширенные формы российских телефонов](../issues/epic_10/issue_10_05_phone_surfaces.md) - `Ready for implementation`
-- [ ] [VIG-10-06: Contextual fallback для СНИЛС](../issues/epic_10/issue_10_06_snils_contextual.md) - `Ready for implementation`
-- [ ] [VIG-10-07: Contextual fallback для ОМС](../issues/epic_10/issue_10_07_oms_contextual.md) - `Ready for implementation`
-- [ ] [VIG-10-08: Итоговая quality и performance qualification](../issues/epic_10/issue_10_08_quality_qualification.md) - `Ready for implementation`
+- [x] [VIG-10-03: Product-aligned external quality report](../issues/epic_10/issue_10_03_product_aligned_report.md) - `Done`
+- [x] [VIG-10-04: Whitespace-обфускация email](../issues/epic_10/issue_10_04_email_obfuscation.md) - `Done`
+- [x] [VIG-10-05: Расширенные формы российских телефонов](../issues/epic_10/issue_10_05_phone_surfaces.md) - `Done`
+- [x] [VIG-10-06: Contextual fallback для СНИЛС](../issues/epic_10/issue_10_06_snils_contextual.md) - `Done`
+- [x] [VIG-10-07: Contextual fallback для ОМС](../issues/epic_10/issue_10_07_oms_contextual.md) - `Done`
+- [x] [VIG-10-08: Итоговая quality и performance qualification](../issues/epic_10/issue_10_08_quality_qualification.md) - `Done`
 
-VIG-10-01 и VIG-10-02 завершены; VIG-10-03..07 остаются в frontier после
-frozen split, safe diagnostics и boundary hardening. VIG-10-08 зависит от всех
-предыдущих issues и от JMH baseline VIG-02-15.
+VIG-10-01..08 завершены; frozen split, safe diagnostics, product-aligned
+report, boundary hardening, format-preserving surfaces, оба contextual
+checksum fallback и финальная qualification готовы. Source-aligned quality,
+canonical corpus и paired JMH gates подтверждены на baseline VIG-02-15.
 
-Предпочтительный порядок после VIG-10-01, не являющийся блокировкой:
-VIG-10-04 и VIG-10-05 до contextual checksum fallbacks, поскольку
-format-preserving recall имеет меньший false-positive risk.
+Обе format-preserving leaves VIG-10-04 и VIG-10-05 завершены до contextual
+checksum fallbacks, поскольку format-preserving recall имеет меньший
+false-positive risk.
 
 ## Цель
 

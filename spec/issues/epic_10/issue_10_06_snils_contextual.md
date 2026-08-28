@@ -1,6 +1,6 @@
 # VIG-10-06: Contextual fallback для СНИЛС
 
-**Статус:** Ready for implementation
+**Статус:** Done
 **Epic:** [EPIC-10](../../epics/epic_10_pii_detection_quality.md)
 **Ветка:** Contextual recovery > SNILS
 **Зависит от:** [VIG-10-01](issue_10_01_quality_diagnostics.md)
@@ -31,23 +31,23 @@
 
 ## Критерии готовности
 
-- [ ] RED tests через `PiiDetector.detect` фиксируют valid alternate separator
+- [x] RED tests через `PiiDetector.detect` фиксируют valid alternate separator
       и invalid-checksum candidate под сильным context.
-- [ ] Existing checksum/threshold rules и `VALIDATED` evidence не меняются для
+- [x] Existing checksum/threshold rules и `VALIDATED` evidence не меняются для
       V1 forms.
-- [ ] Один и тот же span не возвращается одновременно как `VALIDATED` и
+- [x] Один и тот же span не возвращается одновременно как `VALIDATED` и
       `CONTEXTUAL`; validated path имеет приоритет.
-- [ ] Standalone invalid-checksum 11-digit value, repeated digits, weak/partial
+- [x] Standalone invalid-checksum 11-digit value, repeated digits, weak/partial
       keyword и context за пределом окна остаются hard negatives.
-- [ ] Mixed payload с invalid contextual candidate и последующим valid SNILS
+- [x] Mixed payload с invalid contextual candidate и последующим valid SNILS
       возвращает оба findings в canonical order.
-- [ ] Exact UTF-8 offsets включают внутренние separators и исключают context.
-- [ ] Tuning/evaluation diagnostics показывают вклад validated и contextual
+- [x] Exact UTF-8 offsets включают внутренние separators и исключают context.
+- [x] Tuning/evaluation diagnostics показывают вклад validated и contextual
       paths отдельно; aggregate exact precision не падает ниже epic floor.
-- [ ] Scanner bounded/linear, cancellation и no-retained-payload invariants
+- [x] Scanner bounded/linear, cancellation и no-retained-payload invariants
       сохраняются.
-- [ ] `recognizerVersion`, KDoc и canonical corpora обновлены.
-- [ ] Focused tests и `./gradlew build` проходят.
+- [x] `recognizerVersion`, KDoc и canonical corpora обновлены.
+- [x] Focused tests и `./gradlew build` проходят.
 
 ## Test/demo seam
 

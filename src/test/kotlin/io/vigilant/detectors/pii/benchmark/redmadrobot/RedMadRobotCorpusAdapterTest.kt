@@ -9,6 +9,139 @@ import kotlin.test.assertFailsWith
 
 /** Focused behavior tests for the external RedMadRobot corpus adapter. */
 class RedMadRobotCorpusAdapterTest {
+    /** Keeps source INN labels intact while excluding only ten-digit legal-entity INNs from product scoring. */
+    @Test
+    fun `product alignment classifies only ten digit INN as taxonomy mismatch`() {
+        val csv =
+            corpusCsv(
+                text = "1234567890 123456789012",
+                tokens = """["1234567890", "123456789012"]""",
+                tags = """["B-INN", "B-INN"]""",
+            )
+
+        val benchmarkCase =
+            RedMadRobotCorpusAdapter()
+                .read(ByteArrayInputStream(csv.toByteArray()))
+                .processedCases
+                .single()
+
+        assertEquals(
+            listOf(
+                RedMadRobotGoldSpan(PiiType.RU_INN, 0L, 10L),
+                RedMadRobotGoldSpan(PiiType.RU_INN, 11L, 23L),
+            ),
+            benchmarkCase.goldSpans,
+        )
+        assertEquals(
+            listOf(RedMadRobotGoldSpan(PiiType.RU_INN, 11L, 23L)),
+            benchmarkCase.productAlignedGoldSpans,
+        )
+        assertEquals(
+            mapOf(
+                RedMadRobotProductAdjustment.LEGAL_ENTITY_INN_TAXONOMY_MISMATCH to 1,
+                RedMadRobotProductAdjustment.PASSPORT_SERIES_NUMBER_MERGE to 0,
+            ),
+            benchmarkCase.productAlignmentAdjustments,
+        )
+    }
+
+    /** Merges only ordered adjacent passport series-number pairs through bounded approved gaps. */
+    @Test
+    fun `product alignment groups passport entities one to one without ambiguous merges`() {
+        val benchmarkCase =
+            RedMadRobotCorpusAdapter()
+                .read(ByteArrayInputStream(passportGroupingCsv().toByteArray()))
+                .processedCases
+                .single()
+
+        assertEquals(11, benchmarkCase.goldSpans.size)
+        assertEquals(9, benchmarkCase.productAlignedGoldSpans.size)
+        assertEquals(
+            listOf(24L, 6L, 4L, 4L, 6L, 11L, 6L, 4L, 6L),
+            benchmarkCase.productAlignedGoldSpans.map { span -> span.endUtf8 - span.startUtf8 },
+        )
+        assertEquals(
+            2,
+            benchmarkCase.productAlignmentAdjustments
+                .getValue(RedMadRobotProductAdjustment.PASSPORT_SERIES_NUMBER_MERGE),
+        )
+    }
+
+    /** Keeps passport entities separate when arbitrary words occupy their gap. */
+    @Test
+    fun `product alignment rejects arbitrary text between passport entities`() {
+        val csv =
+            corpusCsv(
+                text = "4900 произвольный текст 444444",
+                tokens = """["4900", "произвольный", "текст", "444444"]""",
+                tags = """["B-PASSPORT", "O", "O", "B-PASSPORT"]""",
+            )
+
+        val benchmarkCase =
+            RedMadRobotCorpusAdapter()
+                .read(ByteArrayInputStream(csv.toByteArray()))
+                .processedCases
+                .single()
+
+        assertEquals(benchmarkCase.goldSpans, benchmarkCase.productAlignedGoldSpans)
+        assertEquals(
+            0,
+            benchmarkCase.productAlignmentAdjustments
+                .getValue(RedMadRobotProductAdjustment.PASSPORT_SERIES_NUMBER_MERGE),
+        )
+    }
+
+    /** Creates ordered, reversed, ambiguous, and overlong passport gaps. */
+    private fun passportGroupingCsv(): String {
+        val longGap = ".".repeat(33)
+        val text =
+            "4500, номер: 123456 | " +
+                "111111 2222 | " +
+                "4600 номер серия 654321 | " +
+                "4700 111111 222222 | " +
+                "4800${longGap}333333"
+        val tokens =
+            listOf(
+                "4500", ",", "номер", ":", "123456", "|", "111111", "2222", "|", "4600",
+                "номер", "серия", "654321", "|", "4700", "111111", "222222", "|", "4800",
+                longGap, "333333",
+            )
+        val entityTokens =
+            setOf(
+                "4500", "123456", "111111", "2222", "4600", "654321", "4700", "222222",
+                "4800", "333333",
+            )
+        return corpusCsv(
+            text = text,
+            tokens = tokens.joinToString(prefix = "[", postfix = "]") { token -> "\"$token\"" },
+            tags =
+                tokens.joinToString(prefix = "[", postfix = "]") { token ->
+                    if (token in entityTokens) "\"B-PASSPORT\"" else "\"O\""
+                },
+        )
+    }
+
+    /** Retains noisy checksum-labelled entities and non-ASCII or unsupported INN widths unchanged. */
+    @Test
+    fun `product alignment does not remove checksum invalid identifier labels`() {
+        val csv =
+            corpusCsv(
+                text = "1111222233334444 11122233344 1111222233334444 １２３４５６７８９０",
+                tokens =
+                    """["1111222233334444", "11122233344", "1111222233334444", "１２３４５６７８９０"]""",
+                tags = """["B-CREDIT_CARD", "B-SNILS", "B-OMS", "B-INN"]""",
+            )
+
+        val benchmarkCase =
+            RedMadRobotCorpusAdapter()
+                .read(ByteArrayInputStream(csv.toByteArray()))
+                .processedCases
+                .single()
+
+        assertEquals(benchmarkCase.goldSpans, benchmarkCase.productAlignedGoldSpans)
+        assertEquals(0, benchmarkCase.productAlignmentAdjustments.values.sum())
+    }
+
     /** Verifies source-aligned BIO conversion and the explicit EMAIL label mapping. */
     @Test
     fun `mapped BIO entity becomes one source aligned UTF-8 span`() {

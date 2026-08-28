@@ -28,34 +28,136 @@ class RuOmsRecognizerTest {
                     confidence = null,
                     evidenceStrength = EvidenceStrength.VALIDATED,
                     recognizerId = "fast.ru_oms",
-                    recognizerVersion = "1.0.0",
+                    recognizerVersion = "1.1.0",
                 ),
             ),
             findings,
         )
     }
 
-    /** Verifies that the same normative value is accepted in compact form. */
+    /** Verifies every compact and consistently grouped separator layout as validated evidence. */
     @Test
-    fun `valid compact oms number is recognized`() {
+    fun `all supported oms forms are validated`() {
+        val detector = FastPiiDetector()
+
+        supportedOmsForms("1234567890123452").forEach { payload ->
+            val finding = detector.detect(payload, enabledTypes = setOf(PiiType.RU_OMS)).single()
+            assertEquals(EvidenceStrength.VALIDATED, finding.evidenceStrength)
+            assertEquals("1.1.0", finding.recognizerVersion)
+        }
+    }
+
+    /** Recovers one checksum-invalid grouped policy under exact OMS context with UTF-8 offsets. */
+    @Test
+    fun `invalid checksum under oms context produces contextual finding with exact UTF-8 span`() {
         val findings =
             FastPiiDetector().detect(
-                payload = "1234567890123452",
+                payload = "😀 ОМС: 1234‑5678‑9012‑3453!",
+                enabledTypes = setOf(PiiType.RU_OMS),
+            )
+
+        assertEquals(
+            listOf(
+                PiiFinding(
+                    type = PiiType.RU_OMS,
+                    startUtf8 = 13,
+                    endUtf8 = 38,
+                    confidence = null,
+                    evidenceStrength = EvidenceStrength.CONTEXTUAL,
+                    recognizerId = "fast.ru_oms",
+                    recognizerVersion = "1.1.0",
+                ),
+            ),
+            findings,
+        )
+    }
+
+    /** Matches the complete policy phrase on either side at exactly 48 Unicode code points. */
+    @Test
+    fun `policy phrase context matches either side at exact code point limit`() {
+        val phrase = "полис обязательного медицинского страхования"
+        val padding = ".".repeat(48 - phrase.codePointCount(0, phrase.length))
+        val invalid = "1234567890123453"
+        val payloads = listOf(phrase + padding + invalid, invalid + padding + phrase.uppercase())
+
+        payloads.forEach { payload ->
+            assertEquals(
+                EvidenceStrength.CONTEXTUAL,
+                FastPiiDetector()
+                    .detect(payload, enabledTypes = setOf(PiiType.RU_OMS))
+                    .single()
+                    .evidenceStrength,
+            )
+        }
+    }
+
+    /** Rejects weak, partial, reordered, interrupted, distant, repeated, and malformed context cases. */
+    @Test
+    fun `contextual oms hard negatives remain rejected`() {
+        val invalid = "1234567890123453"
+        val phrase = "полис обязательного медицинского страхования"
+        val hardNegatives =
+            listOf(
+                invalid,
+                "ОМС 1111111111111111",
+                "омский $invalid",
+                "мойомс $invalid",
+                "омс_ $invalid",
+                "полис медицинского страхования $invalid",
+                "страхования медицинского обязательного полис $invalid",
+                "полис обязательного частного медицинского страхования $invalid",
+                phrase + ".".repeat(49 - phrase.codePointCount(0, phrase.length)) + invalid,
+                "омс 91234567890123453",
+                "омс ${invalid}9",
+                "омс 1234-5678 9012-3453",
+            )
+
+        hardNegatives.forEachIndexed { caseIndex, payload ->
+            assertEquals(
+                emptyList(),
+                FastPiiDetector().detect(payload, enabledTypes = setOf(PiiType.RU_OMS)),
+                "Unexpected contextual OMS finding for hard-negative case $caseIndex",
+            )
+        }
+    }
+
+    /** Keeps a checksum-valid contextual surface as one validated finding. */
+    @Test
+    fun `valid oms under context remains one validated finding`() {
+        val findings =
+            FastPiiDetector().detect(
+                payload = "полис обязательного медицинского страхования: 1234-5678-9012-3452",
                 enabledTypes = setOf(PiiType.RU_OMS),
             )
 
         assertEquals(1, findings.size)
+        assertEquals(EvidenceStrength.VALIDATED, findings.single().evidenceStrength)
     }
 
-    /** Verifies checksum, exact grouping, ASCII-space, and digit-boundary rejection. */
+    /** Returns contextual invalid and validated OMS findings in canonical source order. */
+    @Test
+    fun `mixed contextual and valid oms findings keep canonical order`() {
+        val findings =
+            FastPiiDetector().detect(
+                payload = "омс 1234567890123453; затем 1234‐5678‐9012‐3452",
+                stopOnFirst = false,
+                enabledTypes = setOf(PiiType.RU_OMS),
+            )
+
+        assertEquals(
+            listOf(EvidenceStrength.CONTEXTUAL, EvidenceStrength.VALIDATED),
+            findings.map(PiiFinding::evidenceStrength),
+        )
+    }
+
+    /** Verifies checksum, consistent grouping, single separators, and digit-boundary rejection. */
     @Test
     fun `invalid and unsupported oms candidates are rejected`() {
         val hardNegatives =
             listOf(
                 "1234567890123453",
-                "1234-5678-9012-3452",
                 "1234  5678 9012 3452",
-                "1234 5678 9012 3452",
+                "1234-5678 9012-3452",
                 "12345 6789 0123 452",
                 "91234567890123452",
                 "12345678901234529",
@@ -126,9 +228,12 @@ class RuOmsRecognizerTest {
         return base + referenceOmsCheckDigit(base)
     }
 
-    /** Returns the compact form and the supported four-by-four ASCII-space layout. */
+    /** Returns the compact form and every consistent four-by-four separator layout. */
     private fun supportedOmsForms(compact: String): List<String> =
-        listOf(compact, compact.chunked(4).joinToString(" "))
+        listOf(compact) +
+            listOf(' ', '-', '\u2010', '\u2011', '\u00A0', '\u2009').map { separator ->
+                compact.chunked(4).joinToString(separator.toString())
+            }
 
     /** Checks the final digit using the independent reference Mod10 construction. */
     private fun isReferenceOms(candidate: String): Boolean =

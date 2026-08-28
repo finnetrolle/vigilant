@@ -268,13 +268,14 @@ request.
 
 ### Stage 5: улучшать quality после первого deploy
 
-После production milestone приоритет переходит к quality leaves EPIC-10.
-[VIG-10-01](issues/epic_10/issue_10_01_quality_diagnostics.md) зафиксировала
-frozen evaluation split и safe diagnostics, а
-[VIG-10-02](issues/epic_10/issue_10_02_ip_candidate_boundaries.md) закрыла
-boundary hardening для IP. Следующие format-preserving leaves - VIG-10-04 и
-VIG-10-05. Текущий общий RedMadRobot exact recall остаётся недостаточным
-основанием для PII enforcement.
+После production milestone quality leaves EPIC-10 завершены. VIG-10-01..07
+добавили frozen evaluation split, safe diagnostics, product-aligned report,
+boundary hardening, format-preserving email/phone surfaces и contextual
+SNILS/OMS fallback. Финальная
+[VIG-10-08](issues/epic_10/issue_10_08_quality_qualification.md) подтвердила
+source-aligned floors, улучшение frozen evaluation, canonical contract и
+paired JMH performance gate. Эти метрики характеризуют detector, но сами по
+себе не включают PII enforcement.
 
 ## Delivery graph
 
@@ -354,9 +355,9 @@ SERVER, INTERNAL и CLIENT spans; application и OTLP JSON records переда�
 через stdout. VIG-18 и Stage 4 закрыты: versioned load report опубликован,
 обязательные safety gates пройдены, `Production PII shadow proxy` достигнут.
 
-Полный repository frontier также сохраняет VIG-01A и VIG-10-03..07. VIG-01A
-проверяет logging-specific PERF-01, а VIG-10-03..07 относятся к Stage 5 и не
-создают отсутствующий HTTP integration path.
+Полный repository frontier сохраняет VIG-01A, которая проверяет
+logging-specific PERF-01. EPIC-10 и её финальная qualification issue VIG-10-08
+имеют status `Done`.
 
 ## Не входит в первый production increment
 

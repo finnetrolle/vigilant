@@ -103,7 +103,7 @@ Issue является листом mind map, если:
 | [EPIC-07: Windowed payload processing](epics/epic_07_windowed_payload_processing.md) | `Done` | 2/2 | 0 дней осталось |
 | [EPIC-08: Lossless message spooling and replay](epics/epic_08_message_spooling_replay.md) | `In progress` | 2/2 | 0 дней до request source; future response/disk scope не оценён |
 | [EPIC-09: Закрытие архитектурных рисков v0](epics/epic_09_v0_architecture_closure.md) | `Done` | 9/9 | 0 дней осталось |
-| [EPIC-10: Повышение качества детерминированного PII-распознавания](epics/epic_10_pii_detection_quality.md) | `In progress` | 2/8 | 17-23 дня осталось |
+| [EPIC-10: Повышение качества детерминированного PII-распознавания](epics/epic_10_pii_detection_quality.md) | `Done` | 8/8 | 0 дней осталось |
 | [VIG-11: Fast PII policy adapter](issues/issue_11_fast_pii_policy_adapter.md) | `Done` | завершена | 0 дней осталось |
 | [VIG-12: Global shadow coverage validation](issues/issue_12_global_shadow_coverage_validation.md) | `Done` | завершена | 0 дней осталось |
 | [VIG-13: PII shadow request tracer bullet](issues/issue_13_pii_shadow_request_tracer.md) | `Done` | завершена | 0 дней осталось |

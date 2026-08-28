@@ -26,11 +26,124 @@ class EmailAddressRecognizerTest {
                     confidence = null,
                     evidenceStrength = EvidenceStrength.FORMAT_ONLY,
                     recognizerId = "fast.email_address",
-                    recognizerVersion = "1.0.0",
+                    recognizerVersion = "1.1.0",
                 ),
             ),
             findings,
         )
+    }
+
+    /** Verifies obfuscation gaps near the at sign and domain dot with exact UTF-8 spans. */
+    @Test
+    fun `bounded email spaces remain inside exact source spans`() {
+        val detector = FastPiiDetector()
+
+        assertEquals(
+            listOf(expectedEmailFinding(5L, 22L)),
+            detector.detect("😀:user @example.com;", enabledTypes = setOf(PiiType.EMAIL_ADDRESS)),
+        )
+        assertEquals(
+            listOf(expectedEmailFinding(6L, 28L)),
+            detector.detect("До: alice@example   .  com!", enabledTypes = setOf(PiiType.EMAIL_ADDRESS)),
+        )
+    }
+
+    /** Verifies one to three spaces independently at every allowed obfuscation position. */
+    @Test
+    fun `every bounded email gap accepts one through three spaces`() {
+        val detector = FastPiiDetector()
+
+        (1..3).forEach { spaceCount ->
+            val spaces = " ".repeat(spaceCount)
+            val candidates =
+                listOf(
+                    "user${spaces}@example.com",
+                    "user@${spaces}example.com",
+                    "user@example${spaces}.com",
+                    "user@example.${spaces}com",
+                )
+
+            candidates.forEach { candidate ->
+                assertEquals(
+                    1,
+                    detector.detect(candidate, enabledTypes = setOf(PiiType.EMAIL_ADDRESS)).size,
+                )
+            }
+        }
+    }
+
+    /** Verifies normalized length after removing a supported combination of all gap kinds. */
+    @Test
+    fun `obfuscated email retains the canonical normalized length limit`() {
+        val local = "a".repeat(64)
+        val domain = "${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(61)}"
+        val payload = "$local   @   ${domain.replace(".", "   .   ")}"
+
+        val findings =
+            FastPiiDetector().detect(payload, enabledTypes = setOf(PiiType.EMAIL_ADDRESS))
+
+        assertEquals(1, findings.size)
+        assertEquals(0L, findings.single().startUtf8)
+        assertEquals(payload.length.toLong(), findings.single().endUtf8)
+    }
+
+    /** Verifies overlong gaps, unsupported whitespace, and strict normalized syntax are rejected. */
+    @Test
+    fun `invalid obfuscated email surfaces remain hard negatives`() {
+        val detector = FastPiiDetector()
+        val hardNegatives =
+            listOf(
+                "user    @example.com",
+                "user@    example.com",
+                "user@example    .com",
+                "user@example.    com",
+                "user\t@example.com",
+                "user@\texample.com",
+                "user@example\t.com",
+                "user\u00A0@example.com",
+                "user@\u200Bexample.com",
+                "word @ word",
+                "total + tax @ rate . unit",
+                "user . name @ example.com",
+                "user..name @ example.com",
+                "user @ singlelabel",
+                "user @ exam ple.com",
+                "алиса-user @ example.com",
+                "user @ -example . com",
+                "user @ example- . com",
+            )
+
+        hardNegatives.forEachIndexed { caseIndex, payload ->
+            assertEquals(
+                emptyList(),
+                detector.detect(payload, enabledTypes = setOf(PiiType.EMAIL_ADDRESS)),
+                "Unexpected finding for obfuscated email hard-negative case $caseIndex",
+            )
+        }
+    }
+
+    /** Verifies invalid obfuscation does not stop scanning or absorb neighboring prose spaces. */
+    @Test
+    fun `obfuscated email search continues with exact prose boundaries`() {
+        val findings =
+            FastPiiDetector().detect(
+                payload = "bad @ local; good @ example . org suffix",
+                enabledTypes = setOf(PiiType.EMAIL_ADDRESS),
+            )
+
+        assertEquals(listOf(expectedEmailFinding(13L, 33L)), findings)
+    }
+
+    /** Verifies spaced IDN dots use strict conversion while preserving original Unicode offsets. */
+    @Test
+    fun `obfuscated idn domain preserves its exact utf8 span`() {
+        val findings =
+            FastPiiDetector().detect(
+                payload = "😀:user @ пример . рф!",
+                enabledTypes = setOf(PiiType.EMAIL_ADDRESS),
+            )
+
+        assertEquals(listOf(expectedEmailFinding(5L, 31L)), findings)
     }
 
     /** Verifies unsupported email forms and invalid length, dot, label, and boundary cases. */
@@ -197,4 +310,19 @@ class EmailAddressRecognizerTest {
             findings.map { finding -> finding.startUtf8 to finding.endUtf8 },
         )
     }
+
+    /** Builds the complete stable metadata expected from one email recognition. */
+    private fun expectedEmailFinding(
+        startUtf8: Long,
+        endUtf8: Long,
+    ): PiiFinding =
+        PiiFinding(
+            type = PiiType.EMAIL_ADDRESS,
+            startUtf8 = startUtf8,
+            endUtf8 = endUtf8,
+            confidence = null,
+            evidenceStrength = EvidenceStrength.FORMAT_ONLY,
+            recognizerId = "fast.email_address",
+            recognizerVersion = "1.1.0",
+        )
 }
