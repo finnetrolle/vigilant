@@ -8,9 +8,9 @@ import org.junit.jupiter.api.Test;
 
 /** Contract tests for the configurable PERF-01 phase schedule. */
 final class PerfProfileScheduleTest {
-    /** Verifies that measurement starts only after ramp and steady-state warm-up. */
+    /** Verifies that every route gets isolated ramp, steady-state, and measurement phases. */
     @Test
-    void measurementStartsAfterRampAndSteadyStateWarmup() {
+    void eachRouteStartsAfterThePreviousMeasuredPhase() {
         String originalRamp = System.getProperty("perf.warmupSeconds");
         String originalSteady = System.getProperty("perf.steadyWarmupSeconds");
         String originalMeasurement = System.getProperty("perf.measurementSeconds");
@@ -25,7 +25,11 @@ final class PerfProfileScheduleTest {
 
             assertAll(
                 () -> assertEquals(245, profile.proxyWarmupDelaySeconds()),
-                () -> assertEquals(365, profile.proxyMeasurementDelaySeconds())
+                () -> assertEquals(365, profile.proxyMeasurementDelaySeconds()),
+                () -> assertEquals(490, profile.slowSinkWarmupDelaySeconds()),
+                () -> assertEquals(610, profile.slowSinkMeasurementDelaySeconds()),
+                () -> assertEquals("http://127.0.0.1:18082", profile.slowSinkGatewayBaseUrl()),
+                () -> assertEquals(50, profile.slowSinkDelayMs())
             );
         } finally {
             restoreProperty("perf.warmupSeconds", originalRamp);

@@ -18,8 +18,8 @@ import java.util.concurrent.TimeUnit;
  *
  * <p>It consumes every request body before replying, returns a fixed-size body
  * for non-streaming calls, and emits a fixed number of equally-sized chunks
- * for streaming calls. It runs in a JVM separate from both Gatling and the
- * gateway so the direct and proxy phases exercise the same external server.
+ * for streaming calls. It runs in a JVM separate from Gatling and both gateways
+ * so all three route phases exercise the same external server.
  */
 public final class BenchmarkUpstreamMain {
     /** Prevents construction of the process entry-point utility. */
@@ -45,10 +45,30 @@ public final class BenchmarkUpstreamMain {
         int streamChunks = positiveInt("streamChunks", args[2]);
         int streamChunkBytes = positiveInt("streamChunkBytes", args[3]);
         long streamChunkDelayMs = nonNegativeLong("streamChunkDelayMs", args[4]);
+        Server server = createServer(
+            port,
+            nonStreamingResponseBytes,
+            streamChunks,
+            streamChunkBytes,
+            streamChunkDelayMs
+        );
+
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> server.stop().join(), "perf-upstream-shutdown"));
+        server.start().join();
+        server.whenClosed().join();
+    }
+
+    /** Creates the real Armeria upstream used by process and contract-test fixtures. */
+    static Server createServer(
+        int port,
+        int nonStreamingResponseBytes,
+        int streamChunks,
+        int streamChunkBytes,
+        long streamChunkDelayMs
+    ) {
         byte[] nonStreamingBody = fixedBody(nonStreamingResponseBytes, (byte) 'n');
         byte[] streamChunk = fixedBody(streamChunkBytes, (byte) 's');
-
-        Server server = Server.builder()
+        return Server.builder()
             .http(port)
             .service("/healthz", (ctx, request) -> HttpResponse.of(HttpStatus.OK))
             .service(
@@ -67,13 +87,16 @@ public final class BenchmarkUpstreamMain {
             )
             .service(
                 "/v1/chat/completions",
-                (ctx, request) -> inspectionResponse(request, nonStreamingBody)
+                (ctx, request) -> inspectionResponse(
+                    ctx,
+                    request,
+                    nonStreamingBody,
+                    streamChunk,
+                    streamChunks,
+                    streamChunkDelayMs
+                )
             )
             .build();
-
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> server.stop().join(), "perf-upstream-shutdown"));
-        server.start().join();
-        server.whenClosed().join();
     }
 
     /**
@@ -89,13 +112,25 @@ public final class BenchmarkUpstreamMain {
         );
     }
 
-    /** Consumes and accepts an inspection request only when its exact byte digest matches. */
-    private static HttpResponse inspectionResponse(HttpRequest request, byte[] responseBody) {
+    /** Consumes a digest-checked inspection request and selects its fixture response profile. */
+    private static HttpResponse inspectionResponse(
+        ServiceRequestContext context,
+        HttpRequest request,
+        byte[] responseBody,
+        byte[] streamChunk,
+        int streamChunks,
+        long streamChunkDelayMs
+    ) {
         String expectedDigest = request.headers().get(InspectionPayload.SHA256_HEADER);
         return HttpResponse.of(request.aggregate().thenApply(aggregated -> {
             String actualDigest = InspectionPayload.sha256Hex(aggregated.content().array());
             if (!actualDigest.equals(expectedDigest)) {
                 return HttpResponse.of(HttpStatus.CONFLICT);
+            }
+            if (InspectionPayload.STREAMING_RESPONSE_PROFILE.equals(
+                request.headers().get(InspectionPayload.RESPONSE_PROFILE_HEADER)
+            )) {
+                return writeStreamingResponse(context, streamChunk, streamChunks, streamChunkDelayMs);
             }
             return HttpResponse.of(HttpStatus.OK, MediaType.OCTET_STREAM, responseBody);
         }));
@@ -111,28 +146,38 @@ public final class BenchmarkUpstreamMain {
         int chunkCount,
         long chunkDelayMs
     ) {
-        return HttpResponse.of(request.aggregate().thenApply(ignored -> {
-            HttpResponseWriter response = HttpResponse.streaming();
-            response.write(
-                ResponseHeaders.builder(HttpStatus.OK)
-                    .contentType(MediaType.OCTET_STREAM)
-                    .build()
+        return HttpResponse.of(request.aggregate().thenApply(
+            ignored -> writeStreamingResponse(context, chunk, chunkCount, chunkDelayMs)
+        ));
+    }
+
+    /** Writes one already-admitted response as fixed delayed chunks. */
+    private static HttpResponse writeStreamingResponse(
+        ServiceRequestContext context,
+        byte[] chunk,
+        int chunkCount,
+        long chunkDelayMs
+    ) {
+        HttpResponseWriter response = HttpResponse.streaming();
+        response.write(
+            ResponseHeaders.builder(HttpStatus.OK)
+                .contentType(MediaType.OCTET_STREAM)
+                .build()
+        );
+        for (int index = 0; index < chunkCount; index++) {
+            int chunkIndex = index;
+            context.eventLoop().schedule(
+                () -> {
+                    response.write(HttpData.wrap(chunk.clone()));
+                    if (chunkIndex == chunkCount - 1) {
+                        response.close();
+                    }
+                },
+                chunkDelayMs * index,
+                TimeUnit.MILLISECONDS
             );
-            for (int index = 0; index < chunkCount; index++) {
-                int chunkIndex = index;
-                context.eventLoop().schedule(
-                    () -> {
-                        response.write(HttpData.wrap(chunk.clone()));
-                        if (chunkIndex == chunkCount - 1) {
-                            response.close();
-                        }
-                    },
-                    chunkDelayMs * index,
-                    TimeUnit.MILLISECONDS
-                );
-            }
-            return response;
-        }));
+        }
+        return response;
     }
 
     /**

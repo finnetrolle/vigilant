@@ -1,5 +1,79 @@
 # PERF-01: история результатов
 
+## Полный logging-прогон 2026-08-28
+
+### Вердикт
+
+**PASS: PERF-01 и неблокирующий logging path подтверждены.**
+
+Три последовательных сценария завершили все 1 260 000 запросов без ошибок.
+Каждое измерительное окно обработало 240 000 запросов при 2 000 RPS. Default
+gateway не добавил задержку к combined p99, а request latency gateway с
+медленным sink осталась на порядок ниже задержки одного sink write.
+
+### Измеренные числа
+
+| Path/profile | Успешно | Запланировано | Успешных RPS | Success | p50 | p95 | p99 | max |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| direct / non-streaming | 192 000 | 192 000 | 1 600.0 | 100.00% | 1 ms | 1 ms | 1 ms | 38 ms |
+| direct / streaming | 48 000 | 48 000 | 400.0 | 100.00% | 3 ms | 4 ms | 5 ms | 41 ms |
+| direct / combined | 240 000 | 240 000 | 2 000.0 | 100.00% | 1 ms | 4 ms | 4 ms | 41 ms |
+| proxy / non-streaming | 192 000 | 192 000 | 1 600.0 | 100.00% | 1 ms | 1 ms | 1 ms | 23 ms |
+| proxy / streaming | 48 000 | 48 000 | 400.0 | 100.00% | 4 ms | 4 ms | 4 ms | 25 ms |
+| proxy / combined | 240 000 | 240 000 | 2 000.0 | 100.00% | 1 ms | 4 ms | 4 ms | 25 ms |
+| slow sink / non-streaming | 192 000 | 192 000 | 1 600.0 | 100.00% | 1 ms | 1 ms | 2 ms | 24 ms |
+| slow sink / streaming | 48 000 | 48 000 | 400.0 | 100.00% | 4 ms | 4 ms | 5 ms | 21 ms |
+| slow sink / combined | 240 000 | 240 000 | 2 000.0 | 100.00% | 1 ms | 4 ms | 4 ms | 24 ms |
+
+`proxy_overhead p99 = 4 ms - 4 ms = 0 ms`, поэтому требование
+`proxy_overhead p99 <= 2 ms` выполнено.
+
+Slow-sink request p99 составил 4 ms при фиксированной задержке каждого
+downstream write 50 ms. Default gateway доставил 240 000 из 240 000 измеряемых
+audit-событий. Slow-sink gateway доставил 0 из 240 000, то есть bounded queue
+отбрасывала события под перегрузкой, не передавая backpressure request path.
+
+### Профиль event loop
+
+Оба packaged gateway записывались JFR с bounded `maxsize=256m`. Анализ каждого
+маршрута ограничен фактически наблюдаемым half-open окном от самого раннего
+старта измеряемого запроса до самого позднего завершения. Поэтому он включает
+хвост последнего ответа, но не startup и warm-up I/O.
+
+| Gateway | Событий проверено | Event-loop events | Нарушений |
+|---|---:|---:|---:|
+| default INFO stdout | 614 747 | 9 818 | 0 |
+| slow sink 50 ms | 597 912 | 9 264 | 0 |
+
+На потоках `armeria-common-worker-*` не обнаружены `PrintStream.write`, file
+I/O, socket/OTLP export или ожидание logging queue. CPU-работа producer thread
+по проверке уровня и созданию события остаётся частью измеренного overhead.
+
+### Профиль и стенд
+
+- Run UTC: `2026-08-28T14:13:54Z` - `2026-08-28T14:26:24Z`.
+- Git revision: `fa25da7adc62640098a2012239605f712163b6dc`, worktree dirty.
+- Target: 2 000 RPS отдельно для direct, default gateway и slow-sink gateway.
+- Ramp warm-up: 60 s; steady-state warm-up: 60 s; measurement: 120 s.
+- Gap: 5 s; distribution: 80% non-streaming / 20% streaming.
+- Gatling connection pool: shared, максимум 64 соединения на host.
+- Request body: валидный Chat Completions JSON, 1 024 bytes.
+- Non-streaming response: 4 096 bytes; streaming response: 4 chunks по 1 024
+  bytes, интервал 1 ms.
+- Upstream и оба gateway: отдельные JVM-процессы, loopback network.
+- Gateway/upstream heap: `-Xms512m -Xmx512m`; load-generator heap: 2 GiB.
+- Slow sink: production-identical bounded async queue, console delay 50 ms.
+- OS: macOS 26.3.1, arm64; CPU: Apple M3 Max, 14 logical processors.
+- Physical memory: 36.0 GiB; Gatling: 3.15.1; load generator: JDK 21;
+  gateway и upstream: JDK 25.
+
+Команда: `./gradlew perfTest`. Generated summary сохранён как
+`build/reports/perf-01/perf-01-20260828-141354.md`, Gatling HTML report как
+`build/reports/gatling/perfloadsimulation-20260828141354407/index.html`.
+JFR-файлы созданы как `build/perf-processes/gateway.jfr` и
+`slow-sink-gateway.jfr`. Каталог `build/` не хранится в Git, поэтому
+воспроизводимые параметры и значимые evidence counts зафиксированы здесь.
+
 ## Полный прогон 2026-08-26
 
 ### Вердикт

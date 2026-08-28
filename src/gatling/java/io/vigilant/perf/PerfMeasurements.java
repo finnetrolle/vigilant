@@ -9,14 +9,17 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
+import java.util.EnumMap;
 import java.util.Locale;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicReference;
 
 /** Collects Gatling's public response-time check values and writes a PERF-01 summary. */
 final class PerfMeasurements {
     enum Route {
         DIRECT,
-        PROXY
+        PROXY,
+        SLOW_SINK
     }
 
     enum ResponseProfile {
@@ -28,11 +31,22 @@ final class PerfMeasurements {
     private final LatencySeries directStreaming = new LatencySeries();
     private final LatencySeries proxyNonStreaming = new LatencySeries();
     private final LatencySeries proxyStreaming = new LatencySeries();
+    private final LatencySeries slowSinkNonStreaming = new LatencySeries();
+    private final LatencySeries slowSinkStreaming = new LatencySeries();
+    private final EnumMap<Route, MeasurementWindowTracker> measurementWindows = new EnumMap<>(Route.class);
     private Instant startedAt;
 
-    /** Records the start time used in the reproducibility report. */
-    void markStarted() {
+    /** Creates empty latency series and one lock-free measurement-window tracker per route. */
+    PerfMeasurements() {
+        for (Route route : Route.values()) {
+            measurementWindows.put(route, new MeasurementWindowTracker(route));
+        }
+    }
+
+    /** Records and returns the run start used only for reproducibility metadata. */
+    Instant markStarted() {
         startedAt = Instant.now();
+        return startedAt;
     }
 
     /** Records one successful measured request in milliseconds. */
@@ -40,43 +54,54 @@ final class PerfMeasurements {
         series(route, responseProfile).record(latencyMs);
     }
 
+    /** Records one measured request's actual start observation. */
+    void markRequestStarted(Route route, Instant observedAt) {
+        measurementWindows.get(route).markStarted(observedAt);
+    }
+
+    /** Records one measured request's actual completion observation. */
+    void markRequestCompleted(Route route, Instant observedAt) {
+        measurementWindows.get(route).markCompleted(observedAt);
+    }
+
+    /** Returns the observed half-open measurement window for one route. */
+    MeasurementWindow measurementWindow(Route route) {
+        return measurementWindows.get(route).snapshot();
+    }
+
     /**
      * Writes both a stable latest summary and a timestamped copy under build/reports/perf-01.
      */
     Path writeSummary(PerfProfile profile) {
+        return writeSummary(profile, PerfLoggingObservation.unavailable());
+    }
+
+    /** Writes the summary with process-level logging evidence when available. */
+    Path writeSummary(PerfProfile profile, PerfLoggingObservation loggingObservation) {
         Instant finishedAt = Instant.now();
         Instant effectiveStartedAt = startedAt == null ? finishedAt : startedAt;
-        LatencySnapshot directNonStreamingSnapshot = directNonStreaming.snapshot();
-        LatencySnapshot directStreamingSnapshot = directStreaming.snapshot();
-        LatencySnapshot proxyNonStreamingSnapshot = proxyNonStreaming.snapshot();
-        LatencySnapshot proxyStreamingSnapshot = proxyStreaming.snapshot();
-        LatencySnapshot direct = LatencySnapshot.combine(
-            directNonStreamingSnapshot,
-            directStreamingSnapshot
+        BenchmarkLatencySnapshots latencies = new BenchmarkLatencySnapshots(
+            RouteLatencySnapshots.from(directNonStreaming.snapshot(), directStreaming.snapshot()),
+            RouteLatencySnapshots.from(proxyNonStreaming.snapshot(), proxyStreaming.snapshot()),
+            RouteLatencySnapshots.from(slowSinkNonStreaming.snapshot(), slowSinkStreaming.snapshot())
         );
-        LatencySnapshot proxy = LatencySnapshot.combine(
-            proxyNonStreamingSnapshot,
-            proxyStreamingSnapshot
-        );
-        long overheadP99Ms = proxy.p99() - direct.p99();
+        long overheadP99Ms = latencies.proxy().combined().p99()
+            - latencies.direct().combined().p99();
         boolean fullProfile = profile.qualifiesForPerf01();
         long expectedPerPath = (long) profile.targetRps() * profile.measurementSeconds();
-        boolean targetRateObserved = direct.count() >= expectedPerPath * 0.99
-            && proxy.count() >= expectedPerPath * 0.99;
+        boolean targetRateObserved = latencies.direct().combined().count() >= expectedPerPath * 0.99
+            && latencies.proxy().combined().count() >= expectedPerPath * 0.99
+            && latencies.slowSink().combined().count() >= expectedPerPath * 0.99;
 
         String markdown = report(
             profile,
             effectiveStartedAt,
             finishedAt,
-            directNonStreamingSnapshot,
-            directStreamingSnapshot,
-            proxyNonStreamingSnapshot,
-            proxyStreamingSnapshot,
-            direct,
-            proxy,
+            latencies,
             overheadP99Ms,
             fullProfile,
-            targetRateObserved
+            targetRateObserved,
+            loggingObservation
         );
         Path reportDirectory = profile.projectDirectory().resolve("build/reports/perf-01");
         String runId = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss", Locale.ROOT)
@@ -98,14 +123,17 @@ final class PerfMeasurements {
 
     /** Returns the latency series selected by route and response profile. */
     private LatencySeries series(Route route, ResponseProfile responseProfile) {
-        if (route == Route.DIRECT) {
-            return responseProfile == ResponseProfile.NON_STREAMING
+        return switch (route) {
+            case DIRECT -> responseProfile == ResponseProfile.NON_STREAMING
                 ? directNonStreaming
                 : directStreaming;
-        }
-        return responseProfile == ResponseProfile.NON_STREAMING
-            ? proxyNonStreaming
-            : proxyStreaming;
+            case PROXY -> responseProfile == ResponseProfile.NON_STREAMING
+                ? proxyNonStreaming
+                : proxyStreaming;
+            case SLOW_SINK -> responseProfile == ResponseProfile.NON_STREAMING
+                ? slowSinkNonStreaming
+                : slowSinkStreaming;
+        };
     }
 
     /** Builds the human-readable, self-contained run summary. */
@@ -113,45 +141,12 @@ final class PerfMeasurements {
         PerfProfile profile,
         Instant startedAt,
         Instant finishedAt,
-        LatencySnapshot directNonStreaming,
-        LatencySnapshot directStreaming,
-        LatencySnapshot proxyNonStreaming,
-        LatencySnapshot proxyStreaming,
-        LatencySnapshot direct,
-        LatencySnapshot proxy,
+        BenchmarkLatencySnapshots latencies,
         long overheadP99Ms,
         boolean fullProfile,
-        boolean targetRateObserved
+        boolean targetRateObserved,
+        PerfLoggingObservation loggingObservation
     ) {
-        boolean sloMet = fullProfile && targetRateObserved && overheadP99Ms <= 2;
-        String verdict;
-        String sloStatement;
-        String overheadStatement;
-        if (!fullProfile) {
-            verdict = "SMOKE ONLY";
-            sloStatement = "This shortened or lower-rate run does not evaluate PERF-01.";
-        } else if (!targetRateObserved) {
-            verdict = "DEVIATION - target rate was not sustained";
-            sloStatement = "PERF-01 is not confirmed because observed throughput was below 99% of 2,000 RPS.";
-        } else {
-            verdict = sloMet ? "PASS" : "DEVIATION";
-            sloStatement = "PERF-01 requires `proxy_overhead p99 <= 2 ms`: **"
-                + (sloMet ? "confirmed" : "not confirmed") + "**.";
-        }
-        if (proxy.count() == 0) {
-            overheadStatement = "Proxy latency diagnostic is unavailable because no proxy request "
-                + "completed successfully.";
-        } else if (direct.count() == 0) {
-            overheadStatement = "Proxy latency diagnostic is unavailable because no direct request "
-                + "completed successfully.";
-        } else if (targetRateObserved) {
-            overheadStatement = "`proxy_overhead p99 = " + proxy.p99() + " ms - "
-                + direct.p99() + " ms = " + overheadP99Ms + " ms`.";
-        } else {
-            overheadStatement = "Successful-response diagnostic: `" + proxy.p99() + " ms - "
-                + direct.p99() + " ms = " + overheadP99Ms + " ms`. The formal overhead p99 "
-                + "is not evaluated because the proxy did not sustain the target successful volume.";
-        }
         long expectedNonStreaming = Math.round(
             profile.nonStreamingRps() * profile.measurementSeconds()
         );
@@ -159,6 +154,71 @@ final class PerfMeasurements {
             profile.streamingRps() * profile.measurementSeconds()
         );
         long expectedPerPath = expectedNonStreaming + expectedStreaming;
+        RouteLatencySnapshots direct = latencies.direct();
+        RouteLatencySnapshots proxy = latencies.proxy();
+        RouteLatencySnapshots slowSink = latencies.slowSink();
+        boolean overheadMet = targetRateObserved && overheadP99Ms <= 2;
+        boolean slowSinkIndependent = slowSink.combined().count() > 0
+            && slowSink.combined().p99() < profile.slowSinkDelayMs();
+        boolean defaultAuditComplete = loggingObservation.defaultAuditEvents() >= expectedPerPath * 0.99;
+        boolean slowSinkDropsObserved = loggingObservation.slowSinkAuditEvents() >= 0
+            && loggingObservation.slowSinkAuditEvents() < expectedPerPath;
+        boolean allLoggingEvidenceMet = slowSinkIndependent
+            && defaultAuditComplete
+            && slowSinkDropsObserved
+            && loggingObservation.defaultProfile().passed()
+            && loggingObservation.slowSinkProfile().passed();
+        boolean allGatesMet = fullProfile && overheadMet && allLoggingEvidenceMet;
+        String verdict;
+        String sloStatement;
+        String overheadStatement;
+        String slowSinkStatement;
+        String defaultAuditStatement;
+        String droppedAuditStatement;
+        String defaultProfileStatement;
+        String slowSinkProfileStatement;
+        if (!fullProfile) {
+            verdict = "SMOKE ONLY";
+            sloStatement = "This shortened or lower-rate run does not evaluate PERF-01.";
+        } else if (!targetRateObserved) {
+            verdict = "DEVIATION - target rate was not sustained";
+            sloStatement = "PERF-01 is not confirmed because at least one measured route was below 99% of 2,000 RPS.";
+        } else {
+            verdict = allGatesMet ? "PASS" : "DEVIATION";
+            sloStatement = "PERF-01 requires `proxy_overhead p99 <= 2 ms`: **"
+                + (overheadMet ? "confirmed" : "not confirmed") + "**.";
+        }
+        if (proxy.combined().count() == 0) {
+            overheadStatement = "Proxy latency diagnostic is unavailable because no proxy request "
+                + "completed successfully.";
+        } else if (direct.combined().count() == 0) {
+            overheadStatement = "Proxy latency diagnostic is unavailable because no direct request "
+                + "completed successfully.";
+        } else if (targetRateObserved) {
+            overheadStatement = "`proxy_overhead p99 = " + proxy.combined().p99() + " ms - "
+                + direct.combined().p99() + " ms = " + overheadP99Ms + " ms`.";
+        } else {
+            overheadStatement = "Successful-response diagnostic: `" + proxy.combined().p99() + " ms - "
+                + direct.combined().p99() + " ms = " + overheadP99Ms + " ms`. The formal overhead p99 "
+                + "is not evaluated because the proxy did not sustain the target successful volume.";
+        }
+        slowSinkStatement = slowSink.combined().count() == 0
+            ? "Slow-sink latency diagnostic is unavailable because no request completed successfully."
+            : "Slow-sink request p99 `" + slowSink.combined().p99() + " ms` stayed below the fixed `"
+                + profile.slowSinkDelayMs() + " ms` downstream delay: **"
+                + (slowSinkIndependent ? "confirmed" : "not confirmed") + "**.";
+        defaultAuditStatement = loggingObservation.defaultAuditEvents() < 0
+            ? "Default audit delivery was not captured for this report-only run."
+            : "Default audit delivery: `" + loggingObservation.defaultAuditEvents() + " / "
+                + expectedPerPath + "`; measurement completeness: **"
+                + (defaultAuditComplete ? "confirmed" : "not confirmed") + "**.";
+        droppedAuditStatement = loggingObservation.slowSinkAuditEvents() < 0
+            ? "Slow-sink audit delivery was not captured for this report-only run."
+            : "Slow-sink audit delivery: `" + loggingObservation.slowSinkAuditEvents() + " / "
+                + expectedPerPath + "`; bounded queue loss under overload: **"
+                + (slowSinkDropsObserved ? "observed" : "not observed") + "**.";
+        defaultProfileStatement = profileStatement("Default", loggingObservation.defaultProfile());
+        slowSinkProfileStatement = profileStatement("Slow-sink", loggingObservation.slowSinkProfile());
         return """
             # PERF-01 run summary
 
@@ -178,6 +238,19 @@ final class PerfMeasurements {
             %s
             %s
             %s
+            %s
+            %s
+            %s
+
+            %s
+
+            %s
+
+            %s
+
+            %s
+
+            %s
 
             %s
 
@@ -188,7 +261,7 @@ final class PerfMeasurements {
             - Target rate: %d RPS in each measured phase
             - Ramp warm-up: %d seconds per path
             - Steady-state warm-up: %d seconds per path
-            - Measurement: %d seconds per path, direct first and proxy second
+            - Measurement: %d seconds per route, direct then default logging then slow sink
             - Gap between path phases: %d seconds
             - Distribution: %d%% non-streaming, %d%% streaming
             - Gatling connection pool: shared, maximum %d connections per host
@@ -196,7 +269,9 @@ final class PerfMeasurements {
             - Non-streaming response: %d bytes
             - Streaming response: %d chunks x %d bytes, %d ms between chunks
             - Upstream: one local Armeria process at `%s`
-            - Gateway: one packaged Vigilant process at `%s`
+            - Default gateway: packaged Vigilant at `%s` with production `INFO` stdout logging
+            - Slow-sink gateway: packaged Vigilant at `%s` with %d ms downstream delay
+            - JFR artifacts: `build/perf-processes/gateway.jfr` and `slow-sink-gateway.jfr`
 
             ## Hardware and runtime
 
@@ -218,14 +293,22 @@ final class PerfMeasurements {
             commandOutput(profile.projectDirectory(), "git", "rev-parse", "HEAD"),
             gitWorktree(profile.projectDirectory()),
             verdict,
-            row("direct / non-streaming", directNonStreaming, expectedNonStreaming, profile.measurementSeconds()),
-            row("direct / streaming", directStreaming, expectedStreaming, profile.measurementSeconds()),
-            row("direct / combined", direct, expectedPerPath, profile.measurementSeconds()),
-            row("proxy / non-streaming", proxyNonStreaming, expectedNonStreaming, profile.measurementSeconds()),
-            row("proxy / streaming", proxyStreaming, expectedStreaming, profile.measurementSeconds()),
-            row("proxy / combined", proxy, expectedPerPath, profile.measurementSeconds()),
+            row("direct / non-streaming", direct.nonStreaming(), expectedNonStreaming, profile.measurementSeconds()),
+            row("direct / streaming", direct.streaming(), expectedStreaming, profile.measurementSeconds()),
+            row("direct / combined", direct.combined(), expectedPerPath, profile.measurementSeconds()),
+            row("proxy / non-streaming", proxy.nonStreaming(), expectedNonStreaming, profile.measurementSeconds()),
+            row("proxy / streaming", proxy.streaming(), expectedStreaming, profile.measurementSeconds()),
+            row("proxy / combined", proxy.combined(), expectedPerPath, profile.measurementSeconds()),
+            row("slow sink / non-streaming", slowSink.nonStreaming(), expectedNonStreaming, profile.measurementSeconds()),
+            row("slow sink / streaming", slowSink.streaming(), expectedStreaming, profile.measurementSeconds()),
+            row("slow sink / combined", slowSink.combined(), expectedPerPath, profile.measurementSeconds()),
             overheadStatement,
             sloStatement,
+            slowSinkStatement,
+            defaultAuditStatement,
+            droppedAuditStatement,
+            defaultProfileStatement,
+            slowSinkProfileStatement,
             profile.targetRps(),
             profile.warmupSeconds(),
             profile.steadyWarmupSeconds(),
@@ -241,6 +324,8 @@ final class PerfMeasurements {
             profile.streamingChunkDelayMs(),
             profile.upstreamBaseUrl(),
             profile.gatewayBaseUrl(),
+            profile.slowSinkGatewayBaseUrl(),
+            profile.slowSinkDelayMs(),
             System.getProperty("os.name"),
             System.getProperty("os.version"),
             System.getProperty("os.arch"),
@@ -252,6 +337,23 @@ final class PerfMeasurements {
             System.getProperty("java.vendor"),
             safeJvmArguments()
         );
+    }
+
+    /** Renders one safe JFR verdict and bounded method-only violation diagnostics. */
+    private static String profileStatement(String label, LoggingProfileObservation observation) {
+        if (!observation.available()) {
+            return label + " gateway JFR was not captured for this report-only run.";
+        }
+        String summary = label + " gateway JFR: `" + observation.eventsInspected() + "` events, `"
+            + observation.eventLoopEvents() + "` event-loop events, `" + observation.violations().size()
+            + "` violations: **" + (observation.passed() ? "confirmed" : "not confirmed") + "**.";
+        if (observation.violations().isEmpty()) {
+            return summary;
+        }
+        return summary + "\n\n" + observation.violations().stream()
+            .map(violation -> "- `" + violation + "`")
+            .reduce((left, right) -> left + "\n" + right)
+            .orElse("");
     }
 
     /** Formats one result-table row. */
@@ -371,6 +473,96 @@ final class PerfMeasurements {
             }
             Arrays.sort(snapshot);
             return new LatencySnapshot(snapshot);
+        }
+    }
+
+    /**
+     * Immutable latency snapshots for the two response profiles and their combined route.
+     *
+     * @param nonStreaming non-streaming population.
+     * @param streaming streaming population.
+     * @param combined complete route population.
+     */
+    private record RouteLatencySnapshots(
+        LatencySnapshot nonStreaming,
+        LatencySnapshot streaming,
+        LatencySnapshot combined
+    ) {
+        /** Creates one route snapshot from its independently measured populations. */
+        static RouteLatencySnapshots from(
+            LatencySnapshot nonStreaming,
+            LatencySnapshot streaming
+        ) {
+            return new RouteLatencySnapshots(
+                nonStreaming,
+                streaming,
+                LatencySnapshot.combine(nonStreaming, streaming)
+            );
+        }
+    }
+
+    /**
+     * Immutable snapshot of every measured PERF-01 route.
+     *
+     * @param direct direct upstream route.
+     * @param proxy default packaged gateway route.
+     * @param slowSink delayed logging sink route.
+     */
+    private record BenchmarkLatencySnapshots(
+        RouteLatencySnapshots direct,
+        RouteLatencySnapshots proxy,
+        RouteLatencySnapshots slowSink
+    ) {
+    }
+
+    /**
+     * Half-open wall-clock window spanning actual measured request execution.
+     *
+     * @param startInclusive earliest measured request start.
+     * @param endExclusive latest measured request completion.
+     */
+    record MeasurementWindow(Instant startInclusive, Instant endExclusive) {
+        /** Validates that the observed window is non-empty and ordered. */
+        MeasurementWindow {
+            if (!endExclusive.isAfter(startInclusive)) {
+                throw new IllegalArgumentException("Measurement window must have positive duration");
+            }
+        }
+    }
+
+    /** Lock-free extrema for concurrent measured-request lifecycle observations. */
+    private static final class MeasurementWindowTracker {
+        private final Route route;
+        private final AtomicReference<Instant> earliestStart = new AtomicReference<>();
+        private final AtomicReference<Instant> latestCompletion = new AtomicReference<>();
+
+        /** Creates an empty tracker for the named route. */
+        MeasurementWindowTracker(Route route) {
+            this.route = route;
+        }
+
+        /** Retains the earliest observed request start. */
+        void markStarted(Instant observedAt) {
+            earliestStart.accumulateAndGet(observedAt, (current, candidate) ->
+                current == null || candidate.isBefore(current) ? candidate : current
+            );
+        }
+
+        /** Retains the latest observed request completion. */
+        void markCompleted(Instant observedAt) {
+            latestCompletion.accumulateAndGet(observedAt, (current, candidate) ->
+                current == null || candidate.isAfter(current) ? candidate : current
+            );
+        }
+
+        /** Returns a complete immutable window or fails closed when observations are missing. */
+        MeasurementWindow snapshot() {
+            Instant start = earliestStart.get();
+            Instant end = latestCompletion.get();
+            if (start == null || end == null) {
+                throw new IllegalStateException("No complete measured request window for " + route);
+            }
+            return new MeasurementWindow(start, end);
         }
     }
 

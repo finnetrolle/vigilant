@@ -9,6 +9,9 @@ import java.util.HexFormat;
 /** Generates immutable synthetic requests for inspection benchmarks. */
 final class InspectionPayload {
     static final String SHA256_HEADER = "X-Vigilant-Benchmark-Body-SHA256";
+    static final String RESPONSE_PROFILE_HEADER = "X-Vigilant-Benchmark-Response-Profile";
+    static final String NON_STREAMING_RESPONSE_PROFILE = "non_streaming";
+    static final String STREAMING_RESPONSE_PROFILE = "streaming";
     private static final byte[] PREFIX =
         "{\"model\":\"gpt-4o-mini\",\"messages\":[{\"role\":\"user\",\"content\":\""
             .getBytes(StandardCharsets.UTF_8);
@@ -44,5 +47,13 @@ final class InspectionPayload {
         } catch (NoSuchAlgorithmException exception) {
             throw new IllegalStateException("JVM does not provide SHA-256", exception);
         }
+    }
+
+    /** Returns the canonical upstream response-profile header for one benchmark population. */
+    static String responseProfileHeader(PerfMeasurements.ResponseProfile responseProfile) {
+        return switch (responseProfile) {
+            case NON_STREAMING -> NON_STREAMING_RESPONSE_PROFILE;
+            case STREAMING -> STREAMING_RESPONSE_PROFILE;
+        };
     }
 }

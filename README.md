@@ -166,7 +166,7 @@ CI на каждый push в `main` и pull request запускает `build`. 
 
 ~~~bash
 ./gradlew piiJmhBaseline # JMH baseline fast-pii detector
-./gradlew perfTest       # PERF-01 direct-vs-gateway load test
+./gradlew perfTest       # PERF-01 three-route logging load/profile test
 ./gradlew inspectionPhaseBenchmark # parsing/windowing/policy/total p50/p95/p99
 ./gradlew inspectionLoadTest       # packaged 2,000 RPS inspection profile
 ~~~

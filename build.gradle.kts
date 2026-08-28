@@ -230,10 +230,13 @@ val validateWorkItems = tasks.register<JavaExec>("validateWorkItems") {
     args(rootDir.absolutePath)
 }
 
-tasks.named("gatlingRun") {
+tasks.named<io.gatling.gradle.GatlingRunTask>("gatlingRun") {
     dependsOn("installDist", perfContractTest)
     group = "verification"
     description = "Runs the explicit PERF-01 direct-versus-proxy load test."
+    setSimulationClassName("io.vigilant.perf.PerfLoadSimulation")
+    setNonInteractive(true)
+    setRunAllSimulations(false)
 }
 
 tasks.register("perfTest") {

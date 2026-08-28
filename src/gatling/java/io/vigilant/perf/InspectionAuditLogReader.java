@@ -7,6 +7,7 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Set;
 
 /** Reads only safe aggregate evidence from one packaged gateway JSONL log. */
 final class InspectionAuditLogReader {
@@ -25,6 +26,15 @@ final class InspectionAuditLogReader {
      * @return immutable safe observation.
      */
     static InspectionAuditObservation read(Path log, String measuredSession, String sensitiveValue) {
+        return read(log, Set.of(measuredSession), sensitiveValue);
+    }
+
+    /** Counts decisions from every named measured population in one log pass. */
+    static InspectionAuditObservation read(
+        Path log,
+        Set<String> measuredSessions,
+        String sensitiveValue
+    ) {
         long matchedDecisions = 0L;
         long detectedDecisions = 0L;
         boolean oomDetected = false;
@@ -36,7 +46,7 @@ final class InspectionAuditLogReader {
                 sensitiveValueDetected |= line.contains(sensitiveValue);
                 JsonNode event = parseJson(line);
                 if (event == null
-                    || !measuredSession.equals(event.path("mdc").path("session_id").asText())
+                    || !measuredSessions.contains(event.path("mdc").path("session_id").asText())
                     || !"policy.shadow_decision".equals(keyValue(event, "event.name"))) {
                     continue;
                 }

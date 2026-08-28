@@ -2,8 +2,8 @@
 
 **ID:** `VIG-01A`  
 **Тип:** Issue  
-**Статус:** Ready for implementation  
-**Примечание:** реализация не начата
+**Статус:** Done
+**Примечание:** полный трёхмаршрутный PERF-01 и JFR-профиль подтверждены 2026-08-28
 **Приоритет:** High
 **Связанные требования:** `PERF-01`, `PERF-06`, `CONC-01`, критерии приёмки v0 из `../MVP_NON_FUNCTIONAL_REQUIREMENTS.md`
 **Зависит от:** [VIG-09-02](epic_09/issue_09_02_perf01_latency.md)
@@ -27,6 +27,22 @@ scenarios нельзя интерпретировать, пока default gatewa
 `PERF-01`: при 2 000 RPS gateway добавляет не более 2 мс к p99 относительно
 прямого вызова того же upstream, а на потоках Armeria/Netty event loop нет
 блокирующего logging I/O.
+
+## Результат
+
+Полный прогон `./gradlew perfTest` обработал 1 260 000 из 1 260 000 запросов
+без ошибок. В каждом 120-секундном measurement window выполнено 240 000
+запросов при 2 000 RPS. Combined p99 direct и default gateway равен 4 ms,
+поэтому `proxy_overhead p99 = 0 ms`. Slow-sink combined p99 также равен 4 ms
+при задержке одного downstream write 50 ms; переполненная bounded queue
+отбросила измеряемые audit-события без backpressure на request path.
+
+JFR внутри фактически наблюдаемых окон от самого раннего старта измеряемого
+запроса до самого позднего завершения проверил 9 818 event-loop events default
+gateway и 9 264 event-loop events slow-sink gateway. stdout/file/network I/O и
+ожидание logging queue на потоках Armeria/Netty не обнаружены. Полные числа,
+профиль и характеристики стенда зафиксированы в
+[`docs/perf-01-result.md`](../../docs/perf-01-result.md).
 
 ## Сценарии
 
@@ -60,12 +76,12 @@ scenarios нельзя интерпретировать, пока default gatewa
 
 ## Критерии приёмки
 
-- [ ] Измерены все три сценария на одном стенде, условия зафиксированы по `PERF-06`.
-- [ ] Benchmark подтверждает `PERF-01` при 2 000 RPS.
-- [ ] Профиль подтверждает отсутствие stdout/file/network I/O и ожидания
+- [x] Измерены все три сценария на одном стенде, условия зафиксированы по `PERF-06`.
+- [x] Benchmark подтверждает `PERF-01` при 2 000 RPS.
+- [x] Профиль подтверждает отсутствие stdout/file/network I/O и ожидания
       logging queue на event loop.
-- [ ] В режиме медленного sink latency запросов не коррелирует с latency sink.
-- [ ] Результаты (числа + условия) зафиксированы в репозитории.
+- [x] В режиме медленного sink latency запросов не коррелирует с latency sink.
+- [x] Результаты (числа + условия) зафиксированы в репозитории.
 
 ## Definition of Done
 

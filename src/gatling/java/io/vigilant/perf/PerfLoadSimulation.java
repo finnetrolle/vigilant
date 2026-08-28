@@ -16,124 +16,128 @@ import io.gatling.javaapi.core.PopulationBuilder;
 import io.gatling.javaapi.core.ScenarioBuilder;
 import io.gatling.javaapi.core.Simulation;
 import io.gatling.javaapi.http.HttpProtocolBuilder;
+import io.gatling.javaapi.http.HttpRequestActionBuilder;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
- * Reproducible PERF-01 comparison of direct and proxied latency against one upstream.
+ * Reproducible PERF-01 comparison of direct, default-gateway, and slow-sink routes.
  *
- * <p>The two measured phases are sequential so each path receives the full
- * configured rate without competing with the other path. Each has its own JVM
+ * <p>The three measured phases are sequential so each path receives the full
+ * configured rate without competing with the other routes. Each has its own JVM
  * warm-up, and each mixes fixed streaming and non-streaming populations.
  */
 public final class PerfLoadSimulation extends Simulation {
     private static final String LATENCY_KEY = "perfResponseTimeMs";
     private final PerfProfile profile = PerfProfile.fromSystemProperties();
+    private final String requestBody = profile.requestBody();
+    private final String requestDigest = InspectionPayload.sha256Hex(
+        requestBody.getBytes(StandardCharsets.UTF_8)
+    );
     private final PerfMeasurements measurements = new PerfMeasurements();
     private final PerfProcesses processes = new PerfProcesses(profile);
 
-    /** Builds the direct and proxy populations and installs fixture lifecycle hooks. */
+    /** Builds direct, default-gateway, and slow-sink populations with fixture lifecycle hooks. */
     public PerfLoadSimulation() {
         HttpProtocolBuilder directProtocol = protocol(profile.upstreamBaseUrl());
         HttpProtocolBuilder proxyProtocol = protocol(profile.gatewayBaseUrl());
-
-        PopulationBuilder directWarmupNonStreaming = warmupPopulation(
-            "warmup direct non-streaming",
-            "warmup.direct.non_streaming",
-            "/perf/non-streaming",
-            profile.nonStreamingRps(),
-            0
-        ).protocols(directProtocol);
-        PopulationBuilder directWarmupStreaming = warmupPopulation(
-            "warmup direct streaming",
-            "warmup.direct.streaming",
-            "/perf/streaming",
-            profile.streamingRps(),
-            0
-        ).protocols(directProtocol);
-        PopulationBuilder directMeasureNonStreaming = measuredPopulation(
-            "measure direct non-streaming",
-            "measure.direct.non_streaming",
-            "/perf/non-streaming",
-            profile.nonStreamingRps(),
-            profile.totalWarmupSeconds(),
+        HttpProtocolBuilder slowSinkProtocol = protocol(profile.slowSinkGatewayBaseUrl());
+        List<PopulationBuilder> populations = new ArrayList<>();
+        populations.addAll(routePopulations(new RoutePopulationPlan(
+            "direct",
+            "direct",
+            PerfSessionNames.DIRECT,
             PerfMeasurements.Route.DIRECT,
-            PerfMeasurements.ResponseProfile.NON_STREAMING
-        ).protocols(directProtocol);
-        PopulationBuilder directMeasureStreaming = measuredPopulation(
-            "measure direct streaming",
-            "measure.direct.streaming",
-            "/perf/streaming",
-            profile.streamingRps(),
-            profile.totalWarmupSeconds(),
-            PerfMeasurements.Route.DIRECT,
-            PerfMeasurements.ResponseProfile.STREAMING
-        ).protocols(directProtocol);
-
-        PopulationBuilder proxyWarmupNonStreaming = warmupPopulation(
-            "warmup proxy non-streaming",
-            "warmup.proxy.non_streaming",
-            "/perf/non-streaming",
-            profile.nonStreamingRps(),
-            profile.proxyWarmupDelaySeconds()
-        ).protocols(proxyProtocol);
-        PopulationBuilder proxyWarmupStreaming = warmupPopulation(
-            "warmup proxy streaming",
-            "warmup.proxy.streaming",
-            "/perf/streaming",
-            profile.streamingRps(),
-            profile.proxyWarmupDelaySeconds()
-        ).protocols(proxyProtocol);
-        PopulationBuilder proxyMeasureNonStreaming = measuredPopulation(
-            "measure proxy non-streaming",
-            "measure.proxy.non_streaming",
-            "/perf/non-streaming",
-            profile.nonStreamingRps(),
-            profile.proxyMeasurementDelaySeconds(),
+            directProtocol,
+            0,
+            profile.totalWarmupSeconds()
+        )));
+        populations.addAll(routePopulations(new RoutePopulationPlan(
+            "proxy",
+            "proxy",
+            PerfSessionNames.PROXY,
             PerfMeasurements.Route.PROXY,
-            PerfMeasurements.ResponseProfile.NON_STREAMING
-        ).protocols(proxyProtocol);
-        PopulationBuilder proxyMeasureStreaming = measuredPopulation(
-            "measure proxy streaming",
-            "measure.proxy.streaming",
-            "/perf/streaming",
-            profile.streamingRps(),
-            profile.proxyMeasurementDelaySeconds(),
-            PerfMeasurements.Route.PROXY,
-            PerfMeasurements.ResponseProfile.STREAMING
-        ).protocols(proxyProtocol);
+            proxyProtocol,
+            profile.proxyWarmupDelaySeconds(),
+            profile.proxyMeasurementDelaySeconds()
+        )));
+        populations.addAll(routePopulations(new RoutePopulationPlan(
+            "slow sink",
+            "slow_sink",
+            PerfSessionNames.SLOW_SINK,
+            PerfMeasurements.Route.SLOW_SINK,
+            slowSinkProtocol,
+            profile.slowSinkWarmupDelaySeconds(),
+            profile.slowSinkMeasurementDelaySeconds()
+        )));
 
-        setUp(
-            directWarmupNonStreaming,
-            directWarmupStreaming,
-            directMeasureNonStreaming,
-            directMeasureStreaming,
-            proxyWarmupNonStreaming,
-            proxyWarmupStreaming,
-            proxyMeasureNonStreaming,
-            proxyMeasureStreaming
-        ).assertions(
-            details("measure.direct.non_streaming").failedRequests().count().is(0L),
-            details("measure.direct.streaming").failedRequests().count().is(0L),
-            details("measure.proxy.non_streaming").failedRequests().count().is(0L),
-            details("measure.proxy.streaming").failedRequests().count().is(0L)
+        setUp(populations.toArray(PopulationBuilder[]::new)).assertions(
+            details(PerfSessionNames.DIRECT.nonStreaming()).failedRequests().count().is(0L),
+            details(PerfSessionNames.DIRECT.streaming()).failedRequests().count().is(0L),
+            details(PerfSessionNames.PROXY.nonStreaming()).failedRequests().count().is(0L),
+            details(PerfSessionNames.PROXY.streaming()).failedRequests().count().is(0L),
+            details(PerfSessionNames.SLOW_SINK.nonStreaming()).failedRequests().count().is(0L),
+            details(PerfSessionNames.SLOW_SINK.streaming()).failedRequests().count().is(0L)
         );
     }
 
-    /** Starts both isolated server processes before Gatling injects users. */
+    /** Builds the exact warm-up and measured populations shared by every route. */
+    private List<PopulationBuilder> routePopulations(RoutePopulationPlan plan) {
+        return List.of(
+            warmupPopulation(
+                "warmup " + plan.displayName() + " non-streaming",
+                "warmup." + plan.routeId() + ".non_streaming",
+                PerfMeasurements.ResponseProfile.NON_STREAMING,
+                profile.nonStreamingRps(),
+                plan.warmupDelaySeconds()
+            ).protocols(plan.protocol()),
+            warmupPopulation(
+                "warmup " + plan.displayName() + " streaming",
+                "warmup." + plan.routeId() + ".streaming",
+                PerfMeasurements.ResponseProfile.STREAMING,
+                profile.streamingRps(),
+                plan.warmupDelaySeconds()
+            ).protocols(plan.protocol()),
+            measuredPopulation(
+                "measure " + plan.displayName() + " non-streaming",
+                plan.sessions().nonStreaming(),
+                profile.nonStreamingRps(),
+                plan.measurementDelaySeconds(),
+                plan.route(),
+                PerfMeasurements.ResponseProfile.NON_STREAMING
+            ).protocols(plan.protocol()),
+            measuredPopulation(
+                "measure " + plan.displayName() + " streaming",
+                plan.sessions().streaming(),
+                profile.streamingRps(),
+                plan.measurementDelaySeconds(),
+                plan.route(),
+                PerfMeasurements.ResponseProfile.STREAMING
+            ).protocols(plan.protocol())
+        );
+    }
+
+    /** Starts the isolated upstream and both gateway processes before Gatling injects users. */
     @Override
     public void before() {
         processes.start();
         measurements.markStarted();
     }
 
-    /** Writes the measured summary and always stops both isolated server processes. */
+    /** Flushes both gateways, analyzes their observed request windows, and writes the summary. */
     @Override
     public void after() {
-        try {
-            measurements.writeSummary(profile);
-        } finally {
-            processes.close();
-        }
+        processes.close();
+        measurements.writeSummary(
+            profile,
+            processes.loggingObservation(
+                measurements.measurementWindow(PerfMeasurements.Route.PROXY),
+                measurements.measurementWindow(PerfMeasurements.Route.SLOW_SINK)
+            )
+        );
     }
 
     /** Creates a server-to-server HTTP protocol with a bounded shared connection pool. */
@@ -151,11 +155,11 @@ public final class PerfLoadSimulation extends Simulation {
     private PopulationBuilder warmupPopulation(
         String scenarioName,
         String requestName,
-        String path,
+        PerfMeasurements.ResponseProfile responseProfile,
         double requestsPerSecond,
         int delaySeconds
     ) {
-        ScenarioBuilder warmup = scenario(scenarioName).exec(request(requestName, path, null, null));
+        ScenarioBuilder warmup = scenario(scenarioName).exec(request(requestName, null, responseProfile));
         return warmup.injectOpen(
             nothingFor(Duration.ofSeconds(delaySeconds)),
             rampUsersPerSec(0.0)
@@ -170,14 +174,13 @@ public final class PerfLoadSimulation extends Simulation {
     private PopulationBuilder measuredPopulation(
         String scenarioName,
         String requestName,
-        String path,
         double requestsPerSecond,
         int delaySeconds,
         PerfMeasurements.Route route,
         PerfMeasurements.ResponseProfile responseProfile
     ) {
         ScenarioBuilder measured = scenario(scenarioName)
-            .exec(request(requestName, path, route, responseProfile));
+            .exec(request(requestName, route, responseProfile));
         return measured.injectOpen(
             nothingFor(Duration.ofSeconds(delaySeconds)),
             constantUsersPerSec(requestsPerSecond)
@@ -188,33 +191,56 @@ public final class PerfLoadSimulation extends Simulation {
     /** Builds one fixed-body request and records latency only for measured populations. */
     private ChainBuilder request(
         String requestName,
-        String path,
         PerfMeasurements.Route route,
         PerfMeasurements.ResponseProfile responseProfile
     ) {
-        ChainBuilder chain = exec(
-            http(requestName)
-                .post(path)
-                .header("Content-Type", "application/octet-stream")
-                .body(StringBody(profile.requestBody()))
-                .requestTimeout(Duration.ofSeconds(30))
-                .check(status().is(200))
-        );
-        if (route == null || responseProfile == null) {
-            return chain;
+        HttpRequestActionBuilder request = http(requestName)
+            .post("/v1/chat/completions")
+            .header("Content-Type", "application/json")
+            .header(InspectionPayload.SHA256_HEADER, requestDigest)
+            .header(
+                InspectionPayload.RESPONSE_PROFILE_HEADER,
+                InspectionPayload.responseProfileHeader(responseProfile)
+            )
+            .header("X-Session-ID", requestName)
+            .body(StringBody(requestBody))
+            .requestTimeout(Duration.ofSeconds(30))
+            .check(status().is(200));
+        if (route == null) {
+            return exec(request);
         }
-        return exec(
-            http(requestName)
-                .post(path)
-                .header("Content-Type", "application/octet-stream")
-                .body(StringBody(profile.requestBody()))
-                .requestTimeout(Duration.ofSeconds(30))
-                .check(status().is(200), responseTimeInMillis().saveAs(LATENCY_KEY))
-        ).exec(session -> {
-            if (!session.isFailed() && session.contains(LATENCY_KEY)) {
-                measurements.record(route, responseProfile, session.getLong(LATENCY_KEY));
-            }
-            return session.remove(LATENCY_KEY);
-        });
+        return exec(session -> {
+            measurements.markRequestStarted(route, Instant.now());
+            return session;
+        }).exec(request.check(responseTimeInMillis().saveAs(LATENCY_KEY)))
+            .exec(session -> {
+                measurements.markRequestCompleted(route, Instant.now());
+                if (!session.isFailed() && session.contains(LATENCY_KEY)) {
+                    measurements.record(route, responseProfile, session.getLong(LATENCY_KEY));
+                }
+                return session.remove(LATENCY_KEY);
+            });
+    }
+
+    /**
+     * Immutable inputs for the four canonical populations of one measured route.
+     *
+     * @param displayName human-readable scenario label.
+     * @param routeId stable route token used in warm-up request names.
+     * @param sessions canonical measured session names.
+     * @param route latency and measurement-window owner.
+     * @param protocol route-specific HTTP protocol.
+     * @param warmupDelaySeconds delay before both warm-up populations.
+     * @param measurementDelaySeconds delay before both measured populations.
+     */
+    private record RoutePopulationPlan(
+        String displayName,
+        String routeId,
+        PerfSessionNames sessions,
+        PerfMeasurements.Route route,
+        HttpProtocolBuilder protocol,
+        int warmupDelaySeconds,
+        int measurementDelaySeconds
+    ) {
     }
 }

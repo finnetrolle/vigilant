@@ -3,7 +3,8 @@
     <shutdownHook/>
 
     <property name="LOG_LEVEL" value="${VIGILANT_LOG_LEVEL:-INFO}"/>
-    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+    <appender name="STDOUT" class="io.vigilant.perf.SlowConsoleAppender">
+        <delayMillis>${perf.slowSinkDelayMs:-50}</delayMillis>
         <target>System.out</target>
         <encoder class="ch.qos.logback.classic.encoder.JsonEncoder">
             <withSequenceNumber>false</withSequenceNumber>

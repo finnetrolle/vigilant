@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -49,6 +50,64 @@ final class PerfMeasurementsReportTest {
         );
     }
 
+    /** Verifies that the report publishes the independently measured slow-sink route. */
+    @Test
+    void reportIncludesSlowSinkLatency(@TempDir Path projectDirectory) throws IOException {
+        PerfMeasurements measurements = new PerfMeasurements();
+        measurements.record(
+            PerfMeasurements.Route.SLOW_SINK,
+            PerfMeasurements.ResponseProfile.NON_STREAMING,
+            7
+        );
+        measurements.record(
+            PerfMeasurements.Route.SLOW_SINK,
+            PerfMeasurements.ResponseProfile.STREAMING,
+            9
+        );
+
+        String markdown = Files.readString(measurements.writeSummary(profile(projectDirectory, 60)));
+
+        assertTrue(markdown.contains(
+            "| slow sink / combined | 2 | 240000 | 0.0 | 0.00% | 7 ms | 9 ms | 9 ms | 9 ms |"
+        ));
+    }
+
+    /** Verifies that slow-sink independence and event loss are reported as measured evidence. */
+    @Test
+    void reportEvaluatesSlowSinkIndependenceAndDrops(@TempDir Path projectDirectory) throws IOException {
+        PerfMeasurements measurements = new PerfMeasurements();
+        measurements.record(
+            PerfMeasurements.Route.SLOW_SINK,
+            PerfMeasurements.ResponseProfile.NON_STREAMING,
+            9
+        );
+
+        String markdown = Files.readString(measurements.writeSummary(
+            profile(projectDirectory, 60),
+            new PerfLoggingObservation(
+                240_000,
+                10,
+                new LoggingProfileObservation(120, 20, List.of()),
+                new LoggingProfileObservation(130, 30, List.of())
+            )
+        ));
+
+        assertAll(
+            () -> assertTrue(markdown.contains(
+                "Slow-sink request p99 `9 ms` stayed below the fixed `50 ms` downstream delay: **confirmed**."
+            )),
+            () -> assertTrue(markdown.contains(
+                "Slow-sink audit delivery: `10 / 240000`; bounded queue loss under overload: **observed**."
+            )),
+            () -> assertTrue(markdown.contains(
+                "Default gateway JFR: `120` events, `20` event-loop events, `0` violations: **confirmed**."
+            )),
+            () -> assertTrue(markdown.contains(
+                "Slow-sink gateway JFR: `130` events, `30` event-loop events, `0` violations: **confirmed**."
+            ))
+        );
+    }
+
     /** Creates a valid full PERF-01 profile for report tests. */
     private static PerfProfile profile(Path projectDirectory, int steadyWarmupSeconds) {
         return new PerfProfile(
@@ -66,7 +125,9 @@ final class PerfMeasurementsReportTest {
             1_024,
             1,
             18_081,
-            18_080
+            18_080,
+            18_082,
+            50
         );
     }
 }

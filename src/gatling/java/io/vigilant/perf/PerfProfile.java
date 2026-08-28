@@ -1,5 +1,6 @@
 package io.vigilant.perf;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 
 /** Immutable, validated configuration of one PERF-01 run. */
@@ -18,7 +19,9 @@ record PerfProfile(
     int streamingChunkBytes,
     int streamingChunkDelayMs,
     int upstreamPort,
-    int gatewayPort
+    int gatewayPort,
+    int slowSinkGatewayPort,
+    int slowSinkDelayMs
 ) {
     /**
      * Loads the profile from {@code -Dperf.*} system properties and validates it.
@@ -39,7 +42,9 @@ record PerfProfile(
             integerProperty("perf.streamingChunkBytes", 1_024),
             integerProperty("perf.streamingChunkDelayMs", 1),
             integerProperty("perf.upstreamPort", 18_081),
-            integerProperty("perf.gatewayPort", 18_080)
+            integerProperty("perf.gatewayPort", 18_080),
+            integerProperty("perf.slowSinkGatewayPort", 18_082),
+            integerProperty("perf.slowSinkDelayMs", 50)
         );
         profile.validate();
         return profile;
@@ -65,14 +70,24 @@ record PerfProfile(
         return proxyWarmupDelaySeconds() + totalWarmupSeconds();
     }
 
+    /** Returns the delay before the slow-sink warm-up begins. */
+    int slowSinkWarmupDelaySeconds() {
+        return proxyMeasurementDelaySeconds() + measurementSeconds + phaseGapSeconds;
+    }
+
+    /** Returns the delay before the slow-sink measurement begins. */
+    int slowSinkMeasurementDelaySeconds() {
+        return slowSinkWarmupDelaySeconds() + totalWarmupSeconds();
+    }
+
     /** Returns the ramp plus steady-state warm-up duration for one path. */
     int totalWarmupSeconds() {
         return warmupSeconds + steadyWarmupSeconds;
     }
 
-    /** Returns the fixed request body as an ASCII string. */
+    /** Returns the fixed-size supported Chat Completions request body. */
     String requestBody() {
-        return "r".repeat(requestBytes);
+        return new String(InspectionPayload.chatCompletions(requestBytes), StandardCharsets.UTF_8);
     }
 
     /** Returns the direct upstream base URL. */
@@ -83,6 +98,11 @@ record PerfProfile(
     /** Returns the gateway base URL. */
     String gatewayBaseUrl() {
         return "http://127.0.0.1:" + gatewayPort;
+    }
+
+    /** Returns the slow-sink gateway base URL. */
+    String slowSinkGatewayBaseUrl() {
+        return "http://127.0.0.1:" + slowSinkGatewayPort;
     }
 
     /**
@@ -110,13 +130,17 @@ record PerfProfile(
         requirePositive("perf.streamingChunkBytes", streamingChunkBytes);
         requirePositive("perf.upstreamPort", upstreamPort);
         requirePositive("perf.gatewayPort", gatewayPort);
+        requirePositive("perf.slowSinkGatewayPort", slowSinkGatewayPort);
+        requirePositive("perf.slowSinkDelayMs", slowSinkDelayMs);
         if (nonStreamingPercent <= 0 || nonStreamingPercent >= 100) {
             throw new IllegalArgumentException("perf.nonStreamingPercent must be between 1 and 99");
         }
         if (streamingChunkDelayMs < 0) {
             throw new IllegalArgumentException("perf.streamingChunkDelayMs must not be negative");
         }
-        if (upstreamPort > 65_535 || gatewayPort > 65_535 || upstreamPort == gatewayPort) {
+        if (upstreamPort > 65_535 || gatewayPort > 65_535 || slowSinkGatewayPort > 65_535
+            || upstreamPort == gatewayPort || upstreamPort == slowSinkGatewayPort
+            || gatewayPort == slowSinkGatewayPort) {
             throw new IllegalArgumentException("perf ports must be distinct valid TCP ports");
         }
     }
