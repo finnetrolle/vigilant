@@ -9,57 +9,42 @@ import io.opentelemetry.api.common.AttributeKey
 import io.opentelemetry.api.trace.Span
 import io.opentelemetry.api.trace.SpanKind
 import io.opentelemetry.api.trace.StatusCode
-import io.vigilant.context.PolicyContextHandoff
-import io.vigilant.context.PolicyContextHandoffResult
 import io.vigilant.gateway.identity.IdentityExtractor
 import io.vigilant.gateway.identity.IdentityExtractionResult
 import io.vigilant.gateway.tracing.RequestTracing
-import io.vigilant.policy.domain.PolicyContext
-import io.vigilant.policy.domain.PolicyDecision
-import io.vigilant.policy.engine.PolicyEngine
-import io.vigilant.protocol.openai.NormalizedChatCompletionsRequest
 import io.vigilant.source.BoundedRequestSourceOwner
 import io.vigilant.source.RequestSourceIngestResult
 import io.vigilant.source.RequestSourceOpenResult
 import io.vigilant.source.RequestSourceOutcomeCode
 import io.vigilant.source.RequestSourceQuota
-import io.vigilant.source.RequestSourceReplayResult
-import java.net.URI
-import java.time.Duration
 import java.util.concurrent.CancellationException
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
-import java.util.concurrent.ExecutionException
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Future
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
-import kotlin.coroutines.Continuation
-import kotlin.coroutines.EmptyCoroutineContext
-import kotlin.coroutines.startCoroutine
 
 /**
  * Request-side OpenAI Chat Completions shadow-inspection boundary.
  *
- * The complete request body is retained by [requestSourceQuota] before parsing or
- * policy evaluation. Identity is extracted before body demand, the immutable request
- * context is retained only in the Armeria request scope for future response evaluation,
- * and allowed requests are replayed through [bypassProxyService] after consumed identity
- * headers are removed. Exact body replay, stable upstream errors and streaming response
- * semantics remain owned by the transport proxy.
+ * The complete request body is retained by [requestSourceQuota] before this adapter
+ * delegates typed orchestration to [workflow]. Identity is extracted before body demand;
+ * expected rejects are mapped to stable HTTP responses, while a successful one-shot replay
+ * transfer invokes [bypassProxyService] after consumed identity headers are removed. Exact
+ * body replay, stable upstream errors and streaming response semantics remain owned by the
+ * transport proxy.
  */
 @Suppress("LongParameterList", "ReturnCount", "TooGenericExceptionCaught")
-class PiiShadowProxyService(
-    upstreamUri: URI,
+class PiiShadowProxyService internal constructor(
     private val bypassProxyService: BypassProxyService,
     private val requestSourceQuota: RequestSourceQuota,
-    private val policyEngine: PolicyEngine,
+    private val protocol: PiiShadowProtocol,
+    private val workflow: ShadowInspectionWorkflow,
     private val inspectionExecutor: ExecutorService,
     private val identityExtractor: IdentityExtractor,
+    private val auditLogger: ShadowAuditLogger,
 ) : HttpService {
-    private val protocol = PiiShadowProtocol(upstreamUri)
-    private val auditLogger = ShadowAuditLogger()
-
     /**
      * Selects the supported descriptor and extracts identity before body demand,
      * then returns a response backed by bounded ingest and blocking-safe inspection.
@@ -182,63 +167,41 @@ class PiiShadowProxyService(
         return completion
     }
 
-    /** Parses, stores the context handoff, evaluates, strips identity and transfers exact replay. */
-    @Suppress("ReturnCount")
+    /** Delegates complete-source inspection and maps its typed result to HTTP or transport handoff. */
     private fun processCompleteSource(
         ctx: ServiceRequestContext,
         request: HttpRequest,
         owner: BoundedRequestSourceOwner,
         identity: IdentityExtractionResult.Success,
         inspectionSpan: Span?,
-    ): HttpResponse {
-        var replayOwnsSource = false
-        try {
-            val normalizedRequest = protocol.parse(owner)
-            val context = protocol.assembleContext(request, normalizedRequest, identity.identity)
-            when (val handoff = PolicyContextHandoff.storeRequest(ctx, context)) {
-                is PolicyContextHandoffResult.Success -> Unit
-                is PolicyContextHandoffResult.Failure ->
-                    throw SafeContextFailure(ShadowAuditError.ContextHandoff(handoff.code))
-            }
-            val startedAt = System.nanoTime()
-            val decisions = evaluateFragments(context, normalizedRequest)
-            val evaluationDuration = Duration.ofNanos(System.nanoTime() - startedAt)
+    ): HttpResponse =
+        when (val outcome = workflow.execute(owner, request, identity, ctx, inspectionSpan)) {
+            is ShadowInspectionOutcome.Forward -> forwardReplay(ctx, request, outcome.replay)
+            is ShadowInspectionOutcome.Reject -> rejectionResponse(outcome.error)
+        }
 
-            val replay = owner.replay()
-            if (replay is RequestSourceReplayResult.Unavailable) {
-                throw SafeSourceFailure(replay.code)
-            }
-            check(replay is RequestSourceReplayResult.Available)
-            replayOwnsSource = true
-            auditLogger.decision(ctx, normalizedRequest, decisions, evaluationDuration, inspectionSpan)
-            return bypassProxyService.serve(
-                ctx,
-                replayRequest(request, replay.publisher, identity.headersToStrip),
-            )
-        } catch (failure: SafeParseFailure) {
-            auditLogger.error(ctx, ShadowAuditError.Parser(failure.code), inspectionSpan)
-            return stableProxyError(HttpStatus.BAD_REQUEST, failure.code.name.lowercase())
-        } catch (failure: SafeSourceFailure) {
-            auditLogger.error(ctx, ShadowAuditError.Source(failure.code), inspectionSpan)
-            return InspectionHttpResponses.sourceError(failure.code)
-        } catch (failure: SafeContextFailure) {
-            auditLogger.error(ctx, failure.error, inspectionSpan)
-            return stableProxyError(HttpStatus.INTERNAL_SERVER_ERROR, "inspection_failed")
-        } finally {
-            if (!replayOwnsSource) {
-                owner.close()
+    /** Transfers one ready exact replay to the existing streaming transport boundary. */
+    private fun forwardReplay(
+        ctx: ServiceRequestContext,
+        request: HttpRequest,
+        replay: ReplayReadyRequest,
+    ): HttpResponse =
+        replay.use { ready ->
+            ready.transferTo { publisher, headersToStrip ->
+                bypassProxyService.serve(ctx, replayRequest(request, publisher, headersToStrip))
             }
         }
-    }
 
-    /** Evaluates every independent text fragment without concatenating protocol fields. */
-    private fun evaluateFragments(
-        context: PolicyContext,
-        normalizedRequest: NormalizedChatCompletionsRequest,
-    ): List<PolicyDecision> {
-        val payloads = normalizedRequest.fragments.map { fragment -> fragment.text }.ifEmpty { listOf("") }
-        return payloads.map { payload -> runSuspending { policyEngine.evaluate(context, payload) } }
-    }
+    /** Maps only expected complete-source workflow rejections to existing stable responses. */
+    private fun rejectionResponse(rejection: ShadowInspectionRejection): HttpResponse =
+        when (rejection) {
+            is ShadowInspectionRejection.Parser ->
+                stableProxyError(HttpStatus.BAD_REQUEST, rejection.code.name.lowercase())
+
+            is ShadowInspectionRejection.Source -> InspectionHttpResponses.sourceError(rejection.code)
+            is ShadowInspectionRejection.Context ->
+                stableProxyError(HttpStatus.INTERNAL_SERVER_ERROR, "inspection_failed")
+        }
 
     private companion object {
         const val INSPECTION_SPAN_NAME = "vigilant.request.inspect"
@@ -280,30 +243,6 @@ internal class InspectionCancellation(
         if (ownerClosed.compareAndSet(false, true)) closeOwner()
         taskReference.get()?.cancel(true)
         completionReference.get()?.cancel(false)
-    }
-}
-
-/** Runs one suspension boundary on the current blocking-safe inspection thread. */
-private fun <T> runSuspending(block: suspend () -> T): T {
-    val completion = CompletableFuture<T>()
-    block.startCoroutine(
-        object : Continuation<T> {
-            override val context = EmptyCoroutineContext
-
-            /** Publishes the terminal coroutine result to the blocking bridge. */
-            override fun resumeWith(result: Result<T>) {
-                result.fold(completion::complete, completion::completeExceptionally)
-            }
-        },
-    )
-    return try {
-        completion.get()
-    } catch (interrupted: InterruptedException) {
-        completion.cancel(true)
-        Thread.currentThread().interrupt()
-        throw CancellationException("Policy evaluation was cancelled").also { it.initCause(interrupted) }
-    } catch (failed: ExecutionException) {
-        throw CompletionException(failed.cause ?: failed)
     }
 }
 

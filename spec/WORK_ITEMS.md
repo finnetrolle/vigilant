@@ -112,6 +112,7 @@ Issue является листом mind map, если:
 | [VIG-16: Packaged shadow proxy evidence](issues/issue_16_packaged_shadow_proxy_evidence.md) | `Done` | завершена | 0 дней осталось |
 | [VIG-17: Сквозной tracing context и OTLP JSON через stdout](issues/issue_17_request_tracing_stdout_otlp.md) | `Done` | завершена | 0 дней осталось |
 | [VIG-18: Inspection load baseline and production report](issues/issue_18_inspection_load_report.md) | `Done` | завершена | 0 дней осталось |
+| [VIG-19: Типизированный workflow request-side shadow inspection](issues/issue_19_typed_shadow_inspection_workflow.md) | `Done` | завершена | 0 дней осталось |
 
 ## Как закрывать work item
 

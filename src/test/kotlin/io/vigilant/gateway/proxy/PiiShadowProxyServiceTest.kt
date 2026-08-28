@@ -10,6 +10,8 @@ import com.linecorp.armeria.common.HttpStatus
 import com.linecorp.armeria.common.MediaType
 import com.linecorp.armeria.common.RequestHeaders
 import com.linecorp.armeria.common.ResponseHeaders
+import com.linecorp.armeria.server.HttpService
+import com.linecorp.armeria.server.ServiceRequestContext
 import io.opentelemetry.api.common.AttributeKey.stringKey
 import io.opentelemetry.api.trace.SpanKind
 import io.opentelemetry.sdk.common.CompletableResultCode
@@ -66,14 +68,15 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.SubmissionPublisher
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import org.reactivestreams.Publisher
 import org.reactivestreams.Subscriber
 import org.reactivestreams.Subscription
 
@@ -368,6 +371,7 @@ class PiiShadowProxyServiceTest {
     @Test
     fun `untrusted configured identity is rejected before body demand and upstream`() {
         val upstreamRequests = AtomicInteger()
+        val requestBodyDemandObserved = AtomicBoolean()
         val upstream = fixture.startServer {
             upstreamRequests.incrementAndGet()
             HttpResponse.of(HttpStatus.OK)
@@ -382,6 +386,7 @@ class PiiShadowProxyServiceTest {
                     groupsHeader = null,
                     trustedNetworks = listOf(requireNotNull(TrustedNetwork.parseOrNull("10.0.0.0/8"))),
                 ),
+            requestBodyDemandObserved = requestBodyDemandObserved,
         )
         val client = WebClient.of(fixture.serverUri(gateway).toString())
 
@@ -398,6 +403,7 @@ class PiiShadowProxyServiceTest {
 
         assertEquals(HttpStatus.FORBIDDEN, response.status())
         assertEquals("""{"error":"untrusted_identity"}""", response.contentUtf8())
+        assertFalse(requestBodyDemandObserved.get(), "identity rejection demanded the request body")
         assertEquals(0, upstreamRequests.get())
         assertTrue(
             fixture.awaitUntil(Duration.ofSeconds(2)) {
@@ -442,21 +448,34 @@ class PiiShadowProxyServiceTest {
         assertTrue(spans.all { it.attributes.get(stringKey("session.id")) == "task-42" })
     }
 
-    /** Verifies descriptor rejection before any upstream request is created. */
+    /** Verifies descriptor rejection before body demand or any upstream request. */
     @Test
-    fun `unsupported descriptor is rejected before any upstream request`() {
+    fun `unsupported descriptor is rejected before body demand and upstream`() {
         val upstreamRequests = AtomicInteger()
+        val requestBodyDemandObserved = AtomicBoolean()
         val upstream = fixture.startServer {
             upstreamRequests.incrementAndGet()
             HttpResponse.of(HttpStatus.OK)
         }
-        val gateway = startShadowGateway(fixture.serverUri(upstream))
+        val gateway = startShadowGateway(
+            fixture.serverUri(upstream),
+            requestBodyDemandObserved = requestBodyDemandObserved,
+        )
         val client = WebClient.of(fixture.serverUri(gateway).toString())
 
-        val response = client.get("/v1/models").aggregate().join()
+        val response =
+            client.execute(
+                HttpRequest.of(
+                    RequestHeaders.builder(HttpMethod.POST, "/v1/models")
+                        .contentType(MediaType.JSON)
+                        .build(),
+                    HttpData.ofUtf8("unsupported-body-sentinel"),
+                ),
+            ).aggregate().join()
 
         assertEquals(HttpStatus.BAD_REQUEST, response.status())
         assertEquals("""{"error":"unsupported_schema"}""", response.contentUtf8())
+        assertFalse(requestBodyDemandObserved.get(), "descriptor rejection demanded the request body")
         assertEquals(0, upstreamRequests.get())
     }
 
@@ -814,7 +833,8 @@ class PiiShadowProxyServiceTest {
     /** Verifies SSE stays streaming while the same request snapshot reaches response phase. */
     @Test
     fun `sse response reaches client before upstream finishes streaming`() {
-        val lastChunkWriteNanos = AtomicLong(-1)
+        val releaseRemainingChunks = CountDownLatch(1)
+        val upstreamFinished = AtomicBoolean()
         val chunks =
             listOf(
                 "data: {\"delta\":\"Hel\"}\n\n",
@@ -825,13 +845,13 @@ class PiiShadowProxyServiceTest {
             val streaming = HttpResponse.streaming()
             thread(name = "shadow-upstream-sse-writer") {
                 streaming.write(ResponseHeaders.builder(HttpStatus.OK).contentType(MediaType.EVENT_STREAM).build())
-                chunks.forEachIndexed { index, chunk ->
-                    Thread.sleep(200)
-                    if (index == chunks.lastIndex) {
-                        lastChunkWriteNanos.set(System.nanoTime())
-                    }
-                    streaming.write(HttpData.ofUtf8(chunk))
+                streaming.write(HttpData.ofUtf8(chunks.first()))
+                if (!releaseRemainingChunks.await(10, TimeUnit.SECONDS)) {
+                    streaming.close()
+                    return@thread
                 }
+                chunks.drop(1).forEach { chunk -> streaming.write(HttpData.ofUtf8(chunk)) }
+                upstreamFinished.set(true)
                 streaming.close()
             }
             streaming
@@ -848,9 +868,15 @@ class PiiShadowProxyServiceTest {
 
         response.subscribe(received)
 
+        try {
+            assertTrue(received.firstBody.await(10, TimeUnit.SECONDS), "first SSE body chunk was not observed")
+            assertFalse(upstreamFinished.get(), "upstream finished before the first body observation")
+            assertEquals(listOf(chunks.first()), received.chunks.toList())
+        } finally {
+            releaseRemainingChunks.countDown()
+        }
         assertTrue(received.completion.await(10, TimeUnit.SECONDS), "SSE response did not complete")
         received.failure?.let { throw AssertionError("SSE response failed", it) }
-        assertTrue(received.firstBodyByteNanos.get() in 1 until lastChunkWriteNanos.get())
         assertEquals(chunks, received.chunks.toList())
         val responseContext = responseContexts.single()
         assertEquals(PolicyPhase.RESPONSE, responseContext.phase)
@@ -899,6 +925,7 @@ class PiiShadowProxyServiceTest {
      *
      * @param responseContexts optional response-phase contexts observed through the public handoff.
      * @param serviceContexts optional request scopes retained only for terminal-release assertions.
+     * @param requestBodyDemandObserved optional observer set when inspection demands request content.
      */
     @Suppress("LongParameterList")
     private fun startShadowGateway(
@@ -910,6 +937,7 @@ class PiiShadowProxyServiceTest {
             IdentitySettings(IdentityMode.ANONYMOUS, null, null, emptyList()),
         responseContexts: MutableList<PolicyContext>? = null,
         serviceContexts: MutableList<com.linecorp.armeria.server.ServiceRequestContext>? = null,
+        requestBodyDemandObserved: AtomicBoolean? = null,
     ): com.linecorp.armeria.server.Server {
         val requestExecutor = Executors.newVirtualThreadPerTaskExecutor().also(closeables::add)
         val cpuExecutor = Executors.newFixedThreadPool(2).also(closeables::add)
@@ -928,39 +956,68 @@ class PiiShadowProxyServiceTest {
                     ),
                 reactionAggregator = ReactionAggregator(),
             )
+        val protocol = PiiShadowProtocol(upstreamUri)
+        val auditLogger = ShadowAuditLogger()
         val shadowService =
             PiiShadowProxyService(
-                upstreamUri = upstreamUri,
                 bypassProxyService = BypassProxyService(upstreamUri, WebClient.of()),
                 requestSourceQuota = quota,
-                policyEngine = policyEngine,
+                protocol = protocol,
+                workflow = ShadowInspectionWorkflow(protocol, policyEngine, auditLogger),
                 inspectionExecutor = requestExecutor,
                 identityExtractor = IdentityExtractor(identitySettings),
+                auditLogger = auditLogger,
             )
         val tracerProvider = SdkTracerProvider.builder()
             .addSpanProcessor(SimpleSpanProcessor.builder(spanExporter).build())
             .build()
             .also(closeables::add)
-        val observedService = if (responseContexts == null && serviceContexts == null) {
-            shadowService
-        } else {
-            com.linecorp.armeria.server.HttpService { ctx, request ->
-                serviceContexts?.add(ctx)
-                val response = shadowService.serve(ctx, request)
-                if (responseContexts == null) {
-                    response
-                } else {
-                    response.mapHeaders { headers ->
-                        val handoff = PolicyContextHandoff.responseContext(ctx)
-                        if (handoff is PolicyContextHandoffResult.Success) responseContexts += handoff.context
-                        headers
-                    }
-                }
-            }
-        }
+        val observedService =
+            observeShadowService(
+                shadowService,
+                responseContexts,
+                serviceContexts,
+                requestBodyDemandObserved,
+            )
         return fixture.startServer(
             TracingService(observedService, tracerProvider.get("io.vigilant.gateway.test")),
         )
+    }
+
+    /**
+     * Adds optional request-scope, response-context, and body-demand observations.
+     *
+     * @param shadowService real inspection service under test.
+     * @param responseContexts optional response-phase handoff sink.
+     * @param serviceContexts optional request-scope sink.
+     * @param requestBodyDemandObserved optional inspection demand observer.
+     */
+    private fun observeShadowService(
+        shadowService: PiiShadowProxyService,
+        responseContexts: MutableList<PolicyContext>?,
+        serviceContexts: MutableList<ServiceRequestContext>?,
+        requestBodyDemandObserved: AtomicBoolean?,
+    ): HttpService {
+        if (responseContexts == null && serviceContexts == null && requestBodyDemandObserved == null) {
+            return shadowService
+        }
+        return HttpService { ctx, request ->
+            serviceContexts?.add(ctx)
+            val observedRequest =
+                requestBodyDemandObserved?.let { observed ->
+                    HttpRequest.of(request.headers(), DemandObservingPublisher(request, observed))
+                } ?: request
+            val response = shadowService.serve(ctx, observedRequest)
+            if (responseContexts == null) {
+                response
+            } else {
+                response.mapHeaders { headers ->
+                    val handoff = PolicyContextHandoff.responseContext(ctx)
+                    if (handoff is PolicyContextHandoffResult.Success) responseContexts += handoff.context
+                    headers
+                }
+            }
+        }
     }
 
     /**
@@ -1006,21 +1063,21 @@ class PiiShadowProxyServiceTest {
         )
     }
 
-    /** Collects streamed response chunks and the first body-byte timestamp. */
+    /** Collects streamed response chunks and signals the first body observation. */
     private class ReceivedStream : Subscriber<HttpObject> {
         val chunks = CopyOnWriteArrayList<String>()
-        val firstBodyByteNanos = AtomicLong(-1)
+        val firstBody = CountDownLatch(1)
         val completion = CountDownLatch(1)
         var failure: Throwable? = null
 
         /** Requests the complete bounded response stream from the test client. */
         override fun onSubscribe(subscription: Subscription) = subscription.request(Long.MAX_VALUE)
 
-        /** Records body chunks and the first observable body-byte timestamp. */
+        /** Records body chunks and signals the first observable body data. */
         override fun onNext(item: HttpObject) {
             if (item is HttpData && item.length() > 0) {
-                firstBodyByteNanos.compareAndSet(-1, System.nanoTime())
                 chunks += item.toStringUtf8()
+                firstBody.countDown()
             }
         }
 
@@ -1032,6 +1089,44 @@ class PiiShadowProxyServiceTest {
 
         /** Releases the waiter after a complete upstream response. */
         override fun onComplete() = completion.countDown()
+    }
+
+    /** Request-body publisher that records demand issued by the inspection adapter. */
+    private class DemandObservingPublisher(
+        private val delegate: Publisher<HttpObject>,
+        private val demandObserved: AtomicBoolean,
+    ) : Publisher<HttpObject> {
+        /** Relays the original body while wrapping only its downstream subscription. */
+        override fun subscribe(subscriber: Subscriber<in HttpObject>) {
+            delegate.subscribe(
+                object : Subscriber<HttpObject> {
+                    /** Exposes a subscription that records positive inspection demand. */
+                    override fun onSubscribe(subscription: Subscription) {
+                        subscriber.onSubscribe(
+                            object : Subscription {
+                                /** Records positive demand before forwarding it to the server request. */
+                                override fun request(elements: Long) {
+                                    if (elements > 0) demandObserved.set(true)
+                                    subscription.request(elements)
+                                }
+
+                                /** Propagates cancellation to the original server request. */
+                                override fun cancel() = subscription.cancel()
+                            },
+                        )
+                    }
+
+                    /** Relays one request-body object unchanged. */
+                    override fun onNext(item: HttpObject) = subscriber.onNext(item)
+
+                    /** Relays the original request-body failure unchanged. */
+                    override fun onError(failure: Throwable) = subscriber.onError(failure)
+
+                    /** Relays original request-body completion unchanged. */
+                    override fun onComplete() = subscriber.onComplete()
+                },
+            )
+        }
     }
 }
 

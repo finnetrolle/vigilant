@@ -116,12 +116,13 @@ class DetectorExecutionCoordinatorTest {
         }
     }
 
-    /** Verifies exact completed and unfinished detector outcomes for a partially completed policy. */
+    /** Verifies exact published-complete and unfinished outcomes for a partially completed policy. */
     @Test
     fun `policy deadline preserves completed result and errors only unfinished detectors`() {
         val completedDetectorId = DetectorId("a-completed-detector")
         val unfinishedDetectorId = DetectorId("z-unfinished-detector")
-        val completed = CountDownLatch(1)
+        val detectorReturned = CountDownLatch(1)
+        val completedDetectorTask = AtomicReference<Thread>()
         val unfinishedStarted = CountDownLatch(1)
         val unfinishedCancelled = CountDownLatch(1)
         val scheduler = ManualPolicyDeadlineScheduler()
@@ -137,7 +138,8 @@ class DetectorExecutionCoordinatorTest {
                     mapOf(
                         completedDetectorId to
                             Detector {
-                                completed.countDown()
+                                completedDetectorTask.set(Thread.currentThread())
+                                detectorReturned.countDown()
                                 DetectionResult.Clean
                             },
                         unfinishedDetectorId to blockingDetector(unfinishedStarted, unfinishedCancelled),
@@ -150,9 +152,9 @@ class DetectorExecutionCoordinatorTest {
             val executionFuture =
                 caller.submit<DetectorExecutionResults> {
                     coordinator.execute(listOf(appliedPolicy), "one payload")
-                }
+            }
             try {
-                assertTrue(completed.await(2, TimeUnit.SECONDS), "Completed detector must finish")
+                awaitPublishedDetectorResult(detectorReturned, completedDetectorTask)
                 assertTrue(unfinishedStarted.await(2, TimeUnit.SECONDS), "Unfinished detector must start")
 
                 scheduler.advanceBy(Duration.ofMillis(20))
@@ -176,6 +178,17 @@ class DetectorExecutionCoordinatorTest {
                 executionFuture.cancel(true)
             }
         }
+    }
+
+    /** Waits until a detector task terminates after publishing its normalized result. */
+    private fun awaitPublishedDetectorResult(
+        detectorReturned: CountDownLatch,
+        detectorTask: AtomicReference<Thread>,
+    ) {
+        assertTrue(detectorReturned.await(2, TimeUnit.SECONDS), "Completed detector must finish")
+        val completedTask = checkNotNull(detectorTask.get())
+        completedTask.join(Duration.ofSeconds(2))
+        assertFalse(completedTask.isAlive, "Completed detector result was not published")
     }
 
     /** Verifies that multiple policy consumers share one normalized detector invocation result. */

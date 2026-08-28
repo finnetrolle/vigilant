@@ -30,11 +30,13 @@ Client
        -> descriptor validation
        -> config-driven identity extraction and trust check
        -> bounded request ingest
-       -> Chat Completions parser
-       -> normalized request policy context and scoped handoff
-       -> policy selection and fast-pii inspection
-       -> safe aggregate shadow audit
-       -> identity header stripping and exact-byte request replay
+       -> ShadowInspectionWorkflow
+            -> Chat Completions parser
+            -> normalized request policy context and scoped handoff
+            -> policy selection and fast-pii inspection
+            -> safe aggregate shadow audit
+            -> Forward | Reject
+       -> ReplayReadyRequest one-shot transport handoff
   -> BypassProxyService
        -> header normalization
        -> pooled Armeria WebClient
@@ -79,7 +81,10 @@ username и не преобразует password bytes в retained string. Ош�
 проверяется до body demand, а фактический размер - во время ingest.
 
 Complete source имеет последовательные leases: сначала read-only view для
-parser, затем demand-driven replay. Cancellation закрывает owner, отменяет
+parser, затем demand-driven replay. После ingest HTTP-адаптер атомарно передаёт
+owner в `ShadowInspectionWorkflow`. При expected reject, exception или
+cancellation workflow закрывает owner; при `Forward` ownership переходит в
+`ReplayReadyRequest`. Cancellation закрывает owner, отменяет
 ingest/inspection/replay и освобождает квоты.
 
 ### 3. Lossless parsing
@@ -145,14 +150,28 @@ metadata, но не matched text. Фрагменты больше одновыз
 
 ### 6. Audit и exact replay
 
+Complete-source orchestration выполняет синхронный
+`ShadowInspectionWorkflow` на существующем blocking-safe inspection executor.
+Он последовательно открывает единственный parser view, собирает и сохраняет
+request context, оценивает каждый независимый text fragment, получает replay
+ровно один раз и возвращает взаимоисключающий `Forward` или expected `Reject`.
+Unexpected exception и cancellation не превращаются в expected result и
+остаются outer failures HTTP-адаптера.
+
 После policy evaluation `ShadowAuditLogger` пишет один aggregate
 `policy.shadow_decision`. В нём есть coverage, policy/detector identities,
 числа fragments/findings и безопасные агрегаты по типам. Payload, matched text,
 locators и headers в audit не попадают.
 
-Перед exact replay из request headers удаляется только strip set, возвращённый
+`ReplayReadyRequest` инкапсулирует demand-driven publisher и immutable strip
+set. Его `transferTo` допускает ровно один transport handoff. `close()` до
+handoff и synchronous callback failure освобождают source; после принятого
+handoff owner освобождается только terminal signal replay. Это исключает окно
+без владельца между workflow и transport.
+
+Во время handoff из request headers удаляется только strip set, возвращённый
 identity extractor: configured Vigilant-only headers для `TRUSTED_HEADERS` или
-consumed `Authorization` для `BASIC`. Затем source передаёт исходные bytes в
+consumed `Authorization` для `BASIC`. Затем исходные bytes передаются в
 `BypassProxyService`. Этот transport слой:
 
 - переписывает scheme, authority и base path под upstream URL;
@@ -208,7 +227,7 @@ Quiet period и force timeout настраиваются. Полный опер�
 | Composition и lifecycle | `gateway/Main.kt`, `gateway/AppComponent.kt` |
 | Application configuration | `gateway/config/AppConfig.kt` |
 | Admission и probes | `gateway/health/*` |
-| Request inspection | `gateway/proxy/PiiShadowProxyService.kt`, `InspectionResources.kt` |
+| Request inspection | `gateway/proxy/PiiShadowProxyService.kt`, `ShadowInspectionWorkflow.kt`, `ReplayReadyRequest.kt`, `InspectionResources.kt` |
 | Transport proxy | `gateway/proxy/BypassProxyService.kt`, `UpstreamClientResources.kt` |
 | OpenAI normalization | `protocol/openai/*` |
 | Bounded request source | `source/*` |

@@ -23,6 +23,9 @@ import io.vigilant.gateway.metrics.buildSdkMeterProvider
 import io.vigilant.gateway.proxy.BypassProxyService
 import io.vigilant.gateway.proxy.InspectionResources
 import io.vigilant.gateway.proxy.PiiShadowProxyService
+import io.vigilant.gateway.proxy.PiiShadowProtocol
+import io.vigilant.gateway.proxy.ShadowAuditLogger
+import io.vigilant.gateway.proxy.ShadowInspectionWorkflow
 import io.vigilant.gateway.proxy.UpstreamClientResources
 import io.vigilant.gateway.tracing.TracingService
 import io.vigilant.gateway.tracing.buildSdkTracerProvider
@@ -102,7 +105,7 @@ interface AppComponent {
                 reactionAggregator = ReactionAggregator(),
             )
 
-        /** Connects bounded request inspection to the existing streaming transport proxy. */
+        /** Assembles typed complete-source inspection and connects it to streaming transport. */
         @Provides
         @SingleIn(AppScope::class)
         fun piiShadowProxyService(
@@ -110,15 +113,20 @@ interface AppComponent {
             bypassProxyService: BypassProxyService,
             inspectionResources: InspectionResources,
             policyEngine: PolicyEngine,
-        ): PiiShadowProxyService =
-            PiiShadowProxyService(
-                upstreamUri = appConfig.upstreamUri,
+        ): PiiShadowProxyService {
+            val protocol = PiiShadowProtocol(appConfig.upstreamUri)
+            val auditLogger = ShadowAuditLogger()
+            val workflow = ShadowInspectionWorkflow(protocol, policyEngine, auditLogger)
+            return PiiShadowProxyService(
                 bypassProxyService = bypassProxyService,
                 requestSourceQuota = inspectionResources.requestSourceQuota,
-                policyEngine = policyEngine,
+                protocol = protocol,
+                workflow = workflow,
                 inspectionExecutor = inspectionResources.requestExecutor,
                 identityExtractor = IdentityExtractor(appConfig.identity),
+                auditLogger = auditLogger,
             )
+        }
 
         @Provides
         @SingleIn(AppScope::class)
