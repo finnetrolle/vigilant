@@ -43,6 +43,8 @@ vigilant {
   tracing-session-header = "x-session-id"
   tracing-traceparent-header = "traceparent"
 
+  identity-mode = "ANONYMOUS"
+
   otlp-enabled = true
 }
 ~~~
@@ -66,6 +68,10 @@ variable `VIGILANT_SOME_SETTING`.
 | `VIGILANT_INSPECTION_MAX_RETAINED_SEGMENTS_PER_REQUEST` | Максимум storage segments одного request | `128` |
 | `VIGILANT_TRACING_SESSION_HEADER` | Header с opaque session ID | `x-session-id` |
 | `VIGILANT_TRACING_TRACEPARENT_HEADER` | Header со значением W3C `traceparent` | `traceparent` |
+| `VIGILANT_IDENTITY_MODE` | Единственный identity source: `ANONYMOUS`, `TRUSTED_HEADERS` или `BASIC` | `ANONYMOUS` |
+| `VIGILANT_IDENTITY_USER_HEADER` | Optional user header для `TRUSTED_HEADERS` | не задан |
+| `VIGILANT_IDENTITY_GROUPS_HEADER` | Optional comma-separated groups header для `TRUSTED_HEADERS` | не задан |
+| `VIGILANT_IDENTITY_TRUSTED_CIDRS` | Comma-separated literal IPv4/IPv6 CIDR immediate peers | не задан |
 | `VIGILANT_OTLP_ENABLED` | Выводит traces и metrics как OTLP JSON Lines в stdout | `true` |
 | `VIGILANT_CONFIG` | Явный путь к HOCON-файлу | не задан |
 
@@ -86,6 +92,19 @@ variable `VIGILANT_SOME_SETTING`.
 - Inspection counts и limits должны быть положительными.
 - Оба tracing header name должны быть валидными HTTP header names и не должны
   совпадать без учёта регистра.
+- Identity mode задаётся явно и не смешивает sources. `ANONYMOUS` и `BASIC`
+  запрещают trusted-header settings.
+- `TRUSTED_HEADERS` требует хотя бы один valid user/groups header, distinct
+  header names и непустой список literal IPv4/IPv6 CIDR. DNS lookup при
+  validation не выполняется.
+
+`TRUSTED_HEADERS` принимает user с одним header value и groups из repeated или
+combined comma-separated values. Identity token grammar:
+`[A-Za-z0-9][A-Za-z0-9._:@/\-]{0,127}`; результат приводится к lowercase через
+`Locale.ROOT`, groups дедуплицируются и итоговый набор ограничен 128
+уникальными нормализованными groups. Mode
+`BASIC` принимает ровно один strict Basic header и сохраняет только ASCII
+username до первого `:`. Password bytes и raw credential не сохраняются.
 
 `VIGILANT_OTLP_ENABLED=false` отключает только вывод OTLP/JSON traces и metrics.
 Создание trace context, request-scoped JSON logs и сбор метрик внутри процесса

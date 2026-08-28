@@ -17,6 +17,8 @@ Vigilant - OpenAI-совместимый guardrails gateway для платфо�
 - Shadow-only решение: найденный PII фиксируется как `DETECTED`, но текущая
   disposition всегда `ALLOW`.
 - Byte-identical replay исходного body и сохранение неизвестных полей.
+- Config-driven `ANONYMOUS`, trusted-header или Basic identity с immediate-peer
+  CIDR boundary, safe credential stripping и request-to-response context handoff.
 - Streaming pass-through ответа upstream, включая SSE.
 - Stable fail-closed ошибки для неподдерживаемой или неоднозначной request
   schema и при исчерпании inspection capacity.
@@ -24,8 +26,8 @@ Vigilant - OpenAI-совместимый guardrails gateway для платфо�
   endpoints и non-root OCI image.
 
 Пока не поддерживаются OpenAI Responses API, response inspection, `BLOCK`,
-`MASK`, `REMOVE`, извлечение trusted identity, disk spill, Kubernetes/Helm и
-ML/NER detector. Полные границы первого инкремента зафиксированы в
+`MASK`, `REMOVE`, authentication/external identity lookup, disk spill,
+Kubernetes/Helm и ML/NER detector. Полные границы первого инкремента зафиксированы в
 [roadmap](spec/ROADMAP.md#не-входит-в-первый-production-increment).
 
 ## Быстрый старт
@@ -65,10 +67,11 @@ Vigilant проверит model-visible text, запишет safe aggregate
 
 ~~~text
 Client
+  -> configured identity extraction
   -> bounded request source
   -> OpenAI request parser
   -> policy selection + fast-pii inspection
-  -> byte-identical replay
+  -> consumed identity header stripping + byte-identical replay
   -> upstream
 ~~~
 

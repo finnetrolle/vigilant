@@ -96,7 +96,7 @@ Issue является листом mind map, если:
 | [VIG-01: Асинхронные JSON-логи](issues/issue_01_logging.md) | `Done` | завершена | 0 дней осталось |
 | [VIG-01A: Benchmark логирования](issues/issue_01A_benchmark.md) | `Ready for implementation` | не начата | 4-7 дней |
 | [EPIC-02: Быстрый PII-detector](epics/epic_02_fast_pii_detector.md) | `Done` | 16/16 | 0 дней осталось |
-| [EPIC-03: Policy context extraction](epics/epic_03_policy_context_extraction.md) | `In progress` | 4/7 | 8-14 дней осталось |
+| [EPIC-03: Policy context extraction](epics/epic_03_policy_context_extraction.md) | `Done` | 7/7 | 0 дней осталось |
 | [EPIC-04: Policy engine](epics/epic_04_policy_engine.md) | `Done` | 11/11 | 0 дней осталось |
 | [EPIC-05: v0 hardening](epics/epic_05_v0_hardening.md) | `Done` | 9/9 | 0 дней осталось |
 | [EPIC-06: Разбор LLM-сообщений и извлечение payload](epics/epic_06_llm_message_parsing.md) | `In progress` | 2/2 | 0 дней до request parser; future response scope не оценён |

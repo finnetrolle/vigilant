@@ -2,9 +2,9 @@
 
 **ID:** `EPIC-03`  
 **Тип:** Epic  
-**Статус:** In progress  
+**Статус:** Done
 **Приоритет:** High  
-**Предварительная оценка:** 8-14 инженерных дней осталось
+**Предварительная оценка:** 0 инженерных дней осталось
 **Связанные требования:** `MVP-14`, `MVP-20`, `MVP-21`
 
 ## Карта декомпозиции
@@ -15,23 +15,23 @@ EPIC-03 Policy context extraction
 ├── URL normalization (Done)
 ├── Anonymous request context (Done, first increment)
 ├── Identity
-│   ├── configurable extraction (Ready, future)
-│   └── secret-safe upstream stripping (Ready, future)
+│   ├── configurable extraction (Done)
+│   └── secret-safe upstream stripping (Done)
 ├── Context assembly
 │   └── HTTP-derived + protocol-derived attributes (Done)
 └── Lifecycle
-    ├── request-to-response handoff (Ready, future response inspection)
-    └── end-to-end security behavior (Ready)
+    ├── request-to-response handoff (Done)
+    └── end-to-end security behavior (Done)
 ```
 
 ## Дочерние issues
 
 - [x] [VIG-03-01: Контракт и trust boundary](../issues/epic_03/issue_03_01_context_contract.md) - `Done`
 - [x] [VIG-03-02: Нормализация URL](../issues/epic_03/issue_03_02_url_normalization.md) - `Done`
-- [ ] [VIG-03-03: Настраиваемое identity extraction](../issues/epic_03/issue_03_03_identity_extraction.md) - `Ready for implementation`
+- [x] [VIG-03-03: Настраиваемое identity extraction](../issues/epic_03/issue_03_03_identity_extraction.md) - `Done`
 - [x] [VIG-03-04: Сборка PolicyContext из нормализованных данных](../issues/epic_03/issue_03_04_model_extraction.md) - `Done`
-- [ ] [VIG-03-05: Перенос контекста в response phase](../issues/epic_03/issue_03_05_response_handoff.md) - `Ready for implementation`
-- [ ] [VIG-03-06: E2E security и upstream stripping](../issues/epic_03/issue_03_06_security_e2e.md) - `Ready for implementation`
+- [x] [VIG-03-05: Перенос контекста в response phase](../issues/epic_03/issue_03_05_response_handoff.md) - `Done`
+- [x] [VIG-03-06: E2E security и upstream stripping](../issues/epic_03/issue_03_06_security_e2e.md) - `Done`
 - [x] [VIG-03-07: Anonymous request PolicyContext](../issues/epic_03/issue_03_07_anonymous_request_context.md) - `Done`
 
 ## Контекст
@@ -162,16 +162,16 @@ Assembler получает только normalized URL, explicit phase, normaliz
 HTTP/body types и не выполняет parsing или matching.
 
 Request snapshot создаётся один раз и сохраняется typed attribute внутри
-соответствующего Armeria `ServiceRequestContext`. Future response inspection
-читает тот же snapshot и создаёт context, меняя только `phase=RESPONSE`.
+соответствующего Armeria `ServiceRequestContext`. Response handoff читает тот
+же snapshot и создаёт context, меняя только `phase=RESPONSE`.
 Thread-local/global maps и повторное extraction запрещены. Completion, error,
 timeout и cancellation завершают request scope и не оставляют retained
 context reference.
 
-Первый production increment использует отдельную VIG-03-07: anonymous
-`REQUEST` context из normalized URL и Chat Completions request model. Он не
-ждёт identity leaves и не переиспользует VIG-03-04, которая сохраняет hard
-dependency на VIG-03-03.
+Первый production increment был поставлен отдельной VIG-03-07 как anonymous
+`REQUEST` context из normalized URL и Chat Completions request model. После
+завершения identity leaves production path использует полный assembler из
+VIG-03-04.
 
 ## Нормативные требования
 
@@ -204,8 +204,8 @@ dependency на VIG-03-03.
   precedence contract и не добавляется скрыто.
 - Trusted proxy chains требуют verified proxy protocol или отдельной
   forwarded-header trust model; immediate peer остаётся единственным authority.
-- Response handoff реализуется только при активации response inspection, но
-  immutable request-scoped contract уже зафиксирован.
+- Response body inspection остаётся отдельной capability; immutable
+  request-scoped handoff уже реализован и готов для её использования.
 
 ## Критерии приёмки epic
 

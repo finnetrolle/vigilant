@@ -1,6 +1,6 @@
 # VIG-03-06: E2E security и upstream identity stripping
 
-**Статус:** Ready for implementation  
+**Статус:** Done
 **Epic:** [EPIC-03](../../epics/epic_03_policy_context_extraction.md)  
 **Ветка:** Lifecycle > end-to-end security behavior  
 **Зависит от:** [VIG-03-03](issue_03_03_identity_extraction.md), [VIG-03-05](issue_03_05_response_handoff.md)  
@@ -14,15 +14,15 @@ credentials не передаются upstream и не раскрываются 
 
 ## Критерии приёмки
 
-- [ ] Проверены `ANONYMOUS`, `TRUSTED_HEADERS` и `BASIC` как взаимоисключающие
+- [x] Проверены `ANONYMOUS`, `TRUSTED_HEADERS` и `BASIC` как взаимоисключающие
   identity modes; E2E подтверждает отсутствие cross-source precedence.
-- [ ] Служебные identity headers удаляются только по конфигурации.
-- [ ] End-to-end headers и raw body, не относящиеся к identity, сохраняются.
-- [ ] Basic password, Authorization и sentinel values отсутствуют upstream,
+- [x] Служебные identity headers удаляются только по конфигурации.
+- [x] End-to-end headers и raw body, не относящиеся к identity, сохраняются.
+- [x] Basic password, Authorization и sentinel values отсутствуют upstream,
   stdout и stderr согласно принятому контракту.
-- [ ] Request и streaming/non-streaming response получают один context.
-- [ ] Existing proxy transparency, backpressure и cancellation tests проходят.
-- [ ] `./gradlew build` проходит.
+- [x] Request и streaming/non-streaming response получают один context.
+- [x] Existing proxy transparency, backpressure и cancellation tests проходят.
+- [x] `./gradlew build` проходит.
 
 ## Не входит
 

@@ -2,8 +2,10 @@ package io.vigilant.gateway.proxy
 
 import com.linecorp.armeria.server.ServiceRequestContext
 import io.opentelemetry.api.trace.Span
-import io.vigilant.context.AnonymousRequestContextAssemblyErrorCode
+import io.vigilant.context.PolicyContextAssemblyErrorCode
+import io.vigilant.context.PolicyContextHandoffErrorCode
 import io.vigilant.context.PolicyUrlNormalizationErrorCode
+import io.vigilant.gateway.identity.IdentityExtractionErrorCode
 import io.vigilant.gateway.tracing.RequestTracing
 import io.vigilant.gateway.tracing.withRequestTracingMdc
 import io.vigilant.policy.adapter.FastPiiPolicyAdapter
@@ -153,9 +155,23 @@ internal sealed interface ShadowAuditError {
         override val code: String = failure.name
     }
 
-    /** Anonymous request-context assembly failure. */
+    /** Normalized request-context assembly failure. */
     data class ContextAssembly(
-        val failure: AnonymousRequestContextAssemblyErrorCode,
+        val failure: PolicyContextAssemblyErrorCode,
+    ) : ShadowAuditError {
+        override val code: String = failure.name
+    }
+
+    /** Request-scoped context handoff failure. */
+    data class ContextHandoff(
+        val failure: PolicyContextHandoffErrorCode,
+    ) : ShadowAuditError {
+        override val code: String = failure.name
+    }
+
+    /** Request identity extraction failure. */
+    data class Identity(
+        val failure: IdentityExtractionErrorCode,
     ) : ShadowAuditError {
         override val code: String = failure.name
     }

@@ -1,6 +1,6 @@
 # VIG-03-05: Перенос PolicyContext в response phase
 
-**Статус:** Ready for implementation  
+**Статус:** Done
 **Epic:** [EPIC-03](../../epics/epic_03_policy_context_extraction.md)  
 **Ветка:** Lifecycle > request-to-response handoff  
 **Зависит от:** [VIG-03-01](issue_03_01_context_contract.md), [VIG-03-02](issue_03_02_url_normalization.md), [VIG-03-03](issue_03_03_identity_extraction.md), [VIG-03-04](issue_03_04_model_extraction.md)  
@@ -36,14 +36,14 @@ upstream являются только regression gate для streaming TTFB и 
 
 ## Критерии приёмки
 
-- [ ] Response context отличается только `phase=RESPONSE`.
-- [ ] URL, model, user и groups точно совпадают с request phase.
-- [ ] Reported model из upstream response не переопределяет request model.
-- [ ] Concurrent requests не смешивают contexts.
-- [ ] Completion, cancellation и error освобождают request-scoped references.
-- [ ] Context и credentials не попадают в логи.
-- [ ] Для добавленных и изменённых Kotlin declarations написан KDoc.
-- [ ] Focused handoff tests и existing real-server regression tests для
+- [x] Response context отличается только `phase=RESPONSE`.
+- [x] URL, model, user и groups точно совпадают с request phase.
+- [x] Reported model из upstream response не переопределяет request model.
+- [x] Concurrent requests не смешивают contexts.
+- [x] Completion, cancellation и error освобождают request-scoped references.
+- [x] Context и credentials не попадают в логи.
+- [x] Для добавленных и изменённых Kotlin declarations написан KDoc.
+- [x] Focused handoff tests и existing real-server regression tests для
   streaming TTFB/cancellation проходят вместе с `./gradlew test`.
 
 ## Не входит

@@ -28,12 +28,13 @@ Client
   -> TracingService
   -> PiiShadowProxyService
        -> descriptor validation
+       -> config-driven identity extraction and trust check
        -> bounded request ingest
        -> Chat Completions parser
-       -> anonymous policy context
+       -> normalized request policy context and scoped handoff
        -> policy selection and fast-pii inspection
        -> safe aggregate shadow audit
-       -> exact-byte request replay
+       -> identity header stripping and exact-byte request replay
   -> BypassProxyService
        -> header normalization
        -> pooled Armeria WebClient
@@ -57,11 +58,19 @@ cancellations и длительности. `TracingService` создаёт SERVE
 или генерирует W3C trace context и session ID, а затем возвращает effective
 context клиенту и передаёт его upstream.
 
-### 2. Проверка descriptor и bounded ingest
+### 2. Проверка descriptor, identity и bounded ingest
 
 `PiiShadowProxyService` до чтения body проверяет method, path и media type.
 Неподдерживаемый descriptor получает stable `400 unsupported_schema` и не
 создаёт shadow audit.
+
+Затем `IdentityExtractor` применяет ровно один startup mode. `ANONYMOUS` не
+потребляет headers. `TRUSTED_HEADERS` читает только настроенные user/groups
+headers и доверяет им только когда immediate socket peer входит в настроенный
+literal IPv4/IPv6 CIDR; `Forwarded` и `X-Forwarded-For` не влияют на boundary.
+`BASIC` strict-decodes `Authorization`, сохраняет только нормализованный ASCII
+username и не преобразует password bytes в retained string. Ошибка identity
+отклоняется до body demand и upstream call.
 
 Для поддерживаемого запроса `RequestSourceQuota` резервирует owner. Body
 принимается с backpressure и полностью сохраняется в bounded in-memory source.
@@ -92,12 +101,19 @@ fields не образуют ложный общий контекст.
 
 ### 4. Policy context и engine
 
-Для первого increment context анонимный и содержит:
+Context содержит:
 
 - canonical effective upstream URL без query, fragment и credentials;
 - `model` из request body;
 - phase `REQUEST`;
-- пустые user/groups.
+- normalized user/groups выбранного identity mode либо явную anonymous identity.
+
+Один immutable request snapshot сохраняется typed attribute в соответствующем
+Armeria `ServiceRequestContext`. Public handoff создаёт response context,
+изменяя только phase на `RESPONSE`; reported model из upstream ответа не
+участвует. Snapshot очищается при completion, error или cancellation и не
+использует thread-local или global map. Сам response inspection пока не
+подключён.
 
 `PolicySelector` выбирает enabled policies по точному значению или wildcard,
 затем одновременно применяет явные overrides. `PolicyEngine` дедуплицирует
@@ -134,8 +150,10 @@ metadata, но не matched text. Фрагменты больше одновыз
 числа fragments/findings и безопасные агрегаты по типам. Payload, matched text,
 locators и headers в audit не попадают.
 
-Затем source передаёт исходные bytes в `BypassProxyService`. Этот transport
-слой:
+Перед exact replay из request headers удаляется только strip set, возвращённый
+identity extractor: configured Vigilant-only headers для `TRUSTED_HEADERS` или
+consumed `Authorization` для `BASIC`. Затем source передаёт исходные bytes в
+`BypassProxyService`. Этот transport слой:
 
 - переписывает scheme, authority и base path под upstream URL;
 - удаляет стандартные hop-by-hop headers и headers из `Connection`;

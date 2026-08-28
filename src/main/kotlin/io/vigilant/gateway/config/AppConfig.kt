@@ -21,6 +21,11 @@ private const val MAX_PORT = 65535
 private const val ENV_PREFIX = "VIGILANT_"
 private const val ENV_DOUBLE_PREFIX = "VIGILANT__"
 private const val CONFIG_FILE_ENV = "VIGILANT_CONFIG"
+
+/** Vigilant environment settings consumed outside the Hoplite AppConfig boundary. */
+private val EXTERNAL_VIGILANT_ENV =
+    setOf(CONFIG_FILE_ENV, "VIGILANT_POLITICS_CONFIG", "VIGILANT_LOG_LEVEL")
+
 private const val UPSTREAM_URL_ENV = "VIGILANT_UPSTREAM_URL"
 private const val PORT_ENV = "VIGILANT_PORT"
 private const val UPSTREAM_CONNECT_TIMEOUT_ENV = "VIGILANT_UPSTREAM_CONNECT_TIMEOUT"
@@ -94,6 +99,7 @@ private val DEFAULT_CONFIG_PATHS: List<Path> = listOf(
  * @param shutdown validated graceful shutdown quiet and force bounds.
  * @param inspection bounded in-memory request inspection settings.
  * @param tracing validated tracing header names.
+ * @param identity validated request identity extraction settings.
  * @param otlp stdout OTLP JSON export settings for traces and metrics.
  */
 data class AppConfig(
@@ -103,6 +109,7 @@ data class AppConfig(
     val shutdown: ShutdownSettings,
     val inspection: InspectionSettings,
     val tracing: TracingSettings,
+    val identity: IdentitySettings,
     val otlp: OtlpSettings,
 )
 
@@ -169,6 +176,11 @@ data class UpstreamClientSettings(
  * [validatedPort], which report it with a stable message instead of Hoplite's decode
  * error naming internal classes. `port` defaults to [DEFAULT_PORT] when absent from
  * both the environment and the file.
+ *
+ * @param identityMode single configured identity source name.
+ * @param identityUserHeader optional trusted user header name.
+ * @param identityGroupsHeader optional trusted groups header name.
+ * @param identityTrustedCidrs literal immediate-peer CIDRs trusted to supply identity.
  */
 internal data class VigilantSettings(
     val upstreamUrl: String? = null,
@@ -186,6 +198,10 @@ internal data class VigilantSettings(
         DEFAULT_REQUEST_SOURCE_LIMITS.maxRetainedSegmentsPerRequest,
     val tracingSessionHeader: String = DEFAULT_SESSION_HEADER,
     val tracingTraceparentHeader: String = DEFAULT_TRACEPARENT_HEADER,
+    val identityMode: String = IdentityMode.ANONYMOUS.name,
+    val identityUserHeader: String? = null,
+    val identityGroupsHeader: String? = null,
+    val identityTrustedCidrs: List<String> = emptyList(),
     val otlpEnabled: Boolean = true,
 )
 
@@ -200,6 +216,7 @@ internal data class VigilantConfigRoot(
  * Loads [AppConfig] from `VIGILANT_*` environment variables layered over an optional HOCON file.
  *
  * Precedence: environment variables override the file, the file overrides built-in defaults.
+ * Unknown configuration paths are rejected instead of being silently ignored.
  * The file is resolved as follows: if `VIGILANT_CONFIG` is set, it must point to an existing
  * file; otherwise the first existing file of [defaultConfigPaths] is used, and when none exists
  * the configuration is read from the environment alone.
@@ -221,6 +238,7 @@ internal fun loadAppConfig(
         .addParameterMapper(KebabCaseParamMapper)
         .addDefaultParsers()
         .withExplicitSealedTypes()
+        .strict()
         .allowEmptyConfigFiles()
         .addPropertySource(environmentPropertySource(env))
         .apply { configFile?.let { addPropertySource(PropertySource.file(it.toFile())) } }
@@ -269,9 +287,8 @@ internal fun loadAppConfig(
             sessionHeader = root.vigilant.tracingSessionHeader,
             traceparentHeader = root.vigilant.tracingTraceparentHeader,
         ),
-        otlp = OtlpSettings(
-            enabled = root.vigilant.otlpEnabled,
-        ),
+        identity = root.vigilant.validatedIdentitySettings(),
+        otlp = OtlpSettings(root.vigilant.otlpEnabled),
     )
 }
 
@@ -300,8 +317,8 @@ private fun resolveConfigFile(env: Map<String, String>, defaultConfigPaths: List
  *
  * The re-keyed double underscore makes Hoplite's built-in separator mapping apply
  * (`VIGILANT__UPSTREAM_URL` -> `vigilant.upstreamUrl`), so any future `vigilant.some-setting`
- * gets a `VIGILANT_SOME_SETTING` override for free. `VIGILANT_CONFIG` is excluded because it
- * points at the configuration file itself.
+ * gets a `VIGILANT_SOME_SETTING` override for free. Keys in [EXTERNAL_VIGILANT_ENV] are excluded
+ * because the config locator, policy loader or Logback owns them instead of [AppConfig].
  *
  * @param env environment variables to read instead of [System.getenv].
  */
@@ -310,7 +327,7 @@ private fun environmentPropertySource(env: Map<String, String>): PropertySource 
         useUnderscoresAsSeparator = true,
         allowUppercaseNames = true,
         environmentVariableMap = {
-            env.filterKeys { it.startsWith(ENV_PREFIX) && it != CONFIG_FILE_ENV }
+            env.filterKeys { key -> key.startsWith(ENV_PREFIX) && key !in EXTERNAL_VIGILANT_ENV }
                 .mapKeys { (key, _) -> ENV_DOUBLE_PREFIX + key.removePrefix(ENV_PREFIX) }
         },
     )

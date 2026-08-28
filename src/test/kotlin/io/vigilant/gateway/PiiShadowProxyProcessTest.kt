@@ -9,7 +9,9 @@ import com.linecorp.armeria.common.HttpResponse
 import com.linecorp.armeria.common.HttpStatus
 import com.linecorp.armeria.common.MediaType
 import com.linecorp.armeria.common.RequestHeaders
+import java.nio.charset.StandardCharsets
 import java.time.Duration
+import java.util.Base64
 import java.util.concurrent.CompletableFuture
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -105,6 +107,55 @@ class PiiShadowProxyProcessTest {
             upstreamHeaders.join().get(traceparentHeader).orEmpty()
                 .matches(Regex("00-$traceId-[0-9a-f]{16}-01")),
         )
+    }
+
+    /** Verifies packaged Basic identity consumes credentials without stdout or stderr disclosure. */
+    @Test
+    fun `MainKt strips Basic credentials and keeps them out of process output`() {
+        val upstreamAuthorization = CompletableFuture<String?>()
+        val upstreamBody = CompletableFuture<ByteArray>()
+        val upstream = fixture.startServer { request ->
+            HttpResponse.of(
+                request.aggregate().thenApply { aggregated ->
+                    upstreamAuthorization.complete(aggregated.headers().get("authorization"))
+                    upstreamBody.complete(aggregated.content().array())
+                    HttpResponse.of(HttpStatus.OK, MediaType.JSON, """{"ok":true}""")
+                },
+            )
+        }
+        val process = GatewayProcessFixture.launch(
+            fixture.serverUri(upstream),
+            environment = mapOf(
+                "VIGILANT_IDENTITY_MODE" to "BASIC",
+                "VIGILANT_OTLP_ENABLED" to "false",
+            ),
+        ).also { gateway = it }
+        val client = process.awaitServing()
+        val username = "Process.Basic-User-Sentinel"
+        val password = "process-basic-password-sentinel"
+        val authorization = "Basic " + Base64.getEncoder().encodeToString(
+            "$username:$password".toByteArray(StandardCharsets.US_ASCII),
+        )
+        val body = chatCompletionsBody("process-basic-body-sentinel")
+
+        val response = client.execute(
+            HttpRequest.of(
+                RequestHeaders.builder(HttpMethod.POST, "/v1/chat/completions")
+                    .contentType(MediaType.JSON)
+                    .add("authorization", authorization)
+                    .build(),
+                HttpData.ofUtf8(body),
+            ),
+        ).aggregate().join()
+
+        assertEquals(HttpStatus.OK, response.status())
+        assertEquals(null, upstreamAuthorization.join())
+        assertTrue(body.toByteArray().contentEquals(upstreamBody.join()))
+        awaitShadowDecision(process)
+        val output = process.output()
+        listOf(username, password, authorization, "process-basic-body-sentinel").forEach { sentinel ->
+            assertFalse(output.contains(sentinel), "credential or body sentinel leaked into process output")
+        }
     }
 
     /** Verifies repeated maximum-size inspection does not retain transport direct buffers. */

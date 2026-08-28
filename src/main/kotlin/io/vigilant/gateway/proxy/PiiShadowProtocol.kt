@@ -2,12 +2,14 @@ package io.vigilant.gateway.proxy
 
 import com.linecorp.armeria.common.HttpMethod
 import com.linecorp.armeria.common.HttpRequest
-import io.vigilant.context.AnonymousRequestContextAssembler
-import io.vigilant.context.AnonymousRequestContextAssemblyResult
+import io.vigilant.context.NormalizedIdentity
+import io.vigilant.context.PolicyContextAssembler
+import io.vigilant.context.PolicyContextAssemblyResult
 import io.vigilant.context.PolicyUrlNormalizer
 import io.vigilant.context.PolicyUrlNormalizationResult
 import io.vigilant.gateway.tracing.pathWithoutQuery
 import io.vigilant.policy.domain.PolicyContext
+import io.vigilant.policy.domain.PolicyPhase
 import io.vigilant.protocol.openai.ChatCompletionsParseFailureCode
 import io.vigilant.protocol.openai.ChatCompletionsParseResult
 import io.vigilant.protocol.openai.ChatCompletionsRequestParser
@@ -49,10 +51,11 @@ internal class PiiShadowProtocol(upstreamUri: URI) {
         }
     }
 
-    /** Produces the anonymous request context from the effective upstream URL and model. */
+    /** Produces the request context from normalized URL, protocol attributes and identity. */
     fun assembleContext(
         request: HttpRequest,
         normalizedRequest: NormalizedChatCompletionsRequest,
+        identity: NormalizedIdentity,
     ): PolicyContext {
         val effectiveUrl = upstreamAddress.absoluteUrl(pathWithoutQuery(request.path()))
         val normalizedUrl =
@@ -63,13 +66,15 @@ internal class PiiShadowProtocol(upstreamUri: URI) {
             }
         return when (
             val result =
-                AnonymousRequestContextAssembler.assemble(
-                    normalizedUrl,
-                    normalizedRequest.attributes,
+                PolicyContextAssembler.assemble(
+                    normalizedUrl = normalizedUrl,
+                    identity = identity,
+                    phase = PolicyPhase.REQUEST,
+                    attributes = normalizedRequest.attributes,
                 )
         ) {
-            is AnonymousRequestContextAssemblyResult.Success -> result.context
-            is AnonymousRequestContextAssemblyResult.Failure ->
+            is PolicyContextAssemblyResult.Success -> result.context
+            is PolicyContextAssemblyResult.Failure ->
                 throw SafeContextFailure(ShadowAuditError.ContextAssembly(result.code))
         }
     }

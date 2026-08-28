@@ -21,6 +21,12 @@ import io.vigilant.gateway.GatewayProcessFixture
 import io.vigilant.gateway.GatewayTestFixture
 import io.vigilant.gateway.chatCompletionsBody
 import io.vigilant.gateway.chatCompletionsRequest
+import io.vigilant.context.PolicyContextHandoff
+import io.vigilant.context.PolicyContextHandoffResult
+import io.vigilant.gateway.config.IdentityMode
+import io.vigilant.gateway.config.IdentitySettings
+import io.vigilant.gateway.identity.IdentityExtractor
+import io.vigilant.gateway.identity.TrustedNetwork
 import io.vigilant.gateway.tracing.TracingService
 import io.vigilant.policy.adapter.FastPiiPolicyAdapter
 import io.vigilant.policy.decision.ReactionAggregator
@@ -28,6 +34,7 @@ import io.vigilant.policy.domain.Detector
 import io.vigilant.policy.domain.DetectorId
 import io.vigilant.policy.domain.Disposition
 import io.vigilant.policy.domain.Policy
+import io.vigilant.policy.domain.PolicyContext
 import io.vigilant.policy.domain.PolicyId
 import io.vigilant.policy.domain.PolicyMatch
 import io.vigilant.policy.domain.PolicyPhase
@@ -49,7 +56,9 @@ import io.vigilant.source.RequestSourceQuota
 import io.vigilant.windowing.WindowedFastPiiExecutor
 import java.net.URI
 import java.nio.ByteBuffer
+import java.nio.charset.StandardCharsets
 import java.time.Duration
+import java.util.Base64
 import java.util.concurrent.CancellationException
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CopyOnWriteArrayList
@@ -69,6 +78,7 @@ import org.reactivestreams.Subscriber
 import org.reactivestreams.Subscription
 
 /** Real HTTP tracer-bullet tests for request-side PII shadow inspection. */
+@Suppress("LargeClass")
 class PiiShadowProxyServiceTest {
     private val fixture = GatewayTestFixture()
     private val closeables = mutableListOf<AutoCloseable>()
@@ -177,6 +187,227 @@ class PiiShadowProxyServiceTest {
         assertFalse(rendered.contains("alice@example.com"))
         assertFalse(rendered.contains("client=kept"))
         assertFalse(rendered.contains("request-1"))
+    }
+
+    /** Basic identity reaches both phases while credentials are stripped and never logged. */
+    @Test
+    @Suppress("LongMethod")
+    fun `basic identity is handed off but credentials are not forwarded`() {
+        val upstreamAuthorization = CompletableFuture<String?>()
+        val upstreamEndToEndHeader = CompletableFuture<String?>()
+        val upstreamUnconfiguredIdentity = CompletableFuture<String?>()
+        val upstreamBody = CompletableFuture<ByteArray>()
+        val upstream = fixture.startServer { request ->
+            HttpResponse.of(
+                request.aggregate().thenApply { aggregated ->
+                    upstreamAuthorization.complete(aggregated.headers().get("authorization"))
+                    upstreamEndToEndHeader.complete(aggregated.headers().get("x-end-to-end"))
+                    upstreamUnconfiguredIdentity.complete(aggregated.headers().get("x-gateway-user"))
+                    upstreamBody.complete(aggregated.content().array())
+                    HttpResponse.of(
+                        HttpStatus.OK,
+                        MediaType.JSON,
+                        """{"model":"reported-response-model-sentinel","ok":true}""",
+                    )
+                },
+            )
+        }
+        val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
+        val responseContexts = CopyOnWriteArrayList<PolicyContext>()
+        val gateway = startShadowGateway(
+            upstreamUri = fixture.serverUri(upstream),
+            identitySettings = IdentitySettings(IdentityMode.BASIC, null, null, emptyList()),
+            responseContexts = responseContexts,
+        )
+        val client = WebClient.of(fixture.serverUri(gateway).toString())
+        val password = "basic-password-e2e-sentinel"
+        val credentials = "BasicUser:$password".toByteArray(StandardCharsets.US_ASCII)
+        val authorization = "Basic ${Base64.getEncoder().encodeToString(credentials)}"
+        val originalBody =
+            """{"model":"request-model-sentinel","messages":[{"role":"user","content":"hello"}]}"""
+
+        val response = client.execute(
+            HttpRequest.of(
+                RequestHeaders.builder(HttpMethod.POST, "/v1/chat/completions")
+                    .contentType(MediaType.JSON)
+                    .add("authorization", authorization)
+                    .add("x-end-to-end", "preserved-header-sentinel")
+                    .add("x-gateway-user", "basic-unconfigured-user-sentinel")
+                    .build(),
+                HttpData.ofUtf8(originalBody),
+            ),
+        ).aggregate().join()
+
+        assertEquals(HttpStatus.OK, response.status())
+        assertEquals(null, upstreamAuthorization.join())
+        assertEquals("preserved-header-sentinel", upstreamEndToEndHeader.join())
+        assertEquals("basic-unconfigured-user-sentinel", upstreamUnconfiguredIdentity.join())
+        assertTrue(originalBody.toByteArray().contentEquals(upstreamBody.join()))
+        val responseContext = responseContexts.single()
+        assertEquals(PolicyPhase.RESPONSE, responseContext.phase)
+        assertEquals("request-model-sentinel", responseContext.model)
+        assertEquals("basicuser", responseContext.user)
+        assertEquals(emptySet(), responseContext.groups)
+
+        val renderedLogs = events.joinToString("\n") { event ->
+            event.formattedMessage + event.keyValuePairs.orEmpty().joinToString()
+        }
+        listOf(
+            password,
+            authorization,
+            "BasicUser",
+            "preserved-header-sentinel",
+            "basic-unconfigured-user-sentinel",
+        ).forEach { sentinel ->
+            assertFalse(renderedLogs.contains(sentinel), "credential sentinel leaked into logs")
+        }
+    }
+
+    /** Configured trusted headers are stripped while unrelated authorization remains end-to-end. */
+    @Test
+    fun `trusted header identity strips only configured identity headers`() {
+        val upstreamUser = CompletableFuture<String?>()
+        val upstreamGroups = CompletableFuture<String?>()
+        val upstreamAuthorization = CompletableFuture<String?>()
+        val upstreamBody = CompletableFuture<ByteArray>()
+        val upstream = fixture.startServer { request ->
+            HttpResponse.of(
+                request.aggregate().thenApply { aggregated ->
+                    upstreamUser.complete(aggregated.headers().get("x-gateway-user"))
+                    upstreamGroups.complete(aggregated.headers().get("x-gateway-groups"))
+                    upstreamAuthorization.complete(aggregated.headers().get("authorization"))
+                    upstreamBody.complete(aggregated.content().array())
+                    HttpResponse.of(HttpStatus.OK, MediaType.JSON, """{"ok":true}""")
+                },
+            )
+        }
+        val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
+        val responseContexts = CopyOnWriteArrayList<PolicyContext>()
+        val gateway = startShadowGateway(
+            upstreamUri = fixture.serverUri(upstream),
+            identitySettings =
+                IdentitySettings(
+                    mode = IdentityMode.TRUSTED_HEADERS,
+                    userHeader = "x-gateway-user",
+                    groupsHeader = "x-gateway-groups",
+                    trustedNetworks = listOf(requireNotNull(TrustedNetwork.parseOrNull("127.0.0.0/8"))),
+                ),
+            responseContexts = responseContexts,
+        )
+        val client = WebClient.of(fixture.serverUri(gateway).toString())
+        val originalBody = chatCompletionsBody("trusted-header-content-sentinel")
+
+        val response = client.execute(
+            HttpRequest.of(
+                RequestHeaders.builder(HttpMethod.POST, "/v1/chat/completions")
+                    .contentType(MediaType.JSON)
+                    .add("x-gateway-user", "Trusted.User-Sentinel")
+                    .add("x-gateway-groups", "Operators-Sentinel,Security-Sentinel")
+                    .add("authorization", "Bearer upstream-token-sentinel")
+                    .build(),
+                HttpData.ofUtf8(originalBody),
+            ),
+        ).aggregate().join()
+
+        assertEquals(HttpStatus.OK, response.status())
+        assertEquals(null, upstreamUser.join())
+        assertEquals(null, upstreamGroups.join())
+        assertEquals("Bearer upstream-token-sentinel", upstreamAuthorization.join())
+        assertTrue(originalBody.toByteArray().contentEquals(upstreamBody.join()))
+        val responseContext = responseContexts.single()
+        assertEquals("trusted.user-sentinel", responseContext.user)
+        assertEquals(setOf("operators-sentinel", "security-sentinel"), responseContext.groups)
+        val renderedLogs = events.joinToString("\n") { it.formattedMessage + it.keyValuePairs.orEmpty() }
+        listOf("Trusted.User-Sentinel", "Operators-Sentinel", "Security-Sentinel").forEach { sentinel ->
+            assertFalse(renderedLogs.contains(sentinel), "identity sentinel leaked into logs")
+        }
+    }
+
+    /** Anonymous mode consumes neither Basic nor unconfigured header identity candidates. */
+    @Test
+    fun `anonymous mode preserves identity-like end-to-end headers without using them`() {
+        val upstreamAuthorization = CompletableFuture<String?>()
+        val upstreamUser = CompletableFuture<String?>()
+        val upstream = fixture.startServer { request ->
+            upstreamAuthorization.complete(request.headers().get("authorization"))
+            upstreamUser.complete(request.headers().get("x-gateway-user"))
+            HttpResponse.of(HttpStatus.OK, MediaType.JSON, """{"ok":true}""")
+        }
+        val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
+        val responseContexts = CopyOnWriteArrayList<PolicyContext>()
+        val gateway = startShadowGateway(
+            upstreamUri = fixture.serverUri(upstream),
+            identitySettings = IdentitySettings(IdentityMode.ANONYMOUS, null, null, emptyList()),
+            responseContexts = responseContexts,
+        )
+        val client = WebClient.of(fixture.serverUri(gateway).toString())
+
+        val response = client.execute(
+            HttpRequest.of(
+                RequestHeaders.builder(HttpMethod.POST, "/v1/chat/completions")
+                    .contentType(MediaType.JSON)
+                    .add("authorization", "Basic anonymous-auth-sentinel")
+                    .add("x-gateway-user", "anonymous-user-sentinel")
+                    .build(),
+                HttpData.ofUtf8(chatCompletionsBody("hello")),
+            ),
+        ).aggregate().join()
+
+        assertEquals(HttpStatus.OK, response.status())
+        assertEquals("Basic anonymous-auth-sentinel", upstreamAuthorization.join())
+        assertEquals("anonymous-user-sentinel", upstreamUser.join())
+        val responseContext = responseContexts.single()
+        assertEquals(null, responseContext.user)
+        assertEquals(emptySet(), responseContext.groups)
+        val renderedLogs = events.joinToString("\n") { it.formattedMessage + it.keyValuePairs.orEmpty() }
+        assertFalse(renderedLogs.contains("anonymous-auth-sentinel"))
+        assertFalse(renderedLogs.contains("anonymous-user-sentinel"))
+    }
+
+    /** An untrusted immediate peer cannot inject a configured identity header. */
+    @Test
+    fun `untrusted configured identity is rejected before body demand and upstream`() {
+        val upstreamRequests = AtomicInteger()
+        val upstream = fixture.startServer {
+            upstreamRequests.incrementAndGet()
+            HttpResponse.of(HttpStatus.OK)
+        }
+        val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
+        val gateway = startShadowGateway(
+            upstreamUri = fixture.serverUri(upstream),
+            identitySettings =
+                IdentitySettings(
+                    mode = IdentityMode.TRUSTED_HEADERS,
+                    userHeader = "x-gateway-user",
+                    groupsHeader = null,
+                    trustedNetworks = listOf(requireNotNull(TrustedNetwork.parseOrNull("10.0.0.0/8"))),
+                ),
+        )
+        val client = WebClient.of(fixture.serverUri(gateway).toString())
+
+        val response = client.execute(
+            HttpRequest.of(
+                RequestHeaders.builder(HttpMethod.POST, "/v1/chat/completions")
+                    .contentType(MediaType.JSON)
+                    .add("x-gateway-user", "untrusted-e2e-user-sentinel")
+                    .add("x-forwarded-for", "10.2.3.4")
+                    .build(),
+                HttpData.ofUtf8(chatCompletionsBody("untrusted-body-sentinel")),
+            ),
+        ).aggregate().join()
+
+        assertEquals(HttpStatus.FORBIDDEN, response.status())
+        assertEquals("""{"error":"untrusted_identity"}""", response.contentUtf8())
+        assertEquals(0, upstreamRequests.get())
+        assertTrue(
+            fixture.awaitUntil(Duration.ofSeconds(2)) {
+                events.any { it.keyValue("error.code") == "UNTRUSTED_IDENTITY" }
+            },
+            "safe untrusted identity audit was not observed",
+        )
+        val renderedLogs = events.joinToString("\n") { it.formattedMessage + it.keyValuePairs.orEmpty() }
+        assertFalse(renderedLogs.contains("untrusted-e2e-user-sentinel"))
+        assertFalse(renderedLogs.contains("untrusted-body-sentinel"))
     }
 
     /** Verifies SERVER, INTERNAL inspection and CLIENT upstream parentage. */
@@ -481,7 +712,7 @@ class PiiShadowProxyServiceTest {
         assertEquals(0, quota.retainedBytes)
     }
 
-    /** Verifies prompt cooperative cancellation of inspection and retained source. */
+    /** Verifies cancellation interrupts inspection and releases source plus context handoff. */
     @Test
     fun `client cancellation interrupts active inspection and releases source`() {
         val upstreamRequests = AtomicInteger()
@@ -497,7 +728,13 @@ class PiiShadowProxyServiceTest {
                 onCancellation = detectorCancelled::countDown,
             )
         val quota = RequestSourceQuota()
-        val gateway = startShadowGateway(fixture.serverUri(upstream), quota, slowDetector)
+        val serviceContexts = CopyOnWriteArrayList<com.linecorp.armeria.server.ServiceRequestContext>()
+        val gateway = startShadowGateway(
+            upstreamUri = fixture.serverUri(upstream),
+            quota = quota,
+            detector = slowDetector,
+            serviceContexts = serviceContexts,
+        )
         val client = WebClient.of(fixture.serverUri(gateway).toString())
         val response =
             client.execute(chatCompletionsRequest("hello"))
@@ -516,6 +753,17 @@ class PiiShadowProxyServiceTest {
             "request source remained retained after cancellation",
         )
         assertEquals(0, upstreamRequests.get())
+        assertTrue(
+            fixture.awaitUntil(Duration.ofSeconds(2)) {
+                serviceContexts.singleOrNull()?.let { serviceContext ->
+                    PolicyContextHandoff.responseContext(serviceContext) ==
+                        PolicyContextHandoffResult.Failure(
+                            io.vigilant.context.PolicyContextHandoffErrorCode.MISSING_REQUEST_CONTEXT,
+                        )
+                } == true
+            },
+            "request context remained retained after cancellation",
+        )
     }
 
     /** Verifies that detector deadline errors remain shadow-ALLOW and safely audited. */
@@ -563,7 +811,7 @@ class PiiShadowProxyServiceTest {
         assertEquals(0, quota.retainedBytes)
     }
 
-    /** Verifies that an upstream SSE response remains streaming pass-through. */
+    /** Verifies SSE stays streaming while the same request snapshot reaches response phase. */
     @Test
     fun `sse response reaches client before upstream finishes streaming`() {
         val lastChunkWriteNanos = AtomicLong(-1)
@@ -588,7 +836,11 @@ class PiiShadowProxyServiceTest {
             }
             streaming
         }
-        val gateway = startShadowGateway(fixture.serverUri(upstream))
+        val responseContexts = CopyOnWriteArrayList<PolicyContext>()
+        val gateway = startShadowGateway(
+            upstreamUri = fixture.serverUri(upstream),
+            responseContexts = responseContexts,
+        )
         val client = WebClient.of(fixture.serverUri(gateway).toString())
         val received = ReceivedStream()
         val response =
@@ -600,14 +852,22 @@ class PiiShadowProxyServiceTest {
         received.failure?.let { throw AssertionError("SSE response failed", it) }
         assertTrue(received.firstBodyByteNanos.get() in 1 until lastChunkWriteNanos.get())
         assertEquals(chunks, received.chunks.toList())
+        val responseContext = responseContexts.single()
+        assertEquals(PolicyPhase.RESPONSE, responseContext.phase)
+        assertEquals("gpt-test", responseContext.model)
     }
 
-    /** Verifies replay-source release when the upstream connection fails. */
+    /** Verifies upstream failure releases both replay source and request context handoff. */
     @Test
     fun `upstream connection failure releases replay source`() {
         val quota = RequestSourceQuota()
         val deadUpstream = URI.create("http://127.0.0.1:${GatewayProcessFixture.reserveNonEphemeralPort()}")
-        val gateway = startShadowGateway(deadUpstream, quota)
+        val serviceContexts = CopyOnWriteArrayList<com.linecorp.armeria.server.ServiceRequestContext>()
+        val gateway = startShadowGateway(
+            upstreamUri = deadUpstream,
+            quota = quota,
+            serviceContexts = serviceContexts,
+        )
         val client = WebClient.of(fixture.serverUri(gateway).toString())
 
         val response =
@@ -621,14 +881,35 @@ class PiiShadowProxyServiceTest {
             },
             "request source remained retained after upstream failure",
         )
+        assertTrue(
+            fixture.awaitUntil(Duration.ofSeconds(2)) {
+                serviceContexts.singleOrNull()?.let { serviceContext ->
+                    PolicyContextHandoff.responseContext(serviceContext) ==
+                        PolicyContextHandoffResult.Failure(
+                            io.vigilant.context.PolicyContextHandoffErrorCode.MISSING_REQUEST_CONTEXT,
+                        )
+                } == true
+            },
+            "request context remained retained after upstream failure",
+        )
     }
 
-    /** Starts the production shadow service with real policy components and bounded executors. */
+    /**
+     * Starts the production shadow service with real policy components and bounded executors.
+     *
+     * @param responseContexts optional response-phase contexts observed through the public handoff.
+     * @param serviceContexts optional request scopes retained only for terminal-release assertions.
+     */
+    @Suppress("LongParameterList")
     private fun startShadowGateway(
         upstreamUri: URI,
         quota: RequestSourceQuota = RequestSourceQuota(),
         detector: Detector? = null,
         policyDeadline: Duration = Duration.ofSeconds(2),
+        identitySettings: IdentitySettings =
+            IdentitySettings(IdentityMode.ANONYMOUS, null, null, emptyList()),
+        responseContexts: MutableList<PolicyContext>? = null,
+        serviceContexts: MutableList<com.linecorp.armeria.server.ServiceRequestContext>? = null,
     ): com.linecorp.armeria.server.Server {
         val requestExecutor = Executors.newVirtualThreadPerTaskExecutor().also(closeables::add)
         val cpuExecutor = Executors.newFixedThreadPool(2).also(closeables::add)
@@ -654,13 +935,31 @@ class PiiShadowProxyServiceTest {
                 requestSourceQuota = quota,
                 policyEngine = policyEngine,
                 inspectionExecutor = requestExecutor,
+                identityExtractor = IdentityExtractor(identitySettings),
             )
         val tracerProvider = SdkTracerProvider.builder()
             .addSpanProcessor(SimpleSpanProcessor.builder(spanExporter).build())
             .build()
             .also(closeables::add)
+        val observedService = if (responseContexts == null && serviceContexts == null) {
+            shadowService
+        } else {
+            com.linecorp.armeria.server.HttpService { ctx, request ->
+                serviceContexts?.add(ctx)
+                val response = shadowService.serve(ctx, request)
+                if (responseContexts == null) {
+                    response
+                } else {
+                    response.mapHeaders { headers ->
+                        val handoff = PolicyContextHandoff.responseContext(ctx)
+                        if (handoff is PolicyContextHandoffResult.Success) responseContexts += handoff.context
+                        headers
+                    }
+                }
+            }
+        }
         return fixture.startServer(
-            TracingService(shadowService, tracerProvider.get("io.vigilant.gateway.test")),
+            TracingService(observedService, tracerProvider.get("io.vigilant.gateway.test")),
         )
     }
 

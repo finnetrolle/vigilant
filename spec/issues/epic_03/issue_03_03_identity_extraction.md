@@ -1,6 +1,6 @@
 # VIG-03-03: Настраиваемое identity extraction
 
-**Статус:** Ready for implementation  
+**Статус:** Done
 **Epic:** [EPIC-03](../../epics/epic_03_policy_context_extraction.md)  
 **Ветка:** Identity > configurable extraction  
 **Зависит от:** [VIG-03-01](issue_03_01_context_contract.md)  
@@ -44,13 +44,13 @@ Config-driven extractor получает только разрешённые ide
 
 ## Критерии приёмки
 
-- [ ] Strict config validation отклоняет unknown/contradictory settings.
-- [ ] Все поддерживаемые sources дают одинаковый normalized contract.
-- [ ] Duplicate/missing/malformed identity имеет явную семантику.
-- [ ] Extractor возвращает точный набор headers для upstream stripping.
-- [ ] Security tests используют unique sentinels для всех credential values.
-- [ ] Для добавленных и изменённых Kotlin declarations написан KDoc.
-- [ ] Focused tests и `./gradlew test` проходят.
+- [x] Strict config validation отклоняет unknown/contradictory settings.
+- [x] Все поддерживаемые sources дают одинаковый normalized contract.
+- [x] Duplicate/missing/malformed identity имеет явную семантику.
+- [x] Extractor возвращает точный набор headers для upstream stripping.
+- [x] Security tests используют unique sentinels для всех credential values.
+- [x] Для добавленных и изменённых Kotlin declarations написан KDoc.
+- [x] Focused tests и `./gradlew test` проходят.
 
 ## Не входит
 

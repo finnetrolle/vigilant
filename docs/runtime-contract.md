@@ -17,9 +17,31 @@ upstream byte. Parser создаёт отдельное normalized view model-vi
 а исходные bytes остаются неизменными. После shadow inspection upstream
 получает исходные method, path/query, end-to-end headers и byte-identical body.
 Hop-by-hop headers, authority, `Host` и `Content-Length` обрабатывает gateway.
+Исключение составляют только headers, consumed настроенным identity mode:
+configured user/groups headers в `TRUSTED_HEADERS` или `Authorization` после
+успешного Basic extraction. Unconfigured identity-like headers остаются
+обычными end-to-end headers.
 
 Response body, включая SSE, не агрегируется и остаётся streaming pass-through.
-Response inspection пока отсутствует.
+Response inspection пока отсутствует, но request URL, model и normalized
+identity сохраняются в request-scoped handoff. Response context использует тот
+же snapshot и отличается только phase `RESPONSE`; модель из upstream response
+его не переопределяет.
+
+## Identity modes
+
+Startup выбирает ровно один mode:
+
+- `ANONYMOUS` не читает и не удаляет identity-like headers;
+- `TRUSTED_HEADERS` читает configured user/groups headers только от immediate
+  socket peer внутри configured CIDR. `Forwarded` и `X-Forwarded-For` не
+  расширяют boundary;
+- `BASIC` потребляет один корректный Basic `Authorization`, использует только
+  normalized ASCII username и удаляет header перед upstream forwarding.
+
+Отсутствующее identity value даёт `user=null`, empty groups. Duplicate и
+malformed values отклоняются безопасно. Password, raw Authorization и исходные
+identity values не попадают в policy context, errors или logs.
 
 ## Shadow PII decision
 
@@ -46,13 +68,15 @@ content-bearing structure обрабатываются fail-closed и не до�
 | Malformed supported message | `400` | `{"error":"malformed_message"}` |
 | Ambiguous content | `400` | `{"error":"ambiguous_content"}` |
 | External или unresolved context | `400` | `{"error":"unresolved_context"}` |
+| Duplicate или malformed identity | `400` | `{"error":"invalid_identity"}` |
+| Configured identity header от untrusted peer | `403` | `{"error":"untrusted_identity"}` |
 | Некорректный request source, включая несовпадение `Content-Length` | `400` | `{"error":"invalid_request_source"}` |
 | Per-request byte limit | `413` | `{"error":"request_too_large"}` |
 | Owner/global retained capacity | `503` | `{"error":"inspection_capacity_exhausted"}` |
 | Непредвиденный inspection failure | `500` | `{"error":"inspection_failed"}` |
 
-Descriptor validation выполняется до body demand. Некорректный session ID
-отклоняется ещё раньше, в tracing decorator. Для поддержанного descriptor
+Descriptor и identity validation выполняются до body demand. Некорректный
+session ID отклоняется ещё раньше, в tracing decorator. Для поддержанного descriptor
 создаётся ровно один `policy.shadow_decision`, включая fail-closed parser,
 source и inspection outcomes. Для неподдержанного descriptor и invalid session
 ID shadow audit не создаётся.

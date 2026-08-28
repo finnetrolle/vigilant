@@ -22,9 +22,9 @@ the original body upstream byte-for-byte. Response bodies remain streaming.
 
 The current startup contract enforces shadow-only `ALLOW` reactions without
 transformations. Do not add enforcement (`BLOCK`, `MASK`, `REMOVE`), response
-inspection, new protocol routes, trusted identity, disk spill, plugin workers,
-or other runtime behavior unless a dedicated implementation-ready issue
-explicitly requires it.
+inspection, new protocol routes, external identity lookup or authentication,
+disk spill, plugin workers, or other runtime behavior unless a dedicated
+implementation-ready issue explicitly requires it.
 
 ## Commands
 
@@ -116,7 +116,8 @@ The maintained architectural overview is `docs/architecture.md`; use it with
 
 Key gateway and policy files under `src/main/kotlin/io/vigilant/`:
 
-- `proxy/PiiShadowProxyService.kt` - production inspection boundary. Validates the supported Chat Completions descriptor before body demand, ingests the body into a quota-controlled source, parses a separate normalized view, assembles anonymous URL/model context, evaluates each independent text fragment, logs one safe aggregate shadow decision, and transfers source ownership to exact replay.
+- `proxy/PiiShadowProxyService.kt` - production inspection boundary. Validates the supported Chat Completions descriptor, extracts configured identity before body demand, ingests the body into a quota-controlled source, parses a separate normalized view, assembles URL/model/identity context, stores one request-scoped handoff snapshot, evaluates each independent text fragment, logs one safe aggregate shadow decision, and transfers source ownership to exact replay after consumed identity headers are stripped.
+- `identity/IdentityExtractor.kt` / `context/PolicyContextHandoff.kt` - mutually exclusive anonymous, trusted-header and Basic identity extraction plus the typed Armeria request-scoped bridge used to derive a response context by changing only the phase. Trusted headers use only the immediate socket peer CIDR; credentials and raw identity values are never retained in policy context or logs.
 - `source/BoundedRequestSource.kt` - process-wide owner/byte/segment quota plus one-request lifecycle. It receives the request with backpressure, exposes one sequential parser view and one demand-driven exact replay lease, and releases every reservation on completion or cancellation.
 - `protocol/openai/ChatCompletionsRequestParser.kt` - schema-tolerant parser for model-visible Chat Completions content. It preserves unknown fields by never rebuilding the original body, records recognized non-text inspection gaps, and fails closed for malformed or ambiguous content-bearing shapes.
 - `policy/engine/PolicyEngine.kt` / `policy/selection/PolicySelector.kt` / `policy/execution/DetectorExecutionCoordinator.kt` - deterministic policy matching, simultaneous overrides, deduplicated detector execution, per-policy deadlines, fail-fast blocking semantics in the domain layer, and complete decision explanations. Runtime startup currently restricts all configured reactions to shadow-only `ALLOW`.

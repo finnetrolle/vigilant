@@ -73,6 +73,10 @@ event `event.name=policy.shadow_decision`. Он содержит:
 Неподдерживаемый descriptor отклоняется до body demand и audit event не
 создаёт.
 
+Identity extraction failure поддержанного descriptor создаёт тот же один
+aggregate event с `decision=ERROR` и bounded `error.code`. Configured header
+values, Basic username/password и raw `Authorization` в event не добавляются.
+
 ## Upstream failure event
 
 Upstream failure создаёт один structured WARN event
