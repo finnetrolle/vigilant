@@ -185,7 +185,9 @@ parent epics содержат normative decisions, а implementation leaves оп
    deduplication, cancellation и error aggregation.
 4. [VIG-08-01](issues/epic_08/issue_08_01_spool_contract.md) зафиксировал
    request-only in-memory source, quotas, replay, backpressure и
-   cleanup. Response/SSE storage и disk spill остаются `Draft`.
+   cleanup. Response/SSE storage и disk spill перенесены в future
+   [EPIC-20](epics/epic_20_response_spooling_secure_spill.md) со статусом
+   `Draft`.
 
 Contract issues обязаны опубликовать implementation leaves с estimate не более
 пяти инженерных дней, отдельным observable result и pre-agreed public seam.
@@ -344,8 +346,8 @@ VIG-10-02 также имеют status `Done`.
 Implementation issues Stage 2 закрыты: VIG-03-02, VIG-03-07, VIG-06-02,
 VIG-07-02 и VIG-08-02 имеют status `Done`; независимые module seams готовы к
 integration. VIG-18 подтвердил memory/concurrency bounds и phase baseline,
-поэтому EPIC-07 также имеет status `Done`. Identity leaves EPIC-03 готовы по
-contract, но не входят в первый production increment.
+поэтому EPIC-07 и request-only EPIC-08 также имеют status `Done`. Identity
+leaves EPIC-03 готовы по contract, но не входят в первый production increment.
 
 Все standalone integration issues Stage 3 закрыты: VIG-11..17 имеют status
 `Done`. Production `MainKt` и OCI image выполняют bounded PII shadow inspection
@@ -362,11 +364,12 @@ logging-specific PERF-01. EPIC-10 и её финальная qualification issue
 ## Не входит в первый production increment
 
 - OpenAI Responses API, Realtime и Batch.
-- Response content inspection и policy evaluation.
-- SSE buffering для response enforcement.
+- Response content inspection, atomic SSE buffering и secure response spill,
+  принадлежащие future
+  [EPIC-20](epics/epic_20_response_spooling_secure_spill.md).
 - `BLOCK`, `MASK`, `REMOVE` и изменение protocol source.
 - User/group identity extraction и trusted ingress model.
-- Disk spill, encryption at rest и external object storage.
+- External object storage.
 - Kubernetes manifests, Helm, autoscaling и centralized log storage.
 - Backend-specific Langfuse/MLflow exporters и authentication внутри Vigilant.
 - ML/NER и новые PII taxonomy values.
@@ -381,8 +384,8 @@ logging-specific PERF-01. EPIC-10 и её финальная qualification issue
 - DTO reconstruction отклонён: unmodified forwarding обязан использовать
   original source.
 - Fixed `1 MiB` rejection отклонён: detector limit закрывается windowing.
-- Disk spill отложен: bounded in-memory path быстрее даёт безопасный первый
-  increment без сохранения raw PII на disk.
+- Disk spill отложен в EPIC-20: bounded in-memory path быстрее даёт безопасный
+  первый increment без сохранения raw PII на disk.
 - Hardcoded default policy отклонён: operator обязан явно предоставить
   validated global coverage policy.
 - Прямой OTLP network exporter из Vigilant отклонён: application logs и

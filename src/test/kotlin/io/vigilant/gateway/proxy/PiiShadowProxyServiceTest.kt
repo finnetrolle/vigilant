@@ -10,7 +10,9 @@ import com.linecorp.armeria.common.HttpStatus
 import com.linecorp.armeria.common.MediaType
 import com.linecorp.armeria.common.RequestHeaders
 import com.linecorp.armeria.common.ResponseHeaders
+import com.linecorp.armeria.common.util.TimeoutMode
 import com.linecorp.armeria.server.HttpService
+import com.linecorp.armeria.server.ServerBuilder
 import com.linecorp.armeria.server.ServiceRequestContext
 import io.opentelemetry.api.common.AttributeKey.stringKey
 import io.opentelemetry.api.trace.SpanKind
@@ -785,6 +787,138 @@ class PiiShadowProxyServiceTest {
         )
     }
 
+    /** A server request timeout cancels partial ingest and releases every source reservation once. */
+    @Test
+    fun `request timeout releases partial source reservations`() {
+        val upstreamRequests = AtomicInteger()
+        val upstream = fixture.startServer {
+            upstreamRequests.incrementAndGet()
+            HttpResponse.of(HttpStatus.OK)
+        }
+        val quota = RequestSourceQuota()
+        val serviceContexts = CopyOnWriteArrayList<ServiceRequestContext>()
+        val gateway =
+            startShadowGateway(
+                upstreamUri = fixture.serverUri(upstream),
+                quota = quota,
+                serviceContexts = serviceContexts,
+            )
+        val client = WebClient.of(fixture.serverUri(gateway).toString())
+        val request =
+            HttpRequest.streaming(
+                RequestHeaders.builder(HttpMethod.POST, "/v1/chat/completions")
+                    .contentType(MediaType.JSON)
+                    .build(),
+            )
+        val response = client.execute(request).aggregate()
+
+        request.write(HttpData.ofUtf8("""{"model":"gpt-test","messages":["""))
+        assertTrue(
+            fixture.awaitUntil(Duration.ofSeconds(2)) {
+                serviceContexts.size == 1 && quota.activeOwners == 1 && quota.retainedBytes > 0L
+            },
+            "partial request source was not retained before timeout",
+        )
+        serviceContexts.single().setRequestTimeout(TimeoutMode.SET_FROM_NOW, Duration.ofMillis(100))
+        assertTrue(
+            fixture.awaitUntil(Duration.ofSeconds(2)) { response.isDone },
+            "server request timeout did not terminate the client exchange",
+        )
+        assertSourceReservationsReleased(quota, "request timeout")
+        request.abort()
+        assertSourceReservationsReleased(quota, "repeated request cancellation")
+        assertEquals(0, upstreamRequests.get())
+    }
+
+    /** Graceful shutdown drains active inspection and leaves no retained source reservations. */
+    @Test
+    fun `graceful shutdown drains active source before releasing reservations`() {
+        val upstreamRequests = AtomicInteger()
+        val upstream = fixture.startServer {
+            upstreamRequests.incrementAndGet()
+            HttpResponse.of(HttpStatus.OK)
+        }
+        val detectorStarted = CountDownLatch(1)
+        val releaseDetector = CountDownLatch(1)
+        val detector =
+            Detector {
+                detectorStarted.countDown()
+                check(releaseDetector.await(5, TimeUnit.SECONDS)) { "graceful drain did not release detector" }
+                io.vigilant.policy.domain.DetectionResult.Clean
+            }
+        val quota = RequestSourceQuota()
+        val gateway =
+            startShadowGateway(
+                upstreamUri = fixture.serverUri(upstream),
+                quota = quota,
+                detector = detector,
+                configureServer = {
+                    gracefulShutdownTimeout(Duration.ofMillis(50), Duration.ofSeconds(3))
+                },
+            )
+        val client = WebClient.of(fixture.serverUri(gateway).toString())
+        val response = client.execute(chatCompletionsRequest("graceful source")).aggregate()
+
+        assertTrue(detectorStarted.await(5, TimeUnit.SECONDS), "detector did not retain the complete source")
+        assertEquals(1, quota.activeOwners)
+        assertTrue(quota.retainedBytes > 0L)
+        val stopped = gateway.stop()
+        assertFalse(stopped.isDone, "graceful shutdown did not wait for active inspection")
+
+        releaseDetector.countDown()
+        assertEquals(HttpStatus.OK, response.get(5, TimeUnit.SECONDS).status())
+        stopped.get(5, TimeUnit.SECONDS)
+        assertSourceReservationsReleased(quota, "graceful shutdown")
+        assertEquals(1, upstreamRequests.get())
+    }
+
+    /** Forced shutdown cancels active inspection and releases every retained source reservation. */
+    @Test
+    fun `forced shutdown cancels active source and releases reservations`() {
+        val upstreamRequests = AtomicInteger()
+        val upstream = fixture.startServer {
+            upstreamRequests.incrementAndGet()
+            HttpResponse.of(HttpStatus.OK)
+        }
+        val detectorStarted = CountDownLatch(1)
+        val detectorCancelled = CountDownLatch(1)
+        val quota = RequestSourceQuota()
+        val gateway =
+            startShadowGateway(
+                upstreamUri = fixture.serverUri(upstream),
+                quota = quota,
+                detector =
+                    slowInterruptibleDetector(
+                        onStart = detectorStarted::countDown,
+                        onCancellation = detectorCancelled::countDown,
+                    ),
+                configureServer = {
+                    gracefulShutdownTimeout(Duration.ofMillis(50), Duration.ofMillis(300))
+                },
+            )
+        val client = WebClient.of(fixture.serverUri(gateway).toString())
+        val exchange = client.execute(chatCompletionsRequest("forced source"))
+        val response = exchange.aggregate()
+
+        assertTrue(detectorStarted.await(5, TimeUnit.SECONDS), "detector did not retain the complete source")
+        assertEquals(1, quota.activeOwners)
+        assertTrue(quota.retainedBytes > 0L)
+        gateway.stop().get(3, TimeUnit.SECONDS)
+
+        assertTrue(
+            detectorCancelled.await(2, TimeUnit.SECONDS),
+            "forced shutdown did not interrupt active inspection",
+        )
+        assertTrue(
+            fixture.awaitUntil(Duration.ofSeconds(2)) { response.isDone },
+            "forced shutdown left the client exchange incomplete",
+        )
+        assertSourceReservationsReleased(quota, "forced shutdown")
+        exchange.abort()
+        assertSourceReservationsReleased(quota, "repeated forced-exchange cancellation")
+        assertEquals(0, upstreamRequests.get())
+    }
+
     /** Verifies that detector deadline errors remain shadow-ALLOW and safely audited. */
     @Test
     fun `policy deadline remains shadow allow and emits safe error observations`() {
@@ -924,8 +1058,9 @@ class PiiShadowProxyServiceTest {
      * Starts the production shadow service with real policy components and bounded executors.
      *
      * @param responseContexts optional response-phase contexts observed through the public handoff.
-     * @param serviceContexts optional request scopes retained only for terminal-release assertions.
+     * @param serviceContexts optional request scopes used for lifecycle control and terminal-release assertions.
      * @param requestBodyDemandObserved optional observer set when inspection demands request content.
+     * @param configureServer optional Armeria settings for lifecycle scenarios.
      */
     @Suppress("LongParameterList")
     private fun startShadowGateway(
@@ -938,6 +1073,7 @@ class PiiShadowProxyServiceTest {
         responseContexts: MutableList<PolicyContext>? = null,
         serviceContexts: MutableList<com.linecorp.armeria.server.ServiceRequestContext>? = null,
         requestBodyDemandObserved: AtomicBoolean? = null,
+        configureServer: ServerBuilder.() -> Unit = {},
     ): com.linecorp.armeria.server.Server {
         val requestExecutor = Executors.newVirtualThreadPerTaskExecutor().also(closeables::add)
         val cpuExecutor = Executors.newFixedThreadPool(2).also(closeables::add)
@@ -981,6 +1117,7 @@ class PiiShadowProxyServiceTest {
             )
         return fixture.startServer(
             TracingService(observedService, tracerProvider.get("io.vigilant.gateway.test")),
+            configureServer,
         )
     }
 
@@ -1042,6 +1179,22 @@ class PiiShadowProxyServiceTest {
                 throw CancellationException("cancelled").also { it.initCause(interrupted) }
             }
         }
+
+    /** Waits for and verifies the canonical zero-reservation request-source invariant. */
+    private fun assertSourceReservationsReleased(
+        quota: RequestSourceQuota,
+        terminalEvent: String,
+    ) {
+        assertTrue(
+            fixture.awaitUntil(Duration.ofSeconds(2)) {
+                quota.activeOwners == 0 && quota.retainedBytes == 0L && quota.retainedSegments == 0
+            },
+            "$terminalEvent left source reservations retained",
+        )
+        assertEquals(0, quota.activeOwners)
+        assertEquals(0L, quota.retainedBytes)
+        assertEquals(0, quota.retainedSegments)
+    }
 
     /** Returns the enabled global ALLOW-only policy required by the first increment. */
     private fun shadowPolicy(deadline: Duration): Policy {

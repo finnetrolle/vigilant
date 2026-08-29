@@ -221,10 +221,11 @@ upstream status, headers или body до terminal event и итогового p
 decision. Это решение не активно в первом production increment, где response
 остаётся streaming pass-through без inspection.
 
-Атомарное удержание source, bounded spill, replay, cleanup и backpressure
-принадлежат EPIC-08. Sliding window решает detector payload limit, но само по
-себе не разрешает ранний forwarding. Incremental release до итогового decision
-не входит в MVP.
+Атомарное удержание response source, bounded spill, replay, cleanup и
+backpressure принадлежат
+[EPIC-20](epic_20_response_spooling_secure_spill.md). Sliding window решает
+detector payload limit, но само по себе не разрешает ранний forwarding.
+Incremental release до итогового decision не входит в MVP.
 
 Parser отвечает за protocol structure, но не за mapping upstream outcome в
 HTTP proxy error. Raw provider error message не попадает в parser logs.
@@ -344,9 +345,11 @@ Original body и normalized parse result имеют разное ownership:
 - будущий rewriter получает original source и protocol locators отдельно и
   изменяет только целевые fields.
 
-Spooling, replay, secure temporary storage, cleanup и forwarding lifecycle не
-входят в EPIC-06 и описаны отдельным
-[EPIC-08](epic_08_message_spooling_replay.md).
+Spooling, replay, cleanup и forwarding lifecycle не входят в EPIC-06.
+Завершённый bounded in-memory request source описан в
+[EPIC-08](epic_08_message_spooling_replay.md), а future response/SSE source и
+secure temporary storage принадлежат
+[EPIC-20](epic_20_response_spooling_secure_spill.md).
 
 Detector payload limit не является максимальной длиной LLM exchange. Несколько
 messages уже представлены несколькими независимыми fragments и не
@@ -437,7 +440,7 @@ OpenAI formats.
 - Полная агрегация обычного или streaming body допускается только при явно
   обоснованной необходимости. Для guardrail-enabled SSE такой необходимостью
   является принятая атомарная policy-транзакция; bounded spool, backpressure,
-  cancellation и увеличенный time-to-first-byte учитываются EPIC-08.
+  cancellation и увеличенный time-to-first-byte учитываются EPIC-20.
 
 ## Предварительная граница ответственности
 
@@ -475,8 +478,10 @@ OpenAI formats.
 - [EPIC-07](epic_07_windowed_payload_processing.md) обрабатывает большие
   fragments скользящими окнами и возвращает findings в координатах исходного
   fragment.
-- [EPIC-08](epic_08_message_spooling_replay.md) владеет original source,
-  bounded spool, replay, cleanup и lossless forwarding lifecycle.
+- [EPIC-08](epic_08_message_spooling_replay.md) владеет bounded in-memory
+  request source, replay, cleanup и request forwarding lifecycle.
+- [EPIC-20](epic_20_response_spooling_secure_spill.md) владеет future atomic
+  response/SSE source lifecycle и secure disk spill.
 
 ## Нормативные protocol sources
 

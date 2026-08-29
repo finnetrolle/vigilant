@@ -1,42 +1,34 @@
-# Epic 08: Lossless message spooling and replay
+# Epic 08: Bounded in-memory request source and replay
 
-**ID:** `EPIC-08`  
-**Тип:** Epic  
-**Статус:** In progress  
-**Приоритет:** High  
-**Предварительная оценка:** 0 дней до request source первого increment; future response/disk scope не оценён
-**Связанные требования:** `PROXY-01`, `PROXY-02`, `CONC-01`, `CONC-02`, `CONC-03`, `SEC-01`, `SEC-02`
+**ID:** `EPIC-08`
+**Тип:** Epic
+**Статус:** Done
+**Приоритет:** High
+**Предварительная оценка:** 0 дней осталось
+**Связанные требования:** `PROXY-01`, `PROXY-02`, `CONC-01`, `CONC-02`, `CONC-03`
 
 ## Подтверждённое решение
 
-Original message source и normalized parse result имеют разное ownership.
+Original request source и normalized parse result имеют разное ownership.
 Protocol parser не возвращает копию raw body и не пересобирает сообщение из
-DTO. Отдельная integration capability сохраняет точную последовательность
-bytes/events и предоставляет lossless replay после policy decision.
+DTO. Отдельная request-source capability сохраняет точную последовательность
+bytes и предоставляет lossless replay после policy decision.
 
-Capability оформляется отдельным epic, потому что объединяет memory и disk
-resource management, backpressure, security, cancellation, cleanup и replay.
-
-В future response-inspection increment SSE является одной атомарной
-policy-транзакцией: spool принимает весь upstream stream с backpressure и не
-раскрывает клиенту status, headers или body до terminal event и итогового
-decision. Это решение не активно в первом production increment, где response,
-включая SSE, остаётся существующим streaming pass-through без inspection.
+Первый production increment использует только bounded in-memory storage.
+Response/SSE source lifecycle и secure disk spill вынесены в отдельный future
+[EPIC-20](epic_20_response_spooling_secure_spill.md), чтобы завершённый request
+increment не зависел от ещё не активного response-inspection scope.
 
 ## Карта декомпозиции
 
 ```text
-EPIC-08 Lossless spooling and replay
-├── source/spool contract (Done)
-├── first production increment
-│   └── bounded in-memory request source (Done)
-│       ├── ingest and global quota
-│       ├── read-only parser view
-│       ├── replay with backpressure
-│       └── cancellation and cleanup
-└── future Draft
-    ├── response/SSE source lifecycle
-    └── secure disk spill
+EPIC-08 Bounded in-memory request source and replay
+├── source/replay contract (Done)
+└── bounded in-memory request source (Done)
+    ├── ingest and global quota
+    ├── read-only parser view
+    ├── replay with backpressure
+    └── cancellation and cleanup
 ```
 
 ## Дочерние issues
@@ -51,26 +43,17 @@ source. Если request guardrail должен принять решение д
 bytes нельзя отправить upstream заранее, но их нужно сохранить без
 ресериализации. Большие сообщения нельзя безусловно удерживать целиком в heap.
 
-Для будущей response phase ordinary response и SSE используют отдельные
-lifecycle. Для SSE уже принято атомарное enforcement-поведение, но mechanics,
-bounds и implementation issue остаются Draft. Первый production increment не
-изменяет response path.
-
 ## Цель
 
-Определить и реализовать bounded source abstraction, которая:
+Определить и реализовать bounded in-memory request source, который:
 
-- принимает original bytes/events с backpressure;
-- позволяет parser читать source без изменения;
+- принимает original request bytes с backpressure;
+- позволяет parser последовательно читать complete source без изменения;
 - сохраняет точное исходное представление до policy decision;
-- replay-ит неизменённый source byte-for-byte;
-- предоставляет future rewriter доступ к original source и locators;
-- гарантированно освобождает memory, file handles и temporary storage при
-  success, error, timeout и cancellation.
-
-Первый production increment реализует только request direction и только
-in-memory storage. Response, SSE и file handles относятся к future scope и не
-являются acceptance готовой VIG-08-02.
+- replay-ит неизменённый source byte-for-byte по downstream demand;
+- ограничивает retained bytes, segments и concurrent owners;
+- освобождает все memory reservations при success, rejection, error, timeout,
+  cancellation и shutdown.
 
 ## Нормативный request source contract
 
@@ -97,8 +80,7 @@ contract, потому что первый upstream byte появляется т
 
 Source сохраняет exact concatenated byte sequence. Transport chunk boundaries
 не являются lossless contract и могут отличаться при replay. Parser result не
-содержит source; future rewriter не получает mutable access без отдельного
-contract.
+содержит source и не получает mutable access к retained bytes.
 
 ### Bounds и stable exhaustion
 
@@ -154,26 +136,22 @@ Owner close обязателен и идемпотентен для:
 - graceful/forced shutdown.
 
 После close новые views/replay дают typed closed-state outcome. Logs, errors,
-state descriptions и metrics не содержат bytes, preview, filename, media URL,
-temporary path или reversible payload hash.
+state descriptions и metrics не содержат bytes, preview, filename, media URL
+или reversible payload hash.
 
 ## Нормативные ограничения
 
-- Unmodified forwarding использует original source, а не DTO serialization.
+- Unmodified request forwarding использует original source, а не DTO
+  serialization.
 - Parser result не содержит raw body или вторую полную копию source.
-- Heap usage, open file count, temporary storage и concurrent spool count
-  имеют явные bounds.
-- Spill storage недоступно другим пользователям процесса и не переживает
-  normal cleanup lifecycle.
-- Raw source, path временного файла, payload и content preview не логируются.
+- Heap usage, retained segment count и concurrent request sources имеют явные
+  bounds.
+- Raw source, payload и content preview не логируются.
 - Backpressure применяется на ingest и replay.
-- До итогового SSE decision клиент не получает upstream status, headers или
-  body; partial release запрещён в MVP.
-- Blocking file I/O не выполняется на Netty event loop.
 - Cancellation прекращает ingest/replay и инициирует cleanup.
 - Cleanup идемпотентен и выполняется для partial source.
 - Hard exhaustion имеет stable safe outcome и не приводит к unbounded memory
-  growth или silent truncation.
+  growth, silent truncation или partial upstream forwarding.
 
 ## Связи с соседними epics
 
@@ -182,49 +160,44 @@ temporary path или reversible payload hash.
 - [EPIC-07](epic_07_windowed_payload_processing.md) обрабатывает большие
   decoded fragments, но не хранит original encoded message.
 - [EPIC-04](epic_04_policy_engine.md) возвращает policy decision, после
-  которого integration выбирает replay, rewrite или block.
-
-## Отложенные решения
-
-- Response и atomic SSE получают отдельные lifecycle/source issues после
-  активации response inspection; request abstraction не обобщается заранее.
-- Disk spill требует отдельного security contract для directory ownership,
-  permissions, encryption, disk/file-descriptor quota и crash cleanup.
-- Future rewriter требует patch API поверх original source и protocol locators.
+  которого integration выбирает replay или reject.
+- [EPIC-20](epic_20_response_spooling_secure_spill.md) владеет future
+  response/SSE source lifecycle и secure disk spill.
 
 ## Не входит в epic
 
+- Response и SSE source lifecycle или content inspection.
+- Disk spill, file-descriptor quota, encryption at rest и crash cleanup.
 - Разбор LLM protocol schemas.
 - Выбор policies и detector execution.
 - Sliding-window обработка decoded text.
-- Формат reaction и правила masking.
+- Source rewriting, формат reaction и правила masking.
 - Container log collection или external object storage.
-- Realtime и Batch source lifecycle в текущем MVP.
+- Realtime и Batch source lifecycle.
 
-## Предварительные критерии готовности epic
+## Критерии готовности epic
 
-- Unmodified message replay-ится byte-for-byte для memory и spill paths.
-- Slow parser, upstream или client создаёт backpressure, а не unbounded queue.
-- Heap, disk, file descriptors и concurrent spools имеют проверяемые bounds.
-- Cancellation/error на каждой lifecycle phase освобождает все ресурсы.
-- Temporary source не доступен через logs/errors и удаляется после lifecycle.
-- Blocking storage I/O отсутствует на Netty event loop.
-- Hard exhaustion даёт stable safe outcome без partial silent forwarding.
-- SSE replay начинается только после terminal event и полного `ALLOW`; любой
-  `BLOCK` оставляет upstream SSE полностью нераскрытым клиенту.
-- Resource thresholds подтверждены benchmark/baseline с зафиксированным
-  hardware и workload.
-- Для добавленных и изменённых Kotlin declarations написан KDoc.
-- `./gradlew build` проходит после реализации всех дочерних issues.
+- [x] Unmodified request replay-ится byte-for-byte из in-memory source.
+- [x] Slow ingest producer и replay subscriber создают backpressure, а не
+  unbounded queue.
+- [x] Heap bytes, retained segments и concurrent request sources имеют
+  проверяемые bounds и stable exhaustion outcomes.
+- [x] Cancellation/error на каждой request lifecycle phase освобождает все
+  reservations ровно один раз.
+- [x] Request source не доступен через logs, errors или state descriptions.
+- [x] Resource bounds и exact replay подтверждены conformance suite VIG-08-02
+  и packaged load evidence [VIG-18](../issues/issue_18_inspection_load_report.md).
+- [x] Для добавленных и изменённых Kotlin declarations написан KDoc.
+- [x] Focused source tests и `./gradlew build` прошли при завершении VIG-08-02.
 
 ## Ambiguity Report
 
 ```text
 Ambiguity Report:
-  Goals:        0.0   ✓ request lifecycle and replay explicit
-  Acceptance:   0.15  ✓ exact quotas, errors and cleanup matrix fixed
-  Boundaries:   0.05  ✓ response and disk scope deferred explicitly
+  Goals:        0.0   ✓ request lifecycle and replay complete
+  Acceptance:   0.05  ✓ exact quotas, errors and cleanup verified
+  Boundaries:   0.0   ✓ response and disk scope moved to EPIC-20
   Alternatives: 0.10  ✓ in-memory request strategy selected
-  Assumptions:  0.20  ✓ default sizes remain measured profiling baselines
-  Aggregate:    0.10  ✓ below threshold (0.3 epic)
+  Assumptions:  0.10  ✓ defaults remain measured profiling baselines
+  Aggregate:    0.05  ✓ below threshold (0.3 epic)
 ```

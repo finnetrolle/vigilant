@@ -4,15 +4,16 @@
 **Epic:** [EPIC-08](../../epics/epic_08_message_spooling_replay.md)  
 **Ветка:** Source/spool contract  
 **Зависит от:** [VIG-06-01](../epic_06/issue_06_01_protocol_contract.md)  
-**Блокирует:** остальные issues EPIC-08  
+**Блокирует:** [VIG-08-02](issue_08_02_bounded_request_source.md)
 **Оценка:** 2-3 инженерных дня
 
 ## Результат
 
 Request source ownership, in-memory lifecycle, replay semantics и resource
 boundaries определены настолько точно, что первый implementation leaf можно
-выполнить независимо. Response/SSE source и disk spill сохранены как future
-contract scope без скрытых defaults.
+выполнить независимо. Response/SSE source и disk spill не получили скрытых
+defaults и после завершения request increment перенесены в future
+[EPIC-20](../../epics/epic_20_response_spooling_secure_spill.md).
 
 Это documentation-only issue. Production spool и integration не добавляются.
 
@@ -21,11 +22,12 @@ contract scope без скрытых defaults.
 - Original source принадлежит integration spool, а не protocol parser.
 - Parser читает source в read-only режиме и не возвращает raw body.
 - Unmodified forwarding replay-ит original source без DTO serialization.
-- Spooling оформляется отдельным EPIC-08.
+- Bounded in-memory request spooling оформляется отдельным EPIC-08.
 - Для future response-inspection increment SSE остаётся атомарной
   policy-транзакцией: до terminal event и итогового decision клиент не получает
   upstream bytes. В первом production increment response/SSE storage не
   активно, а существующий response path остаётся streaming pass-through.
+  Future implementation принадлежит EPIC-20.
 
 ## Закрытые решения первого production increment
 
@@ -62,8 +64,8 @@ contract scope без скрытых defaults.
 
 - [x] Все семь решений имеют один выбранный вариант и rationale.
 - [x] Request и response lifecycle разделены явно.
-- [x] Response/SSE source lifecycle сохранён как future Draft и не создаёт
-  требований к request-only first increment.
+- [x] Response/SSE source lifecycle сохранён как future Draft в EPIC-20 и не
+  создаёт требований к request-only first increment.
 - [x] Byte-for-byte replay проверяем для in-memory path; spill path не входит.
 - [x] Все активные resource classes имеют exact configurable bounds.
 - [x] Cleanup matrix покрывает success, block, failures, timeout, cancellation
@@ -83,7 +85,7 @@ Production spool, protocol parsing, policy execution, windowing и rewriting.
 Ambiguity Report:
   Goals:        0.0   ✓ request source outcome fixed
   Acceptance:   0.10  ✓ byte replay, quotas and cleanup observable
-  Boundaries:   0.05  ✓ future response/disk scope explicit
+  Boundaries:   0.05  ✓ future response/disk scope moved to EPIC-20
   Alternatives: 0.10  ✓ in-memory lifecycle selected
   Assumptions:  0.20  ✓ defaults are profiling baselines
   Aggregate:    0.09  ✓ below threshold (0.3 issue)

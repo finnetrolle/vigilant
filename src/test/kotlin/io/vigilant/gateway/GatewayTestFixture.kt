@@ -8,6 +8,7 @@ import com.linecorp.armeria.common.HttpRequest
 import com.linecorp.armeria.common.HttpResponse
 import com.linecorp.armeria.server.HttpService
 import com.linecorp.armeria.server.Server
+import com.linecorp.armeria.server.ServerBuilder
 import io.opentelemetry.api.metrics.Meter
 import io.opentelemetry.api.trace.Tracer
 import io.vigilant.gateway.metrics.MetricsService
@@ -50,6 +51,21 @@ internal class GatewayTestFixture {
     fun startServer(service: HttpService): Server =
         Server.builder()
             .http(0)
+            .serviceUnder("/", service)
+            .build()
+            .startAndTrack()
+
+    /**
+     * Starts a configured Armeria server on an ephemeral port serving [service]
+     * under `"/"` and tracks it for [close].
+     */
+    fun startServer(
+        service: HttpService,
+        configure: ServerBuilder.() -> Unit,
+    ): Server =
+        Server.builder()
+            .http(0)
+            .apply(configure)
             .serviceUnder("/", service)
             .build()
             .startAndTrack()
