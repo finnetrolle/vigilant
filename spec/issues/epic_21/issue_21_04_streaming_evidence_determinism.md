@@ -1,6 +1,6 @@
 # VIG-21-04: Детерминированный streaming evidence
 
-**Статус:** Ready for implementation
+**Статус:** Done
 **Epic:** [EPIC-21](../../epics/epic_21_post_milestone_architecture_closure.md)
 **Ветка:** Verification determinism > streaming-before-final-chunk observation barrier
 **Зависит от:** нет
@@ -22,20 +22,41 @@ response.
 
 ## Критерии готовности
 
-- [ ] Upstream пишет headers и первый chunk, затем ждёт bounded release barrier
+- [x] Upstream пишет headers и первый chunk, затем ждёт bounded release barrier
   перед последним chunk.
-- [ ] Client subscriber сигнализирует observation первого non-empty body chunk;
+- [x] Client subscriber сигнализирует observation первого non-empty body chunk;
   только после этого test освобождает upstream writer.
-- [ ] Test падает при full response aggregation, даже если callback scheduling
+- [x] Test падает при full response aggregation, даже если callback scheduling
   после completion меняет относительные timestamps.
-- [ ] Plain response и SSE-like cases используют один canonical helper.
-- [ ] Full byte content и order сохраняются; transport coalescing не считается
+- [x] Plain response и SSE-like cases используют один canonical helper.
+- [x] Full byte content и order сохраняются; transport coalescing не считается
   нарушением, если logical boundary не является public contract.
-- [ ] Все waits bounded и выводят last observed upstream/client state; широкие
+- [x] Все waits bounded и выводят last observed upstream/client state; широкие
   sleep-only assertions удалены.
-- [ ] Production code не меняется.
-- [ ] Focused repeated test и `./gradlew build` проходят, open papercut закрыт с
+- [x] Production code не меняется.
+- [x] Focused repeated test и `./gradlew build` проходят, open papercut закрыт с
   root-cause note.
+
+## Completion evidence
+
+30 августа 2026 года `BypassProxyStreamingTest` заменил cross-thread
+`System.nanoTime` и scheduled sleeps на causal barrier. Real Armeria upstream
+пишет headers и первый body chunk, затем bounded ждёт release остатка. Client
+subscriber публикует первый non-empty body observation, и только после этого
+normal test path разрешает upstream завершить response. При full aggregation
+client signal невозможен до release, поэтому bounded first-data assertion
+падает независимо от callback scheduling после completion.
+
+Plain и SSE-like cases используют один `assertStreamedWithoutBuffering`.
+Helper сравнивает полный concatenated byte stream, включая multibyte SSE data,
+но не утверждает transport chunk boundaries. Client first-data, upstream
+release и response completion waits ограничены; failure сообщает последние
+upstream/client states. Production code не изменён.
+
+Focused class прошёл `5/5` последовательных forced `--rerun-tasks` запусков и
+ещё один post-format focused run. `./gradlew build --no-daemon` прошёл весь
+suite, `detekt` и `validateWorkItems` за `5m 52s`. Papercut
+`pc_617014d8204d` закрыт root-cause и verification note.
 
 ## Test/demo seam
 
