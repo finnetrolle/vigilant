@@ -4,7 +4,7 @@
 **Тип:** Epic
 **Статус:** In progress
 **Приоритет:** High
-**Суммарная оценка:** 4-7 инженерных дней осталось; 5-8 завершены
+**Суммарная оценка:** 2-4 инженерных дня осталось; 7-11 завершены
 **Связанные требования:** `MVP-18`, `MVP-19`, `CONC-01`, `CONC-03`, `PROXY-01`, production milestone safety gates
 
 ## Контекст
@@ -44,15 +44,16 @@ EPIC-21 post-milestone architecture closure
 
 - [x] [VIG-21-01: Контракт минимального обязательного audit trail](../issues/epic_21/issue_21_01_minimum_audit_trail_contract.md) - `Done`
 - [x] [VIG-21-02: Qualification граничных request inspection shapes](../issues/epic_21/issue_21_02_adversarial_inspection_resource_qualification.md) - `Done`
-- [ ] [VIG-21-03: Детерминированный upstream-error evidence](../issues/epic_21/issue_21_03_upstream_error_test_determinism.md) - `Ready for implementation`
+- [x] [VIG-21-03: Детерминированный upstream-error evidence](../issues/epic_21/issue_21_03_upstream_error_test_determinism.md) - `Done`
 - [ ] [VIG-21-04: Детерминированный streaming evidence](../issues/epic_21/issue_21_04_streaming_evidence_determinism.md) - `Ready for implementation`
 - [ ] [VIG-21-05: Синхронизация roadmap и repository frontier](../issues/epic_21/issue_21_05_roadmap_frontier_reconciliation.md) - `Ready for implementation`
 
 VIG-21-01 выбрал application-owned WAL contract и опубликовал отдельный
 production [EPIC-22](epic_22_durable_minimum_audit_trail.md), не расширяя scope
 EPIC-21. VIG-21-02 опубликовал max-shape resource qualification без изменения
-production code. Оставшиеся VIG-21-03 и VIG-21-04 независимы и могут
-выполняться параллельно.
+production code. VIG-21-03 заменил upstream-error race на causal test-only
+evidence без изменения production code. VIG-21-04 остаётся следующей
+независимой verification ветвью.
 VIG-21-05 зависит от опубликованных результатов VIG-21-01..04, потому что
 документация не должна заранее объявлять audit или resource closure.
 

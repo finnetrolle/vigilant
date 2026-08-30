@@ -1,6 +1,8 @@
 package io.vigilant.gateway.proxy
 
+import com.linecorp.armeria.client.ClientFactory
 import com.linecorp.armeria.client.WebClient
+import com.linecorp.armeria.common.AggregatedHttpResponse
 import com.linecorp.armeria.common.HttpData
 import com.linecorp.armeria.common.HttpHeaderNames
 import com.linecorp.armeria.common.HttpMethod
@@ -15,14 +17,18 @@ import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.AppenderBase
 import com.linecorp.armeria.server.Server
 import com.fasterxml.jackson.databind.ObjectMapper
+import io.vigilant.gateway.DisconnectingTestUpstream
 import io.vigilant.gateway.GatewayProcessFixture
+import io.vigilant.gateway.GatewayTestFixture
 import io.vigilant.gateway.assertUpstreamFailureWarning
 import io.vigilant.gateway.chatCompletionsBody
+import io.vigilant.gateway.closeAllResources
 import io.vigilant.gateway.renderForSecretScan
 import io.vigilant.gateway.withTestPolicyConfiguration
 import java.net.URI
 import java.net.ServerSocket
 import java.time.Duration
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
 import org.slf4j.LoggerFactory
@@ -34,11 +40,21 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class BypassProxyServiceTest {
+    private val fixture = GatewayTestFixture()
     private val servers = mutableListOf<Server>()
+    private val clientFactories = mutableListOf<ClientFactory>()
+    private val disconnectingUpstreams = mutableListOf<DisconnectingTestUpstream>()
 
+    /** Stops every owned resource in order, retaining failures without skipping later cleanup. */
     @AfterTest
-    fun stopServers() {
-        servers.asReversed().forEach { it.stop().join() }
+    fun closeResources() {
+        val closeActions = buildList<() -> Unit> {
+            servers.asReversed().forEach { server -> add { server.stop().join() } }
+            clientFactories.asReversed().forEach { factory -> add { factory.closeAsync().join() } }
+            disconnectingUpstreams.asReversed().forEach { upstream -> add(upstream::close) }
+            add(fixture::close)
+        }
+        closeAllResources(*closeActions.toTypedArray())
     }
 
     @Test
@@ -173,50 +189,36 @@ class BypassProxyServiceTest {
         assertEquals("""{"error":"upstream_unavailable"}""", response.contentUtf8())
     }
 
-    /** Verifies that an upstream transport failure emits no request secrets. */
+    /** Verifies one upstream disconnect produces one stable response and one safe matching warning. */
     @Test
     fun `upstream failure is logged structurally without bodies or auth headers`() {
-        val events = CopyOnWriteArrayList<ILoggingEvent>()
-        val appender = object : AppenderBase<ILoggingEvent>() {
-            override fun append(event: ILoggingEvent) {
-                events += event
-            }
-        }.apply { start() }
-        val logger = LoggerFactory.getLogger(BypassProxyService::class.java) as Logger
-        logger.addAppender(appender)
+        val upstream = DisconnectingTestUpstream("stable-502").also(disconnectingUpstreams::add)
+        val events = fixture.attachAppenderTo(BypassProxyService::class.java)
+        val gateway = startGateway(upstream.uri, isolatedWebClient())
+        val responseFuture = isolatedWebClient(serverUri(gateway)).execute(
+            HttpRequest.of(
+                RequestHeaders.builder(
+                    HttpMethod.POST,
+                    "$UPSTREAM_FAILURE_PATH?token=query-secret-1C6A",
+                )
+                    .add(HttpHeaderNames.AUTHORIZATION, "Bearer auth-secret-5F1C")
+                    .build(),
+                HttpData.ofUtf8("request body-secret-8D07"),
+            ),
+        ).aggregate()
+        val evidence = awaitUpstreamFailureEvidence(responseFuture, upstream, events)
 
-        val gateway = startGateway(deadUpstreamUri(), WebClient.of())
-        val client = WebClient.builder(serverUri(gateway).toString())
-            .responseTimeout(Duration.ofSeconds(10))
-            .build()
-        try {
-            val exchange = runCatching {
-                client.execute(
-                    HttpRequest.of(
-                        RequestHeaders.builder(HttpMethod.POST, "/v1/chat?token=query-secret-1C6A")
-                            .add(HttpHeaderNames.AUTHORIZATION, "Bearer auth-secret-5F1C")
-                            .build(),
-                        HttpData.ofUtf8("request body-secret-8D07"),
-                    ),
-                ).aggregate().join()
-            }
-            exchange.getOrNull()?.let { response ->
-                assertEquals(HttpStatus.BAD_GATEWAY, response.status())
-            }
-            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
-            while (events.isEmpty() && System.nanoTime() < deadline) Thread.sleep(50)
-            assertFalse(events.isEmpty(), "upstream failure was not logged")
-        } finally {
-            logger.detachAppender(appender)
-            appender.stop()
-        }
+        assertEquals(HttpStatus.BAD_GATEWAY, evidence.response.status())
+        assertEquals("""{"error":"upstream_unavailable"}""", evidence.response.contentUtf8())
 
-        val event = events.single()
-        event.assertUpstreamFailureWarning("upstream_unavailable")
-        val logged = event.renderForSecretScan()
-        allSentinels.forEach { sentinel ->
-            assertFalse(logged.contains(sentinel), "sentinel $sentinel leaked into the upstream failure log")
+        evidence.event.assertUpstreamFailureWarning("upstream_unavailable")
+        val capturedSurfaces = buildString {
+            append(evidence.event.renderForSecretScan())
+            append(' ').append(evidence.response.status())
+            append(' ').append(evidence.response.headers())
+            append(' ').append(evidence.response.contentUtf8())
         }
+        assertNoSentinels(capturedSurfaces, "captured event or client response")
     }
 
     /** Verifies that a mid-response timeout emits the stable upstream warning. */
@@ -514,6 +516,61 @@ class BypassProxyServiceTest {
             .build()
             .startAndTrack()
 
+    /** Builds and tracks a WebClient on a scenario-owned connection factory. */
+    private fun isolatedWebClient(baseUri: URI? = null): WebClient {
+        val factory = ClientFactory.builder().build().also(clientFactories::add)
+        val builder = baseUri?.let { WebClient.builder(it.toString()) } ?: WebClient.builder()
+        return builder
+            .factory(factory)
+            .responseTimeout(UPSTREAM_FAILURE_TIMEOUT)
+            .build()
+    }
+
+    /**
+     * Waits for one accepted raw connection, terminal client response, and the
+     * exact request warning, retaining only safe bounded state in diagnostics.
+     */
+    private fun awaitUpstreamFailureEvidence(
+        responseFuture: CompletableFuture<AggregatedHttpResponse>,
+        upstream: DisconnectingTestUpstream,
+        events: List<ILoggingEvent>,
+    ): UpstreamFailureEvidence {
+        var matchingEvents = emptyList<ILoggingEvent>()
+        var lastObservedState = "not observed"
+        assertTrue(
+            fixture.awaitUntil(UPSTREAM_FAILURE_TIMEOUT) {
+                matchingEvents = events.filter { event ->
+                    event.formattedMessage == "upstream request failed: POST $UPSTREAM_FAILURE_PATH"
+                }
+                val response = responseFuture.takeIf {
+                    it.isDone && !it.isCompletedExceptionally && !it.isCancelled
+                }?.getNow(null)
+                lastObservedState =
+                    "responseDone=${responseFuture.isDone}, " +
+                        "responseFailed=${responseFuture.isCompletedExceptionally}, " +
+                        "responseStatus=${response?.status()}, responseBytes=${response?.content()?.length()}, " +
+                        "acceptedConnections=${upstream.acceptedConnections}, " +
+                        "matchingEvents=${matchingEvents.size}, totalEvents=${events.size}"
+                upstream.acceptedConnections >= 1 && responseFuture.isDone && matchingEvents.size == 1
+            },
+            "upstream failure did not publish one exact response/log pair; last state: $lastObservedState",
+        )
+
+        val exchange = runCatching(responseFuture::join)
+        exchange.exceptionOrNull()?.let { failure ->
+            assertNoSentinels(failure.stackTraceToString(), "client exception surface")
+            throw AssertionError("client exchange failed; last state: $lastObservedState", failure)
+        }
+        return UpstreamFailureEvidence(exchange.getOrThrow(), matchingEvents.single())
+    }
+
+    /** Asserts that no request-controlled sentinel occurs in a captured [surface]. */
+    private fun assertNoSentinels(surface: String, surfaceName: String) {
+        allSentinels.forEach { sentinel ->
+            assertFalse(surface.contains(sentinel), "sentinel $sentinel leaked into the $surfaceName")
+        }
+    }
+
     /**
      * Reserves a non-ephemeral local port and releases it again, so concurrent
      * fixture servers cannot claim the dead endpoint through `http(0)` allocation.
@@ -537,4 +594,19 @@ class BypassProxyServiceTest {
     private fun serverUri(server: Server): URI =
         URI.create("http://127.0.0.1:${server.activeLocalPort()}")
 
+    private companion object {
+        const val UPSTREAM_FAILURE_PATH = "/v1/upstream-error-evidence"
+        val UPSTREAM_FAILURE_TIMEOUT: Duration = Duration.ofSeconds(5)
+    }
+
+    /**
+     * Exact observations of one upstream connection failure.
+     *
+     * @property response stable client-facing response.
+     * @property event matching safe structured warning.
+     */
+    private data class UpstreamFailureEvidence(
+        val response: AggregatedHttpResponse,
+        val event: ILoggingEvent,
+    )
 }

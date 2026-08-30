@@ -2,6 +2,7 @@ package io.vigilant.gateway
 
 import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.classic.spi.IThrowableProxy
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 
@@ -17,13 +18,27 @@ internal fun ILoggingEvent.assertUpstreamFailureWarning(expectedError: String) {
     )
 }
 
-/** Renders message, structured fields, and throwable metadata for secret scans. */
+/** Renders every captured logging-event surface that could retain request-controlled text. */
 internal fun ILoggingEvent.renderForSecretScan(): String = buildString {
-    append(formattedMessage)
+    append(loggerName).append(' ')
+    append(threadName).append(' ')
+    append(level).append(' ')
+    append(message).append(' ')
+    append(formattedMessage).append(' ')
+    argumentArray?.forEach { argument -> append(argument).append(' ') }
     keyValuePairs.orEmpty().forEach { field ->
-        append(' ').append(field.key).append('=').append(field.value)
+        append(field.key).append('=').append(field.value).append(' ')
     }
-    throwableProxy?.let { throwable ->
-        append(' ').append(throwable.className).append(' ').append(throwable.message)
-    }
+    mdcPropertyMap.forEach { (key, value) -> append(key).append('=').append(value).append(' ') }
+    markerList.orEmpty().forEach { marker -> append(marker).append(' ') }
+    appendThrowableForSecretScan(throwableProxy)
+}
+
+/** Appends recursive throwable metadata and stack frames without rethrowing the event cause. */
+private fun StringBuilder.appendThrowableForSecretScan(throwable: IThrowableProxy?) {
+    throwable ?: return
+    append(throwable.className).append(' ').append(throwable.message).append(' ')
+    throwable.stackTraceElementProxyArray.orEmpty().forEach { frame -> append(frame).append(' ') }
+    throwable.suppressed.orEmpty().forEach { suppressed -> appendThrowableForSecretScan(suppressed) }
+    appendThrowableForSecretScan(throwable.cause)
 }

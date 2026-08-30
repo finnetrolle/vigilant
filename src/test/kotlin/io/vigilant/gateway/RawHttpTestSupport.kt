@@ -12,10 +12,103 @@ import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.time.Duration
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
 private const val MAX_HTTP1_REQUEST_HEAD_BYTES = 16 * 1024
 private val HTTP1_REQUEST_HEAD_TERMINATOR = "\r\n\r\n".toByteArray(StandardCharsets.US_ASCII)
+
+/**
+ * Bound raw endpoint that accepts and immediately resets every connection,
+ * producing a deterministic pre-response upstream transport failure without
+ * releasing its OS-assigned port to concurrent fixture servers.
+ */
+internal class DisconnectingTestUpstream(private val diagnosticName: String) : AutoCloseable {
+    private val connectionCount = AtomicInteger()
+    private val endpoint = BoundRawTestEndpoint("disconnecting-$diagnosticName") { socket, _ ->
+        connectionCount.incrementAndGet()
+        socket.setSoLinger(true, 0)
+    }
+
+    /** Address used by a real Armeria upstream client. */
+    val uri: URI
+        get() = endpoint.uri
+
+    /** Number of connections accepted before being reset. */
+    val acceptedConnections: Int
+        get() = connectionCount.get()
+
+    /** Stops the accept loop and surfaces unexpected raw-endpoint failures. */
+    override fun close() {
+        endpoint.close()
+    }
+}
+
+/**
+ * Owns the shared bound-socket, accept-thread, connection, and failure
+ * lifecycle for raw test upstreams while delegating scenario wire behavior.
+ */
+private class BoundRawTestEndpoint(
+    diagnosticName: String,
+    private val handleConnection: (Socket, () -> Boolean) -> Unit,
+) : AutoCloseable {
+    private val closed = AtomicBoolean()
+    private val failure = AtomicReference<Throwable>()
+    private val activeConnection = AtomicReference<Socket>()
+    private val serverSocket = ServerSocket().apply {
+        reuseAddress = true
+        bind(InetSocketAddress(InetAddress.getByName(LOOPBACK_ADDRESS), 0))
+    }
+    private val acceptThread = Thread.ofVirtual()
+        .name("$diagnosticName-accept")
+        .start(::acceptConnections)
+
+    /** Address used by a real Armeria upstream client. */
+    val uri: URI = URI.create("http://$LOOPBACK_ADDRESS:${serverSocket.localPort}")
+
+    /** Closes every owned socket, joins the accept thread, and surfaces recorded failures. */
+    override fun close() {
+        closed.set(true)
+        closeAllResources(
+            serverSocket::close,
+            { activeConnection.getAndSet(null)?.close() },
+            { acceptThread.join(THREAD_JOIN_TIMEOUT.toMillis()) },
+            { check(!acceptThread.isAlive) { "raw endpoint $acceptThread did not stop" } },
+            { failure.get()?.let { throw AssertionError("raw endpoint $acceptThread failed", it) } },
+        )
+    }
+
+    /** Accepts sequential connections until close or the first unexpected endpoint failure. */
+    private fun acceptConnections() {
+        while (!closed.get()) {
+            try {
+                acceptConnection()
+            } catch (exception: SocketException) {
+                if (!closed.get()) failure.compareAndSet(null, exception)
+                return
+            } catch (exception: Exception) {
+                failure.compareAndSet(null, exception)
+                return
+            }
+        }
+    }
+
+    /** Accepts, tracks, handles, and releases one connection owned by this endpoint. */
+    private fun acceptConnection() {
+        val socket = serverSocket.accept()
+        activeConnection.set(socket)
+        try {
+            socket.use { handleConnection(it, closed::get) }
+        } finally {
+            activeConnection.compareAndSet(socket, null)
+        }
+    }
+
+    private companion object {
+        const val LOOPBACK_ADDRESS = "127.0.0.1"
+        val THREAD_JOIN_TIMEOUT: Duration = Duration.ofSeconds(2)
+    }
+}
 
 /**
  * Reads one bounded HTTP/1.1 request head, returning `null` after a clean peer
@@ -50,47 +143,24 @@ internal class RawHttp1TestUpstream(
     private val diagnosticName: String,
     private val applicationResponse: String,
 ) : AutoCloseable {
-    private val closed = AtomicBoolean()
-    private val failure = AtomicReference<Throwable>()
-    private val serverSocket = ServerSocket().apply {
-        reuseAddress = true
-        bind(InetSocketAddress(InetAddress.getByName(LOOPBACK_ADDRESS), 0))
-    }
-    private val acceptThread = Thread.ofVirtual()
-        .name("raw-http1-$diagnosticName-accept")
-        .start(::acceptConnections)
+    private val endpoint = BoundRawTestEndpoint("raw-http1-$diagnosticName", ::handleConnection)
 
     /** Address used by a real Armeria upstream client. */
-    val uri: URI = URI.create("http://$LOOPBACK_ADDRESS:${serverSocket.localPort}")
+    val uri: URI
+        get() = endpoint.uri
 
     /** Stops the accept loop and surfaces unexpected raw-server failures. */
     override fun close() {
-        closed.set(true)
-        serverSocket.close()
-        acceptThread.join(THREAD_JOIN_TIMEOUT.toMillis())
-        failure.get()?.let { throw AssertionError("raw $diagnosticName upstream failed", it) }
-    }
-
-    /** Accepts protocol probes and application requests until test teardown. */
-    private fun acceptConnections() {
-        while (!closed.get()) {
-            try {
-                serverSocket.accept().use(::handleConnection)
-            } catch (exception: SocketException) {
-                if (!closed.get()) failure.compareAndSet(null, exception)
-            } catch (exception: Exception) {
-                failure.compareAndSet(null, exception)
-            }
-        }
+        endpoint.close()
     }
 
     /** Handles an HTTP/1.1 probe followed by zero or more application requests. */
-    private fun handleConnection(socket: Socket) {
+    private fun handleConnection(socket: Socket, isClosed: () -> Boolean) {
         socket.tcpNoDelay = true
         val input = BufferedInputStream(socket.getInputStream())
         val output = BufferedOutputStream(socket.getOutputStream())
         var continueReading = true
-        while (!closed.get() && continueReading) {
+        while (!isClosed() && continueReading) {
             val requestHead = input.readBoundedHttp1RequestHead() ?: break
             val requestLine = requestHead.substringBefore("\r\n")
             when (requestLine) {
@@ -114,11 +184,9 @@ internal class RawHttp1TestUpstream(
     }
 
     private companion object {
-        const val LOOPBACK_ADDRESS = "127.0.0.1"
         const val HTTP2_PREFACE_REQUEST_LINE = "PRI * HTTP/2.0"
         const val HTTP1_OPTIONS_REQUEST_LINE = "OPTIONS * HTTP/1.1"
         const val PROBE_RESPONSE =
             "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n"
-        val THREAD_JOIN_TIMEOUT: Duration = Duration.ofSeconds(2)
     }
 }

@@ -1,6 +1,6 @@
 # VIG-21-03: Детерминированный upstream-error evidence
 
-**Статус:** Ready for implementation
+**Статус:** Done
 **Epic:** [EPIC-21](../../epics/epic_21_post_milestone_architecture_closure.md)
 **Ветка:** Verification determinism > stable upstream-error observation
 **Зависит от:** нет
@@ -22,22 +22,59 @@ cross-talk.
 
 ## Критерии готовности
 
-- [ ] Existing intermittent case воспроизводится bounded stress run или
+- [x] Existing intermittent case воспроизводится bounded stress run или
   root-cause evidence объясняет, почему старый fixture допускал `RST_STREAM`.
-- [ ] Test наблюдает client response и matching log event одного exchange;
+- [x] Test наблюдает client response и matching log event одного exchange;
   `runCatching` не превращает transport exception в допустимый success path.
-- [ ] Dead upstream seam не освобождает OS-ephemeral port перед connect и не
+- [x] Dead upstream seam не освобождает OS-ephemeral port перед connect и не
   может быть занят параллельным Armeria `http(0)` fixture.
-- [ ] Synchronization ждёт exact response/log observations с bounded deadline и
+- [x] Synchronization ждёт exact response/log observations с bounded deadline и
   печатает last observed state при failure.
-- [ ] Body, query token и Authorization sentinels отсутствуют во всём captured
+- [x] Body, query token и Authorization sentinels отсутствуют во всём captured
   event, exception и client error surface.
-- [ ] Focused class и повторный full-suite sample проходят без intermittent
+- [x] Focused class и повторный full-suite sample проходят без intermittent
   outcome; число повторов и environment опубликованы.
-- [ ] Production code не меняется, пока deterministic test не докажет runtime
+- [x] Production code не меняется, пока deterministic test не докажет runtime
   defect. Такой defect получает отдельную RED-first issue.
-- [ ] Open papercut закрывается только ссылкой на root cause и verification
+- [x] Open papercut закрывается только ссылкой на root cause и verification
   evidence, а не по одному green run.
+
+## Completion evidence
+
+История показала два дефекта старого evidence seam. До `81fe836` helper
+освобождал `ServerSocket(0)` из OS ephemeral range до connect, поэтому
+параллельный Armeria `http(0)` мог занять endpoint и вернуть HTTP/2
+`RST_STREAM`. Позднее logging case обернул downstream exchange в `runCatching`
+и ждал любой event класса, поэтому client exception и WARN другого exchange не
+опровергали тест.
+
+`DisconnectingTestUpstream` теперь удерживает bound loopback socket, принимает
+реальную connection и немедленно reset-ит её до HTTP response. Upstream и
+downstream clients используют scenario-owned `ClientFactory`; test ждёт в
+пределах 5 секунд одновременно accepted connection, terminal response и ровно
+один WARN для exact safe path. Любой client exception сканируется на sentinels
+и затем обязательно проваливает test. Captured Logback event сканируется по
+message, arguments, key-values, MDC, markers и recursive throwable surface;
+client status, headers и body проверяются вместе с ним.
+
+30 августа 2026 года exact focused method прошёл `20/20` последовательных
+`--rerun-tasks` запусков, а полный `./gradlew test --rerun-tasks -q` прошёл
+`3/3` последовательных samples. После test-only refactor exact method и
+`MalformedUpstreamResponseTest` повторно прошли вместе, `./gradlew detekt
+--rerun-tasks --no-daemon` завершился GREEN. Environment: macOS `26.3.1`
+`arm64`, Apple M3 Max, `36 GiB` RAM, Gradle `9.7.1`, launcher JDK `25.0.2`,
+project JVM toolchain `25`. Production code не изменён, отдельная runtime defect
+issue не потребовалась. Финальные `./gradlew validateWorkItems --rerun-tasks
+--no-daemon` и `./gradlew build --rerun-tasks --no-daemon` прошли; forced build
+выполнил все 16 tasks и завершился за `5m 53s`.
+
+Post-issue verification remediation получила поведенческий RED на no-op
+`closeAllResources`, затем GREEN на сохранение первого cleanup failure,
+suppressed later failures и обязательный вызов всех cleanup actions. После
+перевода teardown и обоих raw upstream fixtures на общие lifecycle helpers
+`TestResourceLifecycleTest`, `BypassProxyServiceTest`,
+`MalformedUpstreamResponseTest` и `DynamicResponseConnectionHeadersTest`
+совместно прошли forced focused run.
 
 ## Test/demo seam
 
