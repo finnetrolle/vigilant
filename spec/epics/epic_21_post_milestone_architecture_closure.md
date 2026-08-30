@@ -2,9 +2,9 @@
 
 **ID:** `EPIC-21`
 **Тип:** Epic
-**Статус:** Ready for implementation
+**Статус:** In progress
 **Приоритет:** High
-**Суммарная оценка:** 9-15 инженерных дней
+**Суммарная оценка:** 7-12 инженерных дней осталось; 2-3 завершены
 **Связанные требования:** `MVP-18`, `MVP-19`, `CONC-01`, `CONC-03`, `PROXY-01`, production milestone safety gates
 
 ## Контекст
@@ -42,21 +42,23 @@ EPIC-21 post-milestone architecture closure
 
 ## Дочерние issues
 
-- [ ] [VIG-21-01: Контракт минимального обязательного audit trail](../issues/epic_21/issue_21_01_minimum_audit_trail_contract.md) - `Ready for implementation`
+- [x] [VIG-21-01: Контракт минимального обязательного audit trail](../issues/epic_21/issue_21_01_minimum_audit_trail_contract.md) - `Done`
 - [ ] [VIG-21-02: Qualification граничных request inspection shapes](../issues/epic_21/issue_21_02_adversarial_inspection_resource_qualification.md) - `Ready for implementation`
 - [ ] [VIG-21-03: Детерминированный upstream-error evidence](../issues/epic_21/issue_21_03_upstream_error_test_determinism.md) - `Ready for implementation`
 - [ ] [VIG-21-04: Детерминированный streaming evidence](../issues/epic_21/issue_21_04_streaming_evidence_determinism.md) - `Ready for implementation`
 - [ ] [VIG-21-05: Синхронизация roadmap и repository frontier](../issues/epic_21/issue_21_05_roadmap_frontier_reconciliation.md) - `Ready for implementation`
 
-VIG-21-01 первой фиксирует audit contract и публикует отдельные implementation
-leaves либо честный human-owned blocker. VIG-21-02..04 независимы и могут
-выполняться параллельно. VIG-21-05 зависит от результатов VIG-21-01..04,
-потому что документация не должна заранее объявлять audit или resource closure.
+VIG-21-01 выбрал application-owned WAL contract и опубликовал отдельный
+production [EPIC-22](epic_22_durable_minimum_audit_trail.md), не расширяя scope
+EPIC-21. Оставшиеся VIG-21-02..04 независимы и могут выполняться параллельно.
+VIG-21-05 зависит от опубликованных результатов VIG-21-01..04, потому что
+документация не должна заранее объявлять audit или resource closure.
 
 ## Требования
 
-- VIG-21-01 различает safe event contents, application boundary acceptance,
-  durable retention и external delivery.
+- Нормативный [audit contract](../MINIMUM_AUDIT_TRAIL_CONTRACT.md)
+  различает safe event contents, application boundary acceptance, durable
+  retention и external delivery.
 - Contract сохраняет OUT-06: собственное observability storage или SIEM не
   добавляется как скрытый scope.
 - Packaged-process qualification покрывает max per-request bytes,
@@ -70,7 +72,7 @@ leaves либо честный human-owned blocker. VIG-21-02..04 независ
 
 ## Не входит
 
-- Выбор audit durability mechanism внутри parent epic без VIG-21-01.
+- Выбор audit durability mechanism внутри этого parent epic без VIG-21-01.
 - Реализация audit storage/delivery до отдельной готовой implementation issue.
 - Изменение parser field map, fragment independence или policy semantics.
 - Response/SSE inspection, disk spill и EPIC-20 decisions.
