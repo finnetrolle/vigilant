@@ -139,6 +139,9 @@ Smoke-тест требует `cmp`, `curl`, Docker и Python 3. Он запус
   передаются upstream.
 - Application JSON logs, OTLP/JSON traces и OTLP/JSON metrics пишутся только в
   stdout. Приложение не подключается к OpenTelemetry Collector.
+- Safe aggregate `policy.shadow_decision` описывает contents и correlation,
+  но current async stdout не гарантирует durable minimum audit trail;
+  эта implementation остаётся frontier EPIC-22.
 - Prometheus scrape endpoint отсутствует.
 
 Имена метрик, JSONL schema, audit events, настройка Collector и правила

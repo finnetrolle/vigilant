@@ -163,6 +163,13 @@ Unexpected exception и cancellation не превращаются в expected r
 числа fragments/findings и безопасные агрегаты по типам. Payload, matched text,
 locators и headers в audit не попадают.
 
+Эта safe aggregate schema не является durable acceptance: current
+`ShadowAuditLogger` публикует INFO record через discardable async stdout.
+Обязательная WAL-backed acceptance boundary определена отдельным
+[minimum audit trail contract](../spec/MINIMUM_AUDIT_TRAIL_CONTRACT.md), ещё не
+реализована и принадлежит
+[EPIC-22](../spec/epics/epic_22_durable_minimum_audit_trail.md).
+
 `ReplayReadyRequest` инкапсулирует demand-driven publisher и immutable strip
 set. Его `transferTo` допускает ровно один transport handoff. `close()` до
 handoff и synchronous callback failure освобождают source; после принятого

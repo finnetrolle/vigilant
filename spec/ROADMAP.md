@@ -86,7 +86,7 @@ Roadmap связывает work items нескольких epics в один del
 - Отсутствующая или неверная coverage policy завершает startup с exit code `2`.
 - Hardcoded hidden default policy не добавляется.
 
-### Safe audit
+### Safe aggregate event
 
 На каждый поддерживаемый HTTP request создаётся один aggregated event:
 
@@ -107,6 +107,19 @@ Event и связанные errors не содержат payload, matched text, 
 locator, media URL, filename, raw headers, identity values, credentials или
 reversible hashes. Detector errors и policy deadlines остаются отдельными
 structured error events.
+
+Это contract безопасного содержимого одного aggregate event. Текущая
+публикация через discardable async stdout не является durability
+guarantee и не подтверждает mandatory audit acceptance.
+
+### Guaranteed minimum audit trail
+
+Отдельный нормативный [contract](MINIMUM_AUDIT_TRAIL_CONTRACT.md) требует
+application-owned WAL и durable acknowledgement до forwarding или normal
+supported-request response. Эта guarantee ещё не реализована в current
+runtime. Её единственный implementation owner -
+[EPIC-22](epics/epic_22_durable_minimum_audit_trail.md); external Collector
+delivery, SIEM и query UI не входят в minimum durability boundary.
 
 ## Discovery map
 
@@ -238,7 +251,21 @@ report. Он не превращает advisory latency targets в blockers, н�
 Gate закрыт 2026-08-27. [Versioned report](../docs/inspection-load-result.md)
 фиксирует `PASS`: `240 000/240 000` measured requests при `2 000 RPS`, HTTP
 p50/p95/p99 `2/3/4 ms`, total inspection `64 KiB` p99 `1.670 ms`, bounded RSS,
-byte-identical replay и полный safe audit. Production milestone достигнут.
+byte-identical replay и полный набор matched safe aggregate events. Production
+milestone достигнут.
+
+Граница evidence VIG-18 - ровно измеренный profile от `2026-08-27`:
+synthetic request `64 KiB` с single PII-bearing fragment, hardware Apple M3 Max
+и gateway heap `512 MiB`. Этот run не доказывает throughput или
+memory envelope для всей accepted `8 MiB` request surface.
+
+Отдельный test-only [VIG-21-02](issues/epic_21/issue_21_02_adversarial_inspection_resource_qualification.md)
+от `2026-08-30` расширяет claims только на свой measured profile:
+three exact `8 MiB` accepted shapes, fragment-overflow rejection и concurrent
+raw-source capacity boundary на Mac OS X 26.3.1/aarch64 с heap `1 GiB` и
+direct-memory limit `512 MiB`. Его [versioned report](../docs/inspection-resource-qualification-2026-08-30.md)
+фиксирует exact HTTP, audit, replay, cleanup и memory observations, но не
+заменяет VIG-18 throughput baseline и не создаёт universal capacity promise.
 
 `Production PII shadow proxy` достигнут только когда:
 
@@ -345,9 +372,12 @@ VIG-10-02 также имеют status `Done`.
 
 Implementation issues Stage 2 закрыты: VIG-03-02, VIG-03-07, VIG-06-02,
 VIG-07-02 и VIG-08-02 имеют status `Done`; независимые module seams готовы к
-integration. VIG-18 подтвердил memory/concurrency bounds и phase baseline,
-поэтому EPIC-07 и request-only EPIC-08 также имеют status `Done`. Identity
-leaves EPIC-03 готовы по contract, но не входят в первый production increment.
+integration. VIG-18 подтверждает только `64 KiB` single-fragment profile;
+VIG-21-02 отдельно подтверждает опубликованную max-shape matrix. EPIC-07 и
+request-only EPIC-08 также имеют status `Done`. Identity
+scope исторического first production increment был anonymous-only. После
+него VIG-03-03..06 закрыли full identity path; current runtime поддерживает
+ровно один configured mode из `ANONYMOUS`, `TRUSTED_HEADERS`, `BASIC`.
 
 Все standalone integration issues Stage 3 закрыты: VIG-11..17 имеют status
 `Done`. Production `MainKt` и OCI image выполняют bounded PII shadow inspection
@@ -357,9 +387,18 @@ SERVER, INTERNAL и CLIENT spans; application и OTLP JSON records переда�
 через stdout. VIG-18 и Stage 4 закрыты: versioned load report опубликован,
 обязательные safety gates пройдены, `Production PII shadow proxy` достигнут.
 
-Полный repository frontier сохраняет VIG-01A, которая проверяет
-logging-specific PERF-01. EPIC-10 и её финальная qualification issue VIG-10-08
-имеют status `Done`.
+Post-milestone evidence также синхронизировано: VIG-21-03 и VIG-21-04 имеют
+status `Done`; upstream-error и streaming tests используют bounded causal
+observation seams. Их исторические issue records и reports сохраняют
+исходные dates и evidence. EPIC-20 остаётся единственным owner
+response/SSE spooling и secure spill decisions; EPIC-21 закрыт без
+дублирующего future scope.
+
+Post-milestone closure EPIC-21 завершён. Текущая implementation frontier -
+[EPIC-22](epics/epic_22_durable_minimum_audit_trail.md) с first leaf
+[VIG-22-01](issues/epic_22/issue_22_01_local_durable_audit_store.md) в status
+`Ready for implementation`. VIG-01A, EPIC-10 и VIG-10-08 имеют status
+`Done` и не входят в current frontier.
 
 ## Не входит в первый production increment
 
@@ -368,7 +407,10 @@ logging-specific PERF-01. EPIC-10 и её финальная qualification issue
   принадлежащие future
   [EPIC-20](epics/epic_20_response_spooling_secure_spill.md).
 - `BLOCK`, `MASK`, `REMOVE` и изменение protocol source.
-- User/group identity extraction и trusted ingress model.
+- historical scope первого milestone не включал user/group identity
+  extraction и trusted ingress model. Это temporal boundary, а не current
+  exclusion: current runtime уже реализует `ANONYMOUS`, `TRUSTED_HEADERS`
+  и `BASIC`.
 - External object storage.
 - Kubernetes manifests, Helm, autoscaling и centralized log storage.
 - Backend-specific Langfuse/MLflow exporters и authentication внутри Vigilant.

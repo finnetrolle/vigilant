@@ -52,7 +52,7 @@ safe structured `request_completed` event с method, path без query, HTTP sta
 и upstream/gateway durations. Health/readiness probes этим decorator не
 обрабатываются.
 
-## Shadow audit event
+## Safe aggregate shadow event
 
 Для каждого поддержанного Chat Completions request создаётся один aggregate
 event `event.name=policy.shadow_decision`. Он содержит:
@@ -76,6 +76,23 @@ event `event.name=policy.shadow_decision`. Он содержит:
 Identity extraction failure поддержанного descriptor создаёт тот же один
 aggregate event с `decision=ERROR` и bounded `error.code`. Configured header
 values, Basic username/password и raw `Authorization` в event не добавляются.
+
+Этот event определяет safe contents и correlation, но не durability.
+`AsyncAppender` может отбросить INFO record до stdout, поэтому
+`policy.shadow_decision` не является mandatory audit acceptance.
+
+## Guaranteed minimum audit trail
+
+Нормативный [minimum audit trail contract](../spec/MINIMUM_AUDIT_TRAIL_CONTRACT.md)
+отделяет creation safe decision, store ownership, durable retention и
+external delivery. Минимальная guarantee - application-owned WAL record,
+подтверждённая covering `force(true)` до forwarding или normal
+supported-request response.
+
+Текущий runtime эту guarantee ещё не реализует. Её implementation
+принадлежит [EPIC-22](../spec/epics/epic_22_durable_minimum_audit_trail.md).
+До завершения этого epic safe aggregate stdout event остаётся
+best-effort observability, а не guaranteed minimum audit trail.
 
 ## Upstream failure event
 
