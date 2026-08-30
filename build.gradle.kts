@@ -211,6 +211,21 @@ val perfContractTest = tasks.register<Test>("perfContractTest") {
     useJUnitPlatform()
     group = "verification"
     description = "Runs fast PERF-01 scenario contract tests without load."
+    jvmArgs("--add-modules=jdk.jdi")
+}
+
+val inspectionResourceContractTest = tasks.register<Test>("inspectionResourceContractTest") {
+    dependsOn(tasks.named("testClasses"))
+    testClassesDirs = sourceSets.test.get().output.classesDirs
+    classpath = sourceSets.test.get().runtimeClasspath
+    useJUnitPlatform()
+    filter {
+        includeTestsMatching("io.vigilant.source.BoundedRequestSourceTest")
+        includeTestsMatching("io.vigilant.gateway.proxy.PiiShadowProxyServiceTest")
+        includeTestsMatching("io.vigilant.gateway.ShutdownLifecycleTest")
+    }
+    group = "verification"
+    description = "Runs exact owner, byte, cancellation, executor and shutdown cleanup contracts."
 }
 
 val workItemValidatorTest = tasks.register<Test>("workItemValidatorTest") {
@@ -270,6 +285,24 @@ tasks.register<io.gatling.gradle.GatlingRunTask>("inspectionLoadTest") {
     )
     setGatlingRuntimeClasspath(gatlingSourceSet.get().runtimeClasspath)
     setGatlingReportDir(layout.buildDirectory.dir("reports/gatling").get().asFile)
+}
+
+tasks.register<JavaExec>("inspectionResourceQualification") {
+    dependsOn(
+        "installDist",
+        perfContractTest,
+        inspectionResourceContractTest,
+        gatlingSourceSet.map { it.classesTaskName },
+    )
+    group = "verification"
+    description = "Runs the packaged adversarial request-inspection resource qualification."
+    classpath = gatlingSourceSet.get().runtimeClasspath
+    mainClass.set("io.vigilant.perf.InspectionResourceQualificationMain")
+    systemProperty("perf.projectDir", rootDir.absolutePath)
+    systemProperty("perf.javaExecutable", piiJmhJavaLauncher.get().executablePath.asFile.absolutePath)
+    jvmArgs("--add-modules=jdk.jdi")
+    outputs.file(layout.buildDirectory.file("reports/inspection/resource-qualification/summary.md"))
+    outputs.upToDateWhen { false }
 }
 
 val redMadRobotMetadataFile =

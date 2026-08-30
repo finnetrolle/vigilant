@@ -1,6 +1,6 @@
 # VIG-21-02: Qualification граничных request inspection shapes
 
-**Статус:** Ready for implementation
+**Статус:** Done
 **Epic:** [EPIC-21](../../epics/epic_21_post_milestone_architecture_closure.md)
 **Ветка:** Inspection resource evidence > max-shape packaged-process qualification
 **Зависит от:** нет
@@ -22,31 +22,52 @@ audit, replay и cleanup на граничных request shapes, которые 
 
 ## Критерии готовности
 
-- [ ] Packaged `MainKt` и real upstream запускаются в отдельных processes с
+- [x] Packaged `MainKt` и real upstream запускаются в отдельных processes с
   fixed heap, direct-memory limit, source limits и recorded environment.
-- [ ] Matrix включает exact default per-request boundary `8 MiB`: один большой
+- [x] Matrix включает exact default per-request boundary `8 MiB`: один большой
   text fragment, largest accepted normalized-fragment count перед parser
   rejection и gap-dense supported content.
-- [ ] Concurrent case удерживает несколько accepted requests в пределах
+- [x] Concurrent case удерживает несколько accepted requests в пределах
   default `64 MiB` raw-source quota и отдельно проверяет expected stable
   capacity rejection за границей.
-- [ ] Для каждого accepted case проверены exact HTTP outcome, byte-identical
+- [x] Для каждого accepted case проверены exact HTTP outcome, byte-identical
   replay, один expected safe audit event и отсутствие silent truncation.
-- [ ] После success, rejection, client cancellation и process shutdown source
+- [x] После success, rejection, client cancellation и process shutdown source
   owners, retained bytes, executor tasks и memory trend возвращаются к
   опубликованному bounded baseline.
-- [ ] Multi-fragment case публикует total inspection duration и явно показывает
+- [x] Multi-fragment case публикует total inspection duration и явно показывает
   multiplier последовательной per-fragment policy evaluation; новый latency
   threshold не придумывается внутри test.
-- [ ] Report отдельно показывает raw source bytes и peak heap/RSS, потому что
+- [x] Report отдельно показывает raw source bytes и peak heap/RSS, потому что
   Jackson tree, decoded strings, gaps, detector preflight arrays и windows не
   входят в `RequestSourceQuota.retainedBytes`.
-- [ ] Synthetic fixtures не содержат production payload или raw PII и не
+- [x] Synthetic fixtures не содержат production payload или raw PII и не
   записывают body/locators в report или logs.
-- [ ] Production code не меняется. Если qualification выявляет defect, он
+- [x] Production code не меняется. Если qualification выявляет defect, он
   получает отдельную RED-first TDD issue с exact failing case.
-- [ ] Focused contract tests, qualification command и `./gradlew build`
+- [x] Focused contract tests, qualification command и `./gradlew build`
   проходят; versioned report сохраняется в `docs/`.
+
+## Completion evidence
+
+[Versioned report](../../../docs/inspection-resource-qualification-2026-08-30.md)
+фиксирует `PASS` на packaged `MainKt` и отдельном real Armeria upstream:
+все три exact `8 MiB` accepted shapes дали HTTP `200`, byte-identical replay и
+ровно один ожидаемый safe audit event; `16 385`-й fragment дал локальный
+`400 unsupported_schema`; восемь удерживаемых sources сохранили `67 108 856`
+raw bytes, test-only server-side observation подтвердил exact `8` active
+owners и `67 108 856` retained bytes, а единственный measured request после
+observation получил стабильный `503`.
+
+На зафиксированном Mac OS X/aarch64/JDK 25 profile с heap `1 GiB` и direct
+memory `512 MiB` peak heap составил `410.7 MiB`, peak RSS `1033.1 MiB`, а
+terminal sample вернулся к `20.4/561.3 MiB` heap/RSS внутри опубликованного
+full-profile warm high-water baseline `20.8/1033.1 MiB` + `64 MiB`. Baseline
+фиксируется максимумами пяти последовательных forced-GC observations внутри
+`16 MiB` heap/RSS window. Exact source owner/byte и executor cleanup дополнен
+focused public-seam contracts для success, rejection, cancellation и shutdown.
+Production code не изменён, qualification дважды подряд прошёл на свежих
+processes, отдельная defect issue не потребовалась.
 
 ## Test/demo seam
 

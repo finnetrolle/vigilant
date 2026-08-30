@@ -44,4 +44,19 @@ final class InspectionLoadProfileTest {
             }
         }
     }
+
+    /** Pins the exact default source limits and JVM bounds used by VIG-21-02 qualification. */
+    @Test
+    void resourceQualificationProfileUsesExactDefaultSourceLimits() {
+        InspectionQualificationProfile profile = InspectionQualificationProfile.fixed();
+
+        assertAll(
+            () -> assertEquals(8_388_608L, profile.perRequestLimitBytes()),
+            () -> assertEquals(67_108_864L, profile.globalRetainedLimitBytes()),
+            () -> assertEquals(128, profile.maxConcurrentSources()),
+            () -> assertEquals(128, profile.maxSegmentsPerRequest()),
+            () -> assertEquals(1_024, profile.gatewayHeapMib()),
+            () -> assertEquals(512, profile.directMemoryMib())
+        );
+    }
 }

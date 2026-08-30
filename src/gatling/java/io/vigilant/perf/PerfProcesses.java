@@ -2,24 +2,15 @@ package io.vigilant.perf;
 
 import java.io.File;
 import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.net.ServerSocket;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.TimeUnit;
 
 /** Starts and stops the isolated upstream and both packaged gateway processes. */
 final class PerfProcesses implements AutoCloseable {
-    private static final Duration STARTUP_TIMEOUT = Duration.ofSeconds(30);
-    private static final Duration POLL_INTERVAL = Duration.ofMillis(100);
+    private static final Duration PROCESS_STOP_TIMEOUT = Duration.ofSeconds(10);
     private final PerfProfile profile;
     private final Path processLogDirectory;
     private final Path gatewayLog;
@@ -44,20 +35,28 @@ final class PerfProcesses implements AutoCloseable {
     /** Starts the upstream and both gateways in order, waiting for all three health probes. */
     synchronized void start() {
         try {
-            ensurePortAvailable(profile.upstreamPort());
-            ensurePortAvailable(profile.gatewayPort());
-            ensurePortAvailable(profile.slowSinkGatewayPort());
+            PerformanceProcessSupport.ensurePortAvailable(
+                profile.upstreamPort(),
+                occupiedPortMessage(profile.upstreamPort())
+            );
+            PerformanceProcessSupport.ensurePortAvailable(
+                profile.gatewayPort(),
+                occupiedPortMessage(profile.gatewayPort())
+            );
+            PerformanceProcessSupport.ensurePortAvailable(
+                profile.slowSinkGatewayPort(),
+                occupiedPortMessage(profile.slowSinkGatewayPort())
+            );
             Files.createDirectories(processLogDirectory);
             Files.deleteIfExists(gatewayRecording);
             Files.deleteIfExists(slowSinkGatewayRecording);
-            cleanupHook = new Thread(this::close, "perf-fixtures-shutdown");
-            Runtime.getRuntime().addShutdownHook(cleanupHook);
+            cleanupHook = PerformanceProcessSupport.addShutdownHook(this::close, "perf-fixtures-shutdown");
             upstream = startUpstream(processLogDirectory.resolve("upstream.log"));
-            awaitHealthy(upstream, profile.upstreamBaseUrl() + "/healthz", "upstream");
+            PerformanceProcessSupport.awaitHealthy(upstream, profile.upstreamBaseUrl() + "/healthz", "upstream");
             gateway = startGateway(gatewayLog);
-            awaitHealthy(gateway, profile.gatewayBaseUrl() + "/readyz", "gateway");
+            PerformanceProcessSupport.awaitHealthy(gateway, profile.gatewayBaseUrl() + "/readyz", "gateway");
             slowSinkGateway = startSlowSinkGateway(slowSinkGatewayLog);
-            awaitHealthy(
+            PerformanceProcessSupport.awaitHealthy(
                 slowSinkGateway,
                 profile.slowSinkGatewayBaseUrl() + "/readyz",
                 "slow-sink gateway"
@@ -112,12 +111,12 @@ final class PerfProcesses implements AutoCloseable {
 
     /** Launches the deterministic upstream in its own JVM. */
     private Process startUpstream(Path logFile) throws IOException {
-        return process(upstreamCommand(), logFile).start();
+        return PerformanceProcessSupport.process(upstreamCommand(), profile.projectDirectory(), logFile).start();
     }
 
     /** Builds the deterministic upstream command without gateway profiling options. */
     List<String> upstreamCommand() {
-        List<String> command = javaCommand();
+        List<String> command = PerformanceProcessSupport.javaCommand();
         command.add("-Xms512m");
         command.add("-Xmx512m");
         command.add("--enable-native-access=ALL-UNNAMED");
@@ -139,14 +138,14 @@ final class PerfProcesses implements AutoCloseable {
     /** Launches the packaged gateway with default INFO stdout logging. */
     private Process startGateway(Path logFile) throws IOException {
         List<String> command = defaultGatewayCommand();
-        ProcessBuilder builder = process(command, logFile);
+        ProcessBuilder builder = PerformanceProcessSupport.process(command, profile.projectDirectory(), logFile);
         configureGatewayEnvironment(builder, profile.gatewayPort());
         return builder.start();
     }
 
     /** Builds the default packaged gateway command with its logging recording. */
     List<String> defaultGatewayCommand() {
-        List<String> command = javaCommand();
+        List<String> command = PerformanceProcessSupport.javaCommand();
         command.add("-Xms512m");
         command.add("-Xmx512m");
         command.add("--enable-native-access=ALL-UNNAMED");
@@ -160,7 +159,7 @@ final class PerfProcesses implements AutoCloseable {
     /** Launches the same packaged gateway with a test-only delayed console sink. */
     private Process startSlowSinkGateway(Path logFile) throws IOException {
         List<String> command = slowSinkGatewayCommand();
-        ProcessBuilder builder = process(command, logFile);
+        ProcessBuilder builder = PerformanceProcessSupport.process(command, profile.projectDirectory(), logFile);
         configureGatewayEnvironment(builder, profile.slowSinkGatewayPort());
         return builder.start();
     }
@@ -170,7 +169,7 @@ final class PerfProcesses implements AutoCloseable {
         String classpath = profile.projectDirectory().resolve("build/classes/java/gatling")
             + File.pathSeparator
             + profile.projectDirectory().resolve("build/install/vigilant/lib/*");
-        List<String> command = javaCommand();
+        List<String> command = PerformanceProcessSupport.javaCommand();
         command.add("-Xms512m");
         command.add("-Xmx512m");
         command.add("--enable-native-access=ALL-UNNAMED");
@@ -207,111 +206,28 @@ final class PerfProcesses implements AutoCloseable {
         );
     }
 
-    /** Creates the current toolchain's Java command as a mutable list. */
-    private static List<String> javaCommand() {
-        List<String> command = new ArrayList<>();
-        command.add(System.getProperty(
-            "perf.javaExecutable",
-            Path.of(System.getProperty("java.home"), "bin", "java").toString()
-        ));
-        return command;
-    }
-
-    /** Creates a process builder that redirects all process output to one deterministic file. */
-    private ProcessBuilder process(List<String> command, Path logFile) {
-        return new ProcessBuilder(command)
-            .directory(profile.projectDirectory().toFile())
-            .redirectErrorStream(true)
-            .redirectOutput(logFile.toFile());
-    }
-
-    /** Fails before process launch when a configured benchmark port is already occupied. */
-    private static void ensurePortAvailable(int port) throws IOException {
-        try (ServerSocket socket = new ServerSocket()) {
-            socket.setReuseAddress(true);
-            socket.bind(new InetSocketAddress("127.0.0.1", port));
-        } catch (IOException exception) {
-            throw new IOException(
-                "PERF-01 port " + port + " is already in use; stop the owning process "
-                    + "or override the perf port property",
-                exception
-            );
-        }
-    }
-
-    /** Polls a health endpoint until it answers 200 or the process fails/times out. */
-    private static void awaitHealthy(Process process, String endpoint, String name) {
-        HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
-        HttpRequest request = HttpRequest.newBuilder(URI.create(endpoint))
-            .timeout(Duration.ofSeconds(2))
-            .GET()
-            .build();
-        long deadline = System.nanoTime() + STARTUP_TIMEOUT.toNanos();
-        while (System.nanoTime() < deadline) {
-            if (!process.isAlive()) {
-                throw new IllegalStateException(name + " process exited with code " + process.exitValue());
-            }
-            try {
-                HttpResponse<Void> response = client.send(request, HttpResponse.BodyHandlers.discarding());
-                if (response.statusCode() == 200) {
-                    return;
-                }
-            } catch (IOException ignored) {
-                // Expected while the listening socket is not ready yet.
-            } catch (InterruptedException exception) {
-                Thread.currentThread().interrupt();
-                throw new IllegalStateException("Interrupted while waiting for " + name, exception);
-            }
-            try {
-                Thread.sleep(POLL_INTERVAL);
-            } catch (InterruptedException exception) {
-                Thread.currentThread().interrupt();
-                throw new IllegalStateException("Interrupted while waiting for " + name, exception);
-            }
-        }
-        throw new IllegalStateException(name + " did not become healthy within " + STARTUP_TIMEOUT);
+    /** Returns the exact occupied-port diagnostic retained by the PERF-01 launcher contract. */
+    private static String occupiedPortMessage(int port) {
+        return "PERF-01 port " + port + " is already in use; stop the owning process "
+            + "or override the perf port property";
     }
 
     /** Stops both gateways before upstream, escalating to forcible termination after deadlines. */
     @Override
     public synchronized void close() {
-        removeCleanupHook();
-        stop(slowSinkGateway, Duration.ofSeconds(10));
+        PerformanceProcessSupport.stopAll(List.of(
+            new PerformanceProcessSupport.StopTarget(
+                slowSinkGateway,
+                PROCESS_STOP_TIMEOUT,
+                PROCESS_STOP_TIMEOUT
+            ),
+            new PerformanceProcessSupport.StopTarget(gateway, PROCESS_STOP_TIMEOUT, PROCESS_STOP_TIMEOUT),
+            new PerformanceProcessSupport.StopTarget(upstream, PROCESS_STOP_TIMEOUT, PROCESS_STOP_TIMEOUT)
+        ));
         slowSinkGateway = null;
-        stop(gateway, Duration.ofSeconds(10));
         gateway = null;
-        stop(upstream, Duration.ofSeconds(10));
         upstream = null;
-    }
-
-    /** Removes the load-generator shutdown hook during a normal after-hook cleanup. */
-    private void removeCleanupHook() {
-        Thread hook = cleanupHook;
+        PerformanceProcessSupport.removeShutdownHook(cleanupHook);
         cleanupHook = null;
-        if (hook == null || Thread.currentThread() == hook) {
-            return;
-        }
-        try {
-            Runtime.getRuntime().removeShutdownHook(hook);
-        } catch (IllegalStateException ignored) {
-            // The JVM is already shutting down and will execute the registered hook.
-        }
-    }
-
-    /** Stops one child process with a bounded graceful wait. */
-    private static void stop(Process process, Duration timeout) {
-        if (process == null || !process.isAlive()) {
-            return;
-        }
-        process.destroy();
-        try {
-            if (!process.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS)) {
-                process.destroyForcibly();
-                process.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS);
-            }
-        } catch (InterruptedException exception) {
-            Thread.currentThread().interrupt();
-            process.destroyForcibly();
-        }
     }
 }

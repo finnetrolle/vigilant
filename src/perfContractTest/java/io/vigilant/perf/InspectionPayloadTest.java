@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import io.vigilant.protocol.openai.ChatCompletionsParseResult;
 import io.vigilant.protocol.openai.ChatCompletionsRequestParser;
 import io.vigilant.protocol.openai.CompleteByteSource;
+import io.vigilant.protocol.openai.InspectionCoverage;
 import io.vigilant.protocol.openai.OpenAiOperationDescriptor;
 import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;
@@ -39,5 +40,53 @@ final class InspectionPayloadTest {
                 InspectionPayload.sha256Hex("abc".getBytes(StandardCharsets.UTF_8))
             )
         );
+    }
+
+    /** Generates every exact max-shape qualification fixture and proves its parser property. */
+    @Test
+    void createsExactAdversarialQualificationPayloads() {
+        byte[] singleFragment = InspectionQualificationPayload.singleFragment();
+        byte[] maxFragments = InspectionQualificationPayload.maxFragments();
+        byte[] fragmentOverflow = InspectionQualificationPayload.fragmentOverflow();
+        byte[] gapDense = InspectionQualificationPayload.gapDense();
+
+        ChatCompletionsParseResult.Success parsedSingle = parseSuccess(singleFragment);
+        ChatCompletionsParseResult.Success parsedMaxFragments = parseSuccess(maxFragments);
+        ChatCompletionsParseResult overflow = parse(fragmentOverflow);
+        ChatCompletionsParseResult.Success parsedGaps = parseSuccess(gapDense);
+
+        assertAll(
+            () -> assertEquals(8 * 1_024 * 1_024, singleFragment.length),
+            () -> assertEquals(8 * 1_024 * 1_024, maxFragments.length),
+            () -> assertEquals(8 * 1_024 * 1_024, fragmentOverflow.length),
+            () -> assertEquals(8 * 1_024 * 1_024, gapDense.length),
+            () -> assertEquals(1, parsedSingle.getRequest().getFragments().size()),
+            () -> assertTrue(
+                parsedSingle.getRequest().getFragments().getFirst().getText()
+                    .getBytes(StandardCharsets.UTF_8).length > 8 * 1_024 * 1_024 - 256,
+                "single-fragment fixture must put the boundary bytes inside the inspected fragment"
+            ),
+            () -> assertEquals(16_384, parsedMaxFragments.getRequest().getFragments().size()),
+            () -> assertInstanceOf(ChatCompletionsParseResult.Failure.class, overflow),
+            () -> assertEquals(
+                "UNSUPPORTED_SCHEMA",
+                ((ChatCompletionsParseResult.Failure) overflow).getCode().name()
+            ),
+            () -> assertEquals(16_384, parsedGaps.getRequest().getInspectionGaps().size()),
+            () -> assertEquals(InspectionCoverage.UNINSPECTABLE, parsedGaps.getRequest().getCoverage())
+        );
+    }
+
+    /** Parses one qualification fixture through the public Chat Completions seam. */
+    private static ChatCompletionsParseResult parse(byte[] payload) {
+        return ChatCompletionsRequestParser.INSTANCE.parse(
+            CompleteByteSource.Companion.copyOf(payload),
+            OpenAiOperationDescriptor.Companion.getCHAT_COMPLETIONS_REQUEST()
+        );
+    }
+
+    /** Requires one successful qualification parse without reaching into parser internals. */
+    private static ChatCompletionsParseResult.Success parseSuccess(byte[] payload) {
+        return assertInstanceOf(ChatCompletionsParseResult.Success.class, parse(payload));
     }
 }
