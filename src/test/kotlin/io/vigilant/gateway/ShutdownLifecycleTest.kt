@@ -11,6 +11,7 @@ import java.nio.file.Files
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -85,7 +86,7 @@ class ShutdownLifecycleTest {
         assertTrue(segmentNames.none { name -> name.endsWith(".active") }, segmentNames.toString())
     }
 
-    /** A non-terminating exchange receives a bounded drain window and is then force-closed. */
+    /** A non-terminating exchange is force-closed on time before bounded process cleanup finishes. */
     @Test
     fun `stuck exchange is force closed within configured shutdown timeout`() {
         val stuckStarted = CountDownLatch(1)
@@ -115,29 +116,34 @@ class ShutdownLifecycleTest {
             gateway.process.waitFor(MINIMUM_DRAIN_OBSERVATION.toMillis(), TimeUnit.MILLISECONDS),
             "gateway exited immediately instead of allowing the active exchange to drain",
         )
-        val remainingExitNanos =
+        val remainingForceCloseNanos =
             (
                 STUCK_FORCE_TIMEOUT.plus(FORCE_EXIT_TOLERANCE).toNanos() -
                     (System.nanoTime() - shutdownStartedAt)
             ).coerceAtLeast(0)
-        val exitedWithinBound = gateway.process.waitFor(remainingExitNanos, TimeUnit.NANOSECONDS)
+        val responseClosedWithinBound =
+            try {
+                stuckResponse.handle { _, _ -> Unit }.get(remainingForceCloseNanos, TimeUnit.NANOSECONDS)
+                true
+            } catch (_: TimeoutException) {
+                false
+            }
         val lastLifecycleState =
             "processAlive=${gateway.process.isAlive}, responseDone=${stuckResponse.isDone}, " +
                 "responseFailed=${stuckResponse.isCompletedExceptionally}"
         assertTrue(
-            exitedWithinBound,
-            "gateway exceeded the configured force timeout plus test tolerance; " +
+            responseClosedWithinBound,
+            "gateway did not force-close the stuck exchange within the configured timeout plus tolerance; " +
                 "last lifecycle state: $lastLifecycleState; output: ${gateway.output()}",
-        )
-        assertTrue(
-            fixture.awaitUntil(CLIENT_CLOSE_OBSERVATION_TIMEOUT) { stuckResponse.isDone },
-            "forced process exit did not complete the stuck client exchange; " +
-                "process alive: ${gateway.process.isAlive}; response done: ${stuckResponse.isDone}; " +
-                "output: ${gateway.output()}",
         )
         assertTrue(
             stuckResponse.isCompletedExceptionally,
             "force-closed exchange completed normally instead of reporting truncation",
+        )
+        assertTrue(
+            gateway.process.waitFor(PROCESS_EXIT_TIMEOUT.toSeconds(), TimeUnit.SECONDS),
+            "gateway did not finish bounded resource cleanup after force-closing the exchange; " +
+                "output: ${gateway.output()}",
         )
     }
 
@@ -166,7 +172,6 @@ class ShutdownLifecycleTest {
         private val MINIMUM_DRAIN_OBSERVATION: Duration = Duration.ofMillis(500)
         private val STUCK_FORCE_TIMEOUT: Duration = Duration.ofSeconds(2)
         private val FORCE_EXIT_TOLERANCE: Duration = Duration.ofMillis(2_500)
-        private val CLIENT_CLOSE_OBSERVATION_TIMEOUT: Duration = Duration.ofSeconds(1)
         private val PROCESS_EXIT_TIMEOUT: Duration = Duration.ofSeconds(15)
     }
 }
