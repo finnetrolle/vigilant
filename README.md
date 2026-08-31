@@ -22,11 +22,13 @@ Vigilant - OpenAI-совместимый guardrails gateway для платфо�
 - Streaming pass-through ответа upstream, включая SSE.
 - Stable fail-closed ошибки для неподдерживаемой или неоднозначной request
   schema и при исчерпании inspection capacity.
+- Force-backed local audit WAL до первого upstream byte или normal
+  supported-request response.
 - JSONL-логи, correlation/trace ID, OTLP traces и metrics, health/readiness
   endpoints и non-root OCI image.
 
 Пока не поддерживаются OpenAI Responses API, response inspection, `BLOCK`,
-`MASK`, `REMOVE`, authentication/external identity lookup, disk spill,
+`MASK`, `REMOVE`, authentication/external identity lookup, request-body disk spill,
 Kubernetes/Helm и ML/NER detector. Полные границы первого инкремента зафиксированы в
 [roadmap](spec/ROADMAP.md#не-входит-в-первый-production-increment).
 
@@ -38,8 +40,10 @@ Gradle Wrapper.
 ~~~bash
 ./gradlew installDist
 cp politics.conf.example politics.conf
+mkdir -p .vigilant-audit
 
 VIGILANT_UPSTREAM_URL=https://api.openai.com \
+  VIGILANT_AUDIT_DIRECTORY="$PWD/.vigilant-audit" \
   ./build/install/vigilant/bin/vigilant
 ~~~
 
@@ -67,10 +71,12 @@ Vigilant проверит model-visible text, запишет safe aggregate
 
 ~~~text
 Client
+  -> durable audit reservation
   -> configured identity extraction
   -> bounded request source
   -> OpenAI request parser
   -> policy selection + fast-pii inspection
+  -> force-backed local audit record
   -> consumed identity header stripping + byte-identical replay
   -> upstream
 ~~~
@@ -91,6 +97,8 @@ Application configuration загружается с приоритетом
 `environment > HOCON file > defaults`. Для запуска обязательны:
 
 - `VIGILANT_UPSTREAM_URL` или `vigilant.upstream-url` в HOCON;
+- существующий persistent `VIGILANT_AUDIT_DIRECTORY` или
+  `vigilant.audit-directory` в HOCON;
 - валидный `politics.conf`, по умолчанию из текущей директории;
 - `VIGILANT_PORT` необязателен, значение по умолчанию - `8080`.
 
@@ -113,6 +121,7 @@ docker run --rm --name vigilant \
   --env VIGILANT_UPSTREAM_URL=https://api.openai.com \
   --env VIGILANT_POLITICS_CONFIG=/etc/vigilant/politics.conf \
   --mount type=bind,src="$PWD/politics.conf",dst=/etc/vigilant/politics.conf,readonly \
+  --mount type=volume,src=vigilant-audit,dst=/var/lib/vigilant/audit \
   vigilant:0.1.0-SNAPSHOT
 ~~~
 
@@ -139,9 +148,8 @@ Smoke-тест требует `cmp`, `curl`, Docker и Python 3. Он запус
   передаются upstream.
 - Application JSON logs, OTLP/JSON traces и OTLP/JSON metrics пишутся только в
   stdout. Приложение не подключается к OpenTelemetry Collector.
-- Safe aggregate `policy.shadow_decision` описывает contents и correlation,
-  но current async stdout не гарантирует durable minimum audit trail;
-  эта implementation остаётся frontier EPIC-22.
+- Local segmented WAL durably сохраняет safe aggregate record до forwarding;
+  `policy.shadow_decision` остаётся только best-effort stdout projection.
 - Prometheus scrape endpoint отсутствует.
 
 Имена метрик, JSONL schema, audit events, настройка Collector и правила

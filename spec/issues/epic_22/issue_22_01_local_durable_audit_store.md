@@ -1,6 +1,6 @@
 # VIG-22-01: Локально durable audit store
 
-**Статус:** Ready for implementation
+**Статус:** Done
 **Epic:** [EPIC-22](../../epics/epic_22_durable_minimum_audit_trail.md)
 **Ветка:** Local durability module seam > bounded WAL, force and recovery
 **Зависит от:** [VIG-21-01](../epic_21/issue_21_01_minimum_audit_trail_contract.md)
@@ -27,45 +27,57 @@ integration и external-delivery adapter.
 
 ## Критерии готовности
 
-- [ ] Audit configuration содержит required persistent directory и exact
+- [x] Audit configuration содержит required persistent directory и exact
   normative contract defaults для event, pending-event, retained-byte, segment-byte и
   segment-age bounds; invalid, unavailable или already locked directory даёт
   startup exit code `2` без raw path details в safe operational event.
-- [ ] Public seam предоставляет one-shot reservation, immutable safe record,
+- [x] Public seam предоставляет one-shot reservation, immutable safe record,
   durable acknowledgement и typed `CAPACITY_EXHAUSTED`, `EVENT_TOO_LARGE`,
   `IO_FAILURE`, `CLOSED` outcomes. Illegal reuse и close идемпотентны.
-- [ ] Reservation atomically покрывает один pending event и worst-case framed
+- [x] Reservation atomically покрывает один pending event и worst-case framed
   record bytes до передачи ownership store. Cancellation до record creation
   освобождает всё ровно один раз.
-- [ ] Record codec реализует versioned UTF-8 JSON внутри length-delimited
+- [x] Record codec реализует versioned UTF-8 JSON внутри length-delimited
   checksum frame; encoded size не превышает `65_536` bytes и не использует
   truncation для достижения bound.
-- [ ] Safe schema принимает все `CLEAN`, `DETECTED`, `INSPECTION_GAP`, `ERROR`
+- [x] Safe schema принимает все `CLEAN`, `DETECTED`, `INSPECTION_GAP`, `ERROR`
   decisions, empty/non-empty sorted policy references и каждый bounded
   aggregate class без payload, matched text, identity, credential, locator,
   raw exception или derived hash fields.
-- [ ] Persistent sequence и event ID однозначно идентифицируют record. Sequence
+- [x] Persistent sequence и event ID однозначно идентифицируют record. Sequence
   восстанавливается без reuse после normal restart и valid crash recovery.
-- [ ] Durable future завершается успешно только после `force(true)`,
+- [x] Durable future завершается успешно только после `force(true)`,
   покрывающего полный frame и recovery metadata. Write completion, queue
   acceptance и stdout logging не завершают future.
-- [ ] Group commit, если используется, подтверждает каждую record только после
+- [x] Group commit, если используется, подтверждает каждую record только после
   covering force и сохраняет deterministic completion для success и failure.
-- [ ] Segment seal выполняется по exact byte bound, age bound и store close;
+- [x] Segment seal выполняется по exact byte bound, age bound и store close;
   active плюс sealed accounting никогда не превышает configured retained bound.
-- [ ] Recovery matrix покрывает clean close, crash before first byte, partial
+- [x] Recovery matrix покрывает clean close, crash before first byte, partial
   header, partial body, checksum mismatch, complete pre-force frame и crash
   after force. Complete acknowledged records сохраняются, invalid tail не
   публикуется. Complete pre-force frame может сохраниться только как allowed
   orphan и не объявляется evidence original acknowledgement.
-- [ ] Exclusive process ownership, writer shutdown и repeated recovery не
+- [x] Exclusive process ownership, writer shutdown и repeated recovery не
   удаляют unacknowledged sealed segments.
-- [ ] Все file operations, blocking waits и force выполняются на store-owned
+- [x] Все file operations, blocking waits и force выполняются на store-owned
   blocking-safe worker; caller/event-loop seam получает asynchronous result.
-- [ ] Для всех добавленных и изменённых Kotlin/Java declarations и test methods
+- [x] Для всех добавленных и изменённых Kotlin/Java declarations и test methods
   написан актуальный KDoc/Javadoc.
-- [ ] Focused module tests, forked crash-helper tests и `./gradlew build`
+- [x] Focused module tests, forked crash-helper tests и `./gradlew build`
   проходят.
+
+## Evidence
+
+- `AuditStoreSettingsTest`, `AuditRecordContractTest` и `LocalAuditStoreTest`
+  покрывают exact defaults, schema/outcome matrix, independent maximum-width
+  frame bound, rotation, lifecycle и best-effort terminal resource cleanup с
+  сохранением primary/suppressed failures, включая abandoned initialized
+  ownership после interrupted startup; все file-resource cleanup paths
+  сериализованы на store worker.
+- `LocalAuditStoreCrashTest` с forked `AuditCrashHelper` покрывает causal
+  barriers до write, после write и после force, invalid tails и recovery.
+- Focused audit/request/process suite и полный `./gradlew build` проходят.
 
 ## Test/demo seam
 

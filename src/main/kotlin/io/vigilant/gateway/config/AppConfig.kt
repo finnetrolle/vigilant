@@ -1,3 +1,5 @@
+@file:Suppress("TooManyFunctions")
+
 package io.vigilant.gateway.config
 
 import com.sksamuel.hoplite.ConfigLoaderBuilder
@@ -7,6 +9,7 @@ import com.sksamuel.hoplite.PropertySource
 import com.sksamuel.hoplite.fp.Validated
 import com.sksamuel.hoplite.sources.EnvironmentVariablesPropertySource
 import com.linecorp.armeria.common.HttpHeaderNames
+import io.vigilant.audit.AuditStoreSettings
 import io.vigilant.source.RequestSourceLimits
 import java.net.URI
 import java.nio.file.Path
@@ -97,6 +100,7 @@ private val DEFAULT_CONFIG_PATHS: List<Path> = listOf(
  * @param port HTTP port the gateway listens on.
  * @param upstream validated timeouts and pooling settings of the upstream client.
  * @param shutdown validated graceful shutdown quiet and force bounds.
+ * @param audit required persistent audit directory and bounded WAL settings.
  * @param inspection bounded in-memory request inspection settings.
  * @param tracing validated tracing header names.
  * @param identity validated request identity extraction settings.
@@ -107,6 +111,7 @@ data class AppConfig(
     val port: Int,
     val upstream: UpstreamClientSettings,
     val shutdown: ShutdownSettings,
+    val audit: AuditStoreSettings,
     val inspection: InspectionSettings,
     val tracing: TracingSettings,
     val identity: IdentitySettings,
@@ -181,6 +186,12 @@ data class UpstreamClientSettings(
  * @param identityUserHeader optional trusted user header name.
  * @param identityGroupsHeader optional trusted groups header name.
  * @param identityTrustedCidrs literal immediate-peer CIDRs trusted to supply identity.
+ * @param auditDirectory required persistent directory owned exclusively by the local audit store.
+ * @param auditMaxEventBytes maximum encoded audit frame size.
+ * @param auditMaxPendingEvents maximum concurrently reserved audit events.
+ * @param auditMaxRetainedBytes maximum bytes retained by audit metadata and segments.
+ * @param auditMaxSegmentBytes maximum bytes retained in one audit segment.
+ * @param auditMaxSegmentAge maximum age of one active audit segment before sealing.
  */
 internal data class VigilantSettings(
     val upstreamUrl: String? = null,
@@ -196,6 +207,12 @@ internal data class VigilantSettings(
     val inspectionMaxConcurrentRequestSources: Int = DEFAULT_REQUEST_SOURCE_LIMITS.maxConcurrentRequestSources,
     val inspectionMaxRetainedSegmentsPerRequest: Int =
         DEFAULT_REQUEST_SOURCE_LIMITS.maxRetainedSegmentsPerRequest,
+    val auditDirectory: String? = null,
+    val auditMaxEventBytes: Int = AuditStoreSettings.DEFAULT_MAX_EVENT_BYTES,
+    val auditMaxPendingEvents: Int = AuditStoreSettings.DEFAULT_MAX_PENDING_EVENTS,
+    val auditMaxRetainedBytes: Long = AuditStoreSettings.DEFAULT_MAX_RETAINED_BYTES,
+    val auditMaxSegmentBytes: Long = AuditStoreSettings.DEFAULT_MAX_SEGMENT_BYTES,
+    val auditMaxSegmentAge: Duration = AuditStoreSettings.DEFAULT_MAX_SEGMENT_AGE,
     val tracingSessionHeader: String = DEFAULT_SESSION_HEADER,
     val tracingTraceparentHeader: String = DEFAULT_TRACEPARENT_HEADER,
     val identityMode: String = IdentityMode.ANONYMOUS.name,
@@ -226,6 +243,7 @@ internal data class VigilantConfigRoot(
  * @throws IllegalArgumentException if the configuration is missing, undecodable, or invalid.
  */
 @OptIn(ExperimentalHoplite::class)
+@Suppress("LongMethod")
 internal fun loadAppConfig(
     env: Map<String, String> = System.getenv(),
     defaultConfigPaths: List<Path> = DEFAULT_CONFIG_PATHS,
@@ -274,6 +292,7 @@ internal fun loadAppConfig(
             quietPeriod = root.vigilant.shutdownQuietPeriod,
             forceTimeout = root.vigilant.shutdownForceTimeout,
         ),
+        audit = root.vigilant.validatedAuditSettings(),
         inspection =
             InspectionSettings(
                 RequestSourceLimits(
@@ -290,6 +309,25 @@ internal fun loadAppConfig(
         identity = root.vigilant.validatedIdentitySettings(),
         otlp = OtlpSettings(root.vigilant.otlpEnabled),
     )
+}
+
+/**
+ * Builds and validates the mandatory durable-audit settings.
+ *
+ * @return a validated immutable settings snapshot.
+ * @throws IllegalArgumentException when the directory is absent or a bound is invalid.
+ */
+private fun VigilantSettings.validatedAuditSettings(): AuditStoreSettings {
+    val rawDirectory = auditDirectory
+    require(!rawDirectory.isNullOrBlank()) { "VIGILANT_AUDIT_DIRECTORY is required" }
+    return AuditStoreSettings(
+        directory = Path.of(rawDirectory),
+        maxEventBytes = auditMaxEventBytes,
+        maxPendingEvents = auditMaxPendingEvents,
+        maxRetainedBytes = auditMaxRetainedBytes,
+        maxSegmentBytes = auditMaxSegmentBytes,
+        maxSegmentAge = auditMaxSegmentAge,
+    ).validate()
 }
 
 /**

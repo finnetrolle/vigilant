@@ -3,6 +3,8 @@ package io.vigilant.gateway.proxy
 import com.linecorp.armeria.common.HttpRequest
 import com.linecorp.armeria.server.ServiceRequestContext
 import io.opentelemetry.api.trace.Span
+import io.vigilant.audit.AuditReservation
+import io.vigilant.audit.AuditStoreOutcomeCode
 import io.vigilant.context.PolicyContextHandoff
 import io.vigilant.context.PolicyContextHandoffResult
 import io.vigilant.gateway.identity.IdentityExtractionResult
@@ -56,6 +58,12 @@ internal sealed interface ShadowInspectionRejection {
         /** Safe context audit detail retained for one aggregate workflow event. */
         val error: ShadowAuditError,
     ) : ShadowInspectionRejection
+
+    /** Durable audit acceptance failed, so no normal outcome may escape. */
+    data class Audit(
+        /** Stable store outcome hidden behind the public audit-unavailable response. */
+        val code: AuditStoreOutcomeCode,
+    ) : ShadowInspectionRejection
 }
 
 /**
@@ -63,7 +71,7 @@ internal sealed interface ShadowInspectionRejection {
  *
  * @property protocol existing descriptor-specific parser and context producer.
  * @property policyEngine existing policy selection and detector orchestration boundary.
- * @property auditLogger single aggregate shadow audit renderer.
+ * @property auditLogger authoritative safe-record builder and post-durable projection renderer.
  */
 internal class ShadowInspectionWorkflow(
     private val protocol: PiiShadowProtocol,
@@ -73,21 +81,25 @@ internal class ShadowInspectionWorkflow(
     /**
      * Accepts ownership of one complete source and returns a typed forwarding or rejection result.
      * Expected parser, source, and context failures return [ShadowInspectionOutcome.Reject].
-     * Unexpected failures and cancellation escape unchanged after owned source cleanup. A
-     * [ShadowInspectionOutcome.Forward] transfers cleanup ownership to its replay object.
+     * Unexpected failures become durable safe `ERROR` rejections. Cancellation escapes unchanged
+     * after owned source cleanup. A [ShadowInspectionOutcome.Forward] transfers cleanup ownership
+     * to its replay object only after durable audit acceptance.
      *
      * @param owner sole complete retained-source owner.
      * @param request original request supplying path and headers only.
      * @param identity already validated normalized identity and exact strip set.
      * @param serviceContext owning Armeria request scope for handoff and audit correlation.
      * @param inspectionSpan current INTERNAL inspection span, which remains caller-owned.
+     * @param auditReservation pre-body one-shot durable audit reservation.
      */
+    @Suppress("LongMethod", "LongParameterList")
     fun execute(
         owner: BoundedRequestSourceOwner,
         request: HttpRequest,
         identity: IdentityExtractionResult.Success,
         serviceContext: ServiceRequestContext,
         inspectionSpan: Span?,
+        auditReservation: AuditReservation,
     ): ShadowInspectionOutcome {
         var replayReady: ReplayReadyRequest? = null
         var replayOwnershipTransferred = false
@@ -103,22 +115,79 @@ internal class ShadowInspectionWorkflow(
             val decisions = evaluateFragments(context, normalizedRequest)
             val evaluationDuration = Duration.ofNanos(System.nanoTime() - startedAt)
             replayReady = ReplayReadyRequest.create(owner, identity.headersToStrip)
-            auditLogger.decision(serviceContext, normalizedRequest, decisions, evaluationDuration, inspectionSpan)
+            val record = auditLogger.decisionRecord(serviceContext, normalizedRequest, decisions, evaluationDuration)
+            acceptShadowAudit(
+                serviceContext = serviceContext,
+                record = record,
+                inspectionSpan = inspectionSpan,
+                auditReservation = auditReservation,
+                auditLogger = auditLogger,
+            )?.let { code ->
+                return ShadowInspectionOutcome.Reject(ShadowInspectionRejection.Audit(code))
+            }
             replayOwnershipTransferred = true
             ShadowInspectionOutcome.Forward(replayReady)
         } catch (failure: SafeParseFailure) {
-            auditLogger.error(serviceContext, ShadowAuditError.Parser(failure.code), inspectionSpan)
-            ShadowInspectionOutcome.Reject(ShadowInspectionRejection.Parser(failure.code))
+            durableError(
+                serviceContext,
+                ShadowAuditError.Parser(failure.code),
+                ShadowInspectionRejection.Parser(failure.code),
+                inspectionSpan,
+                auditReservation,
+            )
         } catch (failure: SafeSourceFailure) {
-            auditLogger.error(serviceContext, ShadowAuditError.Source(failure.code), inspectionSpan)
-            ShadowInspectionOutcome.Reject(ShadowInspectionRejection.Source(failure.code))
+            durableError(
+                serviceContext,
+                ShadowAuditError.Source(failure.code),
+                ShadowInspectionRejection.Source(failure.code),
+                inspectionSpan,
+                auditReservation,
+            )
         } catch (failure: SafeContextFailure) {
-            auditLogger.error(serviceContext, failure.error, inspectionSpan)
-            ShadowInspectionOutcome.Reject(ShadowInspectionRejection.Context(failure.error))
+            durableError(
+                serviceContext,
+                failure.error,
+                ShadowInspectionRejection.Context(failure.error),
+                inspectionSpan,
+                auditReservation,
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Throwable) {
+            durableError(
+                serviceContext,
+                ShadowAuditError.InspectionFailed,
+                ShadowInspectionRejection.Context(ShadowAuditError.InspectionFailed),
+                inspectionSpan,
+                auditReservation,
+            )
         } finally {
             if (!replayOwnershipTransferred) {
                 replayReady?.close() ?: owner.close()
             }
+        }
+    }
+
+    /** Persists one supported-request ERROR before returning its original stable rejection. */
+    private fun durableError(
+        serviceContext: ServiceRequestContext,
+        error: ShadowAuditError,
+        rejection: ShadowInspectionRejection,
+        inspectionSpan: Span?,
+        auditReservation: AuditReservation,
+    ): ShadowInspectionOutcome {
+        val failure =
+            acceptShadowAuditError(
+                serviceContext = serviceContext,
+                error = error,
+                inspectionSpan = inspectionSpan,
+                auditReservation = auditReservation,
+                auditLogger = auditLogger,
+            )
+        return if (failure == null) {
+            ShadowInspectionOutcome.Reject(rejection)
+        } else {
+            ShadowInspectionOutcome.Reject(ShadowInspectionRejection.Audit(failure))
         }
     }
 

@@ -27,6 +27,13 @@ vigilant {
   upstream-url = "http://127.0.0.1:18081"
   port = 8080
 
+  audit-directory = "/var/lib/vigilant/audit"
+  audit-max-event-bytes = 65536
+  audit-max-pending-events = 128
+  audit-max-retained-bytes = 1073741824
+  audit-max-segment-bytes = 16777216
+  audit-max-segment-age = 5s
+
   upstream-connect-timeout = 10s
   upstream-write-timeout = 30s
   upstream-response-timeout = 5m
@@ -56,6 +63,12 @@ variable `VIGILANT_SOME_SETTING`.
 |---|---|---:|
 | `VIGILANT_UPSTREAM_URL` | Абсолютный HTTP(S) URL upstream | обязательна |
 | `VIGILANT_PORT` | HTTP port gateway | `8080` |
+| `VIGILANT_AUDIT_DIRECTORY` | Existing persistent directory, exclusively locked by one process | обязательна |
+| `VIGILANT_AUDIT_MAX_EVENT_BYTES` | Максимальный framed audit record | `65536` |
+| `VIGILANT_AUDIT_MAX_PENDING_EVENTS` | Максимум pending audit reservations | `128` |
+| `VIGILANT_AUDIT_MAX_RETAINED_BYTES` | Максимум локально retained WAL bytes | `1073741824` |
+| `VIGILANT_AUDIT_MAX_SEGMENT_BYTES` | Максимальный WAL segment | `16777216` |
+| `VIGILANT_AUDIT_MAX_SEGMENT_AGE` | Максимальный возраст non-empty active segment | `5s` |
 | `VIGILANT_UPSTREAM_CONNECT_TIMEOUT` | Установка соединения с upstream | `10s` |
 | `VIGILANT_UPSTREAM_WRITE_TIMEOUT` | Запись запроса в upstream | `30s` |
 | `VIGILANT_UPSTREAM_RESPONSE_TIMEOUT` | Первый response object и максимальная пауза между objects | `5m` |
@@ -84,8 +97,14 @@ variable `VIGILANT_SOME_SETTING`.
 - `upstream-url` должен быть абсолютным HTTP(S) URL без user info, query и
   fragment.
 - `port` должен находиться в диапазоне `1..65535`.
+- `audit-directory` обязателен, должен существовать, быть directory и иметь
+  единственного process owner. Missing, unavailable или locked directory
+  останавливает startup с code `2` без вывода raw path.
+- Audit bounds положительны, `max-event-bytes <= 65536` и соблюдают
+  `max-event-bytes <= max-segment-bytes <= max-retained-bytes`.
 - Duration принимает значения вида `300ms`, `10s`, `5m` или `PT5M`.
-- Duration должен быть положительным, кроме
+- Duration должен быть положительным и помещаться в signed nanosecond scheduler
+  bound, кроме
   `shutdown-quiet-period=0s`, который отключает ожидание quiet gap.
 - `shutdown-force-timeout` должен быть не меньше quiet period.
 - Global retained limit должен быть не меньше per-request limit.
@@ -129,9 +148,11 @@ increment он обязан содержать хотя бы одну effective 
 - disposition `ALLOW` без transformations для всех reactions.
 
 Пустой, disabled, полностью overridden или enforcement snapshot отклоняется до
-старта server.
+старта server. Его policy ID/version population также должна помещаться в
+worst-case safe audit record при configured event bound; проверка выполняется
+до открытия traffic.
 
 ## Ошибки startup
 
-Недопустимая или неполная application/policy configuration выводит безопасное
-сообщение в stderr и завершает процесс с кодом `2`.
+Недопустимая или неполная application/policy/audit configuration выводит
+безопасное сообщение в stderr и завершает процесс с кодом `2`.

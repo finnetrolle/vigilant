@@ -1,5 +1,7 @@
 package io.vigilant.gateway
 
+import io.vigilant.audit.AuditStoreSettings
+import io.vigilant.audit.LocalAuditStore
 import java.nio.file.Files
 import java.util.concurrent.TimeUnit
 import kotlin.io.path.writeText
@@ -9,6 +11,42 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class MainTest {
+    /** Verifies a configured non-directory fails before the server can accept traffic. */
+    @Test
+    fun `unavailable audit directory exits with code 2 and safe stderr`() {
+        val file = Files.createTempFile("vigilant-audit-not-directory", ".tmp")
+        val result =
+            runGateway(
+                mapOf(
+                    "VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081",
+                    "VIGILANT_AUDIT_DIRECTORY" to file.toString(),
+                ),
+            )
+
+        assertEquals(2, result.exitCode)
+        assertTrue(result.stderr.contains("Audit directory is unavailable"))
+        assertFalse(result.stderr.contains(file.toString()))
+    }
+
+    /** Verifies startup acquires exclusive ownership of the mandatory audit directory. */
+    @Test
+    fun `locked audit directory exits with code 2 and safe stderr`() {
+        val directory = Files.createTempDirectory("vigilant-locked-audit")
+        val result =
+            LocalAuditStore.open(AuditStoreSettings(directory)).use {
+                runGateway(
+                    mapOf(
+                        "VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081",
+                        "VIGILANT_AUDIT_DIRECTORY" to directory.toString(),
+                    ),
+                )
+            }
+
+        assertEquals(2, result.exitCode)
+        assertTrue(result.stderr.contains("Audit directory is already locked"))
+        assertFalse(result.stderr.contains(directory.toString()))
+    }
+
     /** Verifies invalid application configuration uses the stable startup failure contract. */
     @Test
     fun `invalid config exits with code 2 and prints the reason to stderr`() {
@@ -103,7 +141,7 @@ class MainTest {
                 "-cp",
                 System.getProperty("java.class.path"),
                 "io.vigilant.gateway.MainKt",
-            ).withTestPolicyConfiguration()
+            ).withTestRuntimeConfiguration()
                 .apply { environment().putAll(environment) }
                 .start()
 

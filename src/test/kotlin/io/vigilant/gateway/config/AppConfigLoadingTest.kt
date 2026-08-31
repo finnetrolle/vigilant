@@ -865,4 +865,15 @@ class AppConfigLoadingTest {
 
     private fun writeConfig(content: String): Path =
         Files.createTempFile("vigilant-test", ".conf").also { it.writeText(content) }
+
+    /** Supplies the unrelated mandatory audit input to legacy configuration cases. */
+    private fun loadAppConfig(env: Map<String, String>, defaultConfigPaths: List<Path>): AppConfig =
+        io.vigilant.gateway.config.loadAppConfig(
+            env = env + ("VIGILANT_AUDIT_DIRECTORY" to TEST_AUDIT_DIRECTORY.toString()),
+            defaultConfigPaths = defaultConfigPaths,
+        )
+
+    private companion object {
+        private val TEST_AUDIT_DIRECTORY: Path = Files.createTempDirectory("vigilant-config-audit")
+    }
 }

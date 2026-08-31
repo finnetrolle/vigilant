@@ -9,6 +9,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -42,6 +43,15 @@ final class PerformanceProcessSupport {
             .directory(projectDirectory.toFile())
             .redirectErrorStream(true)
             .redirectOutput(logFile.toFile());
+    }
+
+    /** Adds one process-exclusive mandatory durable-audit directory under the fixture output tree. */
+    static void configureAuditDirectory(ProcessBuilder builder, Path projectDirectory, String runName)
+        throws IOException {
+        Path parent = projectDirectory.resolve("build/perf-audit");
+        Files.createDirectories(parent);
+        Path directory = Files.createTempDirectory(parent, runName + "-");
+        builder.environment().put("VIGILANT_AUDIT_DIRECTORY", directory.toString());
     }
 
     /** Runs one local command with complete output and fail-closed bounded child cleanup. */

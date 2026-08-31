@@ -24,7 +24,7 @@ import io.vigilant.gateway.assertUpstreamFailureWarning
 import io.vigilant.gateway.chatCompletionsBody
 import io.vigilant.gateway.closeAllResources
 import io.vigilant.gateway.renderForSecretScan
-import io.vigilant.gateway.withTestPolicyConfiguration
+import io.vigilant.gateway.withTestRuntimeConfiguration
 import java.net.URI
 import java.net.ServerSocket
 import java.time.Duration
@@ -445,7 +445,7 @@ class BypassProxyServiceTest {
             "-cp",
             System.getProperty("java.class.path"),
             "io.vigilant.gateway.MainKt",
-        ).withTestPolicyConfiguration()
+        ).withTestRuntimeConfiguration()
             .apply {
             environment().apply {
                 put("VIGILANT_UPSTREAM_URL", upstream.toString())

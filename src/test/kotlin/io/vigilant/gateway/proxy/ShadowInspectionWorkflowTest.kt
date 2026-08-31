@@ -6,13 +6,17 @@ import com.linecorp.armeria.common.HttpRequest
 import com.linecorp.armeria.common.MediaType
 import com.linecorp.armeria.common.RequestHeaders
 import com.linecorp.armeria.server.ServiceRequestContext
+import io.opentelemetry.api.trace.Span
+import io.vigilant.audit.AuditReservationResult
 import io.vigilant.context.NormalizedIdentity
 import io.vigilant.context.PolicyContextHandoff
 import io.vigilant.context.PolicyContextHandoffErrorCode
 import io.vigilant.context.PolicyContextHandoffResult
+import io.vigilant.context.PolicyUrlNormalizationErrorCode
 import io.vigilant.gateway.GatewayTestFixture
 import io.vigilant.gateway.renderForSecretScan
 import io.vigilant.gateway.identity.IdentityExtractionResult
+import io.vigilant.gateway.tracing.RequestTracing
 import io.vigilant.policy.decision.ReactionAggregator
 import io.vigilant.policy.domain.Detector
 import io.vigilant.policy.domain.DetectorId
@@ -42,7 +46,7 @@ import io.vigilant.source.RequestSourceState
 import java.net.URI
 import java.time.Duration
 import java.util.concurrent.CancellationException
-import java.util.concurrent.CompletionException
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
@@ -52,6 +56,7 @@ import kotlin.concurrent.thread
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
@@ -353,9 +358,9 @@ class ShadowInspectionWorkflowTest {
         }
     }
 
-    /** Unexpected policy failure escapes the typed result and still releases source ownership. */
+    /** Unexpected policy failure becomes one durable safe ERROR and releases source ownership. */
     @Test
-    fun `unexpected policy failure propagates and closes owner`() {
+    fun `unexpected policy failure is durably rejected and closes owner`() {
         val sentinel = IllegalStateException("policy provider sentinel")
         val policyEngine =
             PolicyEngine(
@@ -373,21 +378,108 @@ class ShadowInspectionWorkflowTest {
         val request = workflowRequest()
         val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
 
-        val failure =
-            kotlin.test.assertFailsWith<CompletionException> {
-                workflow(policyEngine).execute(
-                    owner = owner,
-                    request = request,
-                    identity = anonymousIdentity(),
-                    serviceContext = ServiceRequestContext.of(request),
-                    inspectionSpan = null,
-                )
-            }
+        val outcome =
+            workflow(policyEngine).execute(
+                owner = owner,
+                request = request,
+                identity = anonymousIdentity(),
+                serviceContext = ServiceRequestContext.of(request),
+                inspectionSpan = null,
+            )
 
-        assertTrue(failure.cause === sentinel)
+        val rejection = assertIs<ShadowInspectionOutcome.Reject>(outcome)
+        val context = assertIs<ShadowInspectionRejection.Context>(rejection.error)
+        assertEquals(ShadowAuditError.InspectionFailed, context.error)
         assertEquals(RequestSourceState.CLOSED, owner.state)
         assertEquals(0, quota.activeOwners)
-        assertTrue(events.none { event -> event.field("event.name") == "policy.shadow_decision" })
+        val audit = events.single { event -> event.field("event.name") == "policy.shadow_decision" }
+        assertEquals("ERROR", audit.field("decision"))
+        assertEquals("INSPECTION_FAILED", audit.field("error.code"))
+    }
+
+    /** Every workflow failure category remains unpublished until its ERROR record is durable. */
+    @Test
+    @Suppress("LongMethod")
+    fun `supported workflow failure matrix waits for durable audit`() {
+        val malformedQuota = RequestSourceQuota()
+        val malformedOwner = completeOwner(malformedQuota, "{".toByteArray())
+        val malformedRequest = workflowRequest()
+        assertDurableFailure(
+            name = "parser",
+            workflow = workflow(emptyPolicyEngine()),
+            owner = malformedOwner,
+            request = malformedRequest,
+            serviceContext = ServiceRequestContext.of(malformedRequest),
+            expected = ShadowInspectionRejection.Parser(ChatCompletionsParseFailureCode.MALFORMED_MESSAGE),
+        )
+
+        val incompleteQuota = RequestSourceQuota()
+        val incompleteOwner = assertIs<RequestSourceOpenResult.Open>(incompleteQuota.open()).owner
+        val incompleteRequest = workflowRequest()
+        assertDurableFailure(
+            name = "source",
+            workflow = workflow(emptyPolicyEngine()),
+            owner = incompleteOwner,
+            request = incompleteRequest,
+            serviceContext = ServiceRequestContext.of(incompleteRequest),
+            expected = ShadowInspectionRejection.Source(RequestSourceOutcomeCode.INVALID_SOURCE_STATE),
+        )
+
+        val urlQuota = RequestSourceQuota()
+        val urlOwner = completeOwner(urlQuota, validWorkflowBody())
+        val urlRequest = workflowRequest()
+        val urlError = ShadowAuditError.UrlNormalization(PolicyUrlNormalizationErrorCode.INVALID_POLICY_URL)
+        assertDurableFailure(
+            name = "URL normalization",
+            workflow = workflow(emptyPolicyEngine(), URI.create("ftp://llm.example")),
+            owner = urlOwner,
+            request = urlRequest,
+            serviceContext = ServiceRequestContext.of(urlRequest),
+            expected = ShadowInspectionRejection.Context(urlError),
+        )
+
+        val handoffQuota = RequestSourceQuota()
+        val handoffOwner = completeOwner(handoffQuota, validWorkflowBody())
+        val handoffRequest = workflowRequest()
+        val occupiedContext = ServiceRequestContext.of(handoffRequest)
+        PolicyContextHandoff.storeRequest(
+            occupiedContext,
+            PolicyContext(
+                url = "https://existing.example/v1/chat/completions",
+                model = "existing-model",
+                phase = PolicyPhase.REQUEST,
+                user = null,
+                groups = emptySet(),
+            ),
+        )
+        val handoffError = ShadowAuditError.ContextHandoff(PolicyContextHandoffErrorCode.REQUEST_CONTEXT_ALREADY_SET)
+        assertDurableFailure(
+            name = "context handoff",
+            workflow = workflow(emptyPolicyEngine()),
+            owner = handoffOwner,
+            request = handoffRequest,
+            serviceContext = occupiedContext,
+            expected = ShadowInspectionRejection.Context(handoffError),
+        )
+
+        val unexpectedQuota = RequestSourceQuota()
+        val unexpectedOwner = completeOwner(unexpectedQuota, validWorkflowBody())
+        val unexpectedRequest = workflowRequest()
+        val unexpectedEngine =
+            PolicyEngine(
+                policyProvider = PolicyProvider { error("unexpected policy sentinel") },
+                policySelector = PolicySelector(),
+                detectorExecutionCoordinator = DetectorExecutionCoordinator(DetectorExecutor(emptyMap())),
+                reactionAggregator = ReactionAggregator(),
+            )
+        assertDurableFailure(
+            name = "unexpected inspection",
+            workflow = workflow(unexpectedEngine),
+            owner = unexpectedOwner,
+            request = unexpectedRequest,
+            serviceContext = ServiceRequestContext.of(unexpectedRequest),
+            expected = ShadowInspectionRejection.Context(ShadowAuditError.InspectionFailed),
+        )
     }
 
     /** Interrupting active evaluation propagates cancellation, restores interrupt, and cleans source. */
@@ -449,10 +541,13 @@ class ShadowInspectionWorkflowTest {
         assertTrue(events.none { event -> event.field("event.name") == "policy.shadow_decision" })
     }
 
-    /** Creates the concrete workflow with the production protocol and audit implementations. */
-    private fun workflow(policyEngine: PolicyEngine): ShadowInspectionWorkflow =
+    /** Creates the concrete workflow with production protocol and audit implementations. */
+    private fun workflow(
+        policyEngine: PolicyEngine,
+        upstreamUri: URI = URI.create("https://llm.example"),
+    ): ShadowInspectionWorkflow =
         ShadowInspectionWorkflow(
-            protocol = PiiShadowProtocol(URI.create("https://llm.example")),
+            protocol = PiiShadowProtocol(upstreamUri),
             policyEngine = policyEngine,
             auditLogger = ShadowAuditLogger(),
         )
@@ -513,7 +608,76 @@ class ShadowInspectionWorkflowTest {
             headersToStrip = emptySet(),
         )
 
+    /** Returns one valid complete request body shared by workflow failure scenarios. */
+    private fun validWorkflowBody(): ByteArray =
+        """{"model":"gpt-test","messages":[{"role":"user","content":"hello"}]}""".toByteArray()
+
+    /**
+     * Proves one typed workflow rejection cannot escape before force-backed audit completion.
+     *
+     * @param name failure category included in bounded assertion diagnostics.
+     * @param workflow production complete-source workflow.
+     * @param owner sole retained-source owner for the scenario.
+     * @param request supported request metadata.
+     * @param serviceContext request scope used by context handoff and audit correlation.
+     * @param expected typed stable rejection after durable acceptance.
+     */
+    @Suppress("LongParameterList")
+    private fun assertDurableFailure(
+        name: String,
+        workflow: ShadowInspectionWorkflow,
+        owner: io.vigilant.source.BoundedRequestSourceOwner,
+        request: HttpRequest,
+        serviceContext: ServiceRequestContext,
+        expected: ShadowInspectionRejection,
+    ) {
+        serviceContext.setAttr(RequestTracing.TRACE_ID, "0123456789abcdef0123456789abcdef")
+        val auditStore = ControllableAuditStore(autoComplete = false)
+        val reservation = assertIs<AuditReservationResult.Granted>(auditStore.reserve()).reservation
+        val outcome = CompletableFuture<ShadowInspectionOutcome>()
+        val worker =
+            thread(start = true, name = "workflow-$name-durability-test") {
+                outcome.complete(
+                    workflow.execute(
+                        owner,
+                        request,
+                        anonymousIdentity(),
+                        serviceContext,
+                        inspectionSpan = null,
+                        auditReservation = reservation,
+                    ),
+                )
+            }
+
+        assertTrue(auditStore.awaitStoreOwned(), "$name ERROR did not reach STORE_OWNED")
+        assertFalse(outcome.isDone, "$name rejection escaped before durable acceptance")
+        auditStore.completeNext()
+
+        val rejection = assertIs<ShadowInspectionOutcome.Reject>(outcome.get(2, TimeUnit.SECONDS))
+        assertEquals(expected, rejection.error)
+        worker.join(Duration.ofSeconds(2))
+        assertFalse(worker.isAlive, "$name workflow did not terminate")
+        assertEquals(1, auditStore.records().size)
+        assertEquals(RequestSourceState.CLOSED, owner.state)
+    }
+
     /** Returns one structured logging value by key. */
     private fun ILoggingEvent.field(key: String): Any? =
         keyValuePairs.orEmpty().firstOrNull { pair -> pair.key == key }?.value
+}
+
+/** Supplies the mandatory immediately durable audit seam to legacy workflow cases. */
+private fun ShadowInspectionWorkflow.execute(
+    owner: io.vigilant.source.BoundedRequestSourceOwner,
+    request: HttpRequest,
+    identity: IdentityExtractionResult.Success,
+    serviceContext: ServiceRequestContext,
+    inspectionSpan: Span?,
+): ShadowInspectionOutcome {
+    if (serviceContext.attr(RequestTracing.TRACE_ID) == null) {
+        serviceContext.setAttr(RequestTracing.TRACE_ID, "0123456789abcdef0123456789abcdef")
+    }
+    val reservation =
+        (ControllableAuditStore().reserve() as AuditReservationResult.Granted).reservation
+    return execute(owner, request, identity, serviceContext, inspectionSpan, reservation)
 }

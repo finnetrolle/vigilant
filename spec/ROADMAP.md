@@ -108,18 +108,19 @@ locator, media URL, filename, raw headers, identity values, credentials или
 reversible hashes. Detector errors и policy deadlines остаются отдельными
 structured error events.
 
-Это contract безопасного содержимого одного aggregate event. Текущая
-публикация через discardable async stdout не является durability
-guarantee и не подтверждает mandatory audit acceptance.
+Это contract безопасного содержимого одного aggregate event. Публикация через
+discardable async stdout остаётся только best-effort projection уже durably
+accepted record и сама по себе не подтверждает mandatory audit acceptance.
 
 ### Guaranteed minimum audit trail
 
 Отдельный нормативный [contract](MINIMUM_AUDIT_TRAIL_CONTRACT.md) требует
 application-owned WAL и durable acknowledgement до forwarding или normal
-supported-request response. Эта guarantee ещё не реализована в current
-runtime. Её единственный implementation owner -
-[EPIC-22](epics/epic_22_durable_minimum_audit_trail.md); external Collector
-delivery, SIEM и query UI не входят в minimum durability boundary.
+supported-request response. VIG-22-01 и VIG-22-02 реализуют эту local durable
+boundary в current runtime. Оставшиеся owners внутри
+[EPIC-22](epics/epic_22_durable_minimum_audit_trail.md) добавляют external
+Collector handoff/reclaim и packaged qualification; SIEM и query UI не входят
+в minimum durability boundary.
 
 ## Discovery map
 
@@ -394,11 +395,14 @@ observation seams. Их исторические issue records и reports сох
 response/SSE spooling и secure spill decisions; EPIC-21 закрыт без
 дублирующего future scope.
 
-Post-milestone closure EPIC-21 завершён. Текущая implementation frontier -
-[EPIC-22](epics/epic_22_durable_minimum_audit_trail.md) с first leaf
-[VIG-22-01](issues/epic_22/issue_22_01_local_durable_audit_store.md) в status
-`Ready for implementation`. VIG-01A, EPIC-10 и VIG-10-08 имеют status
-`Done` и не входят в current frontier.
+Post-milestone closure EPIC-21 завершён. В EPIC-22 local durable store
+[VIG-22-01](issues/epic_22/issue_22_01_local_durable_audit_store.md) и mandatory
+request-path acceptance
+[VIG-22-02](issues/epic_22/issue_22_02_request_path_audit_acceptance.md) имеют
+status `Done`. Текущая implementation frontier -
+[VIG-22-03](issues/epic_22/issue_22_03_collector_handoff_reclaim.md); VIG-22-04
+ждёт её завершения. VIG-01A, EPIC-10 и VIG-10-08 имеют status `Done` и не
+входят в current frontier.
 
 ## Не входит в первый production increment
 

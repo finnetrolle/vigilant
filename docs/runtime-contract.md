@@ -12,8 +12,9 @@
 
 Другие OpenAI endpoints не проходят через silent bypass.
 
-Gateway полностью принимает request body в bounded in-memory source до первого
-upstream byte. Parser создаёт отдельное normalized view model-visible content,
+Для поддержанного descriptor gateway сначала резервирует bounded audit token,
+затем полностью принимает request body в bounded in-memory source. Parser
+создаёт отдельное normalized view model-visible content,
 а исходные bytes остаются неизменными. После shadow inspection upstream
 получает исходные method, path/query, end-to-end headers и byte-identical body.
 Hop-by-hop headers, authority, `Host` и `Content-Length` обрабатывает gateway.
@@ -73,13 +74,17 @@ content-bearing structure обрабатываются fail-closed и не до�
 | Некорректный request source, включая несовпадение `Content-Length` | `400` | `{"error":"invalid_request_source"}` |
 | Per-request byte limit | `413` | `{"error":"request_too_large"}` |
 | Owner/global retained capacity | `503` | `{"error":"inspection_capacity_exhausted"}` |
+| Audit admission, size, I/O или lifecycle failure | `503` | `{"error":"audit_unavailable"}` |
 | Непредвиденный inspection failure | `500` | `{"error":"inspection_failed"}` |
 
-Descriptor и identity validation выполняются до body demand. Некорректный
-session ID отклоняется ещё раньше, в tracing decorator. Для поддержанного descriptor
-создаётся ровно один `policy.shadow_decision`, включая fail-closed parser,
-source и inspection outcomes. Для неподдержанного descriptor и invalid session
-ID shadow audit не создаётся.
+Descriptor и audit reservation выполняются до identity и body demand.
+Некорректный session ID отклоняется ещё раньше, в tracing decorator. Для
+поддержанного descriptor создаётся ровно одна immutable audit record, включая
+fail-closed identity, source, parser, context и inspection outcomes. Исходный
+stable response или первый upstream byte разрешён только после force-backed
+durable acknowledgement. `policy.shadow_decision` публикуется после него как
+best-effort projection. Для неподдержанного descriptor и invalid session ID
+audit reservation и record не создаются.
 
 Policy deadline или typed detector error отражается как decision `ERROR` с
 disposition `ALLOW`: current shadow policy не блокирует request, поэтому при
@@ -87,9 +92,10 @@ disposition `ALLOW`: current shadow policy не блокирует request, по
 `500 inspection_failed` предназначен для непредвиденного сбоя самой
 orchestration или context assembly.
 
-Client cancellation отменяет ingest, inspection task и replay, освобождая
-retained capacity. Отменённому соединению delivery HTTP error не
-гарантируется.
+Client cancellation до decision отменяет ingest/inspection и освобождает source
+и audit reservation без record. После decision store ownership и durable append
+сохраняются независимо от HTTP cancellation; новый upstream handoff запрещён.
+Отменённому соединению delivery HTTP error не гарантируется.
 
 ## Upstream errors
 
@@ -122,13 +128,13 @@ environment variables перечислены в
 ## Health и shutdown
 
 - `GET /healthz` возвращает `200`, пока server принимает соединения.
-- `GET /readyz` возвращает `200` в рабочем состоянии и `503` после начала
-  graceful shutdown.
+- `GET /readyz` возвращает `200` только при доступном audit admission; `503`
+  означает draining, exhausted audit capacity или store health failure.
 - Probes принадлежат gateway и никогда не проксируются upstream.
 - Readiness не проверяет доступность upstream.
 
-При SIGTERM readiness сначала переключается на `503`, новый proxy traffic
-отклоняется, а active exchanges получают время на drain. После drain gateway
-закрывает upstream client resources, затем flush/close providers traces и
-metrics. Quiet period и force timeout конфигурируются через
-`VIGILANT_SHUTDOWN_*`.
+При SIGTERM readiness сначала переключается на `503`, новые audit admissions и
+proxy traffic запрещаются, а active exchanges получают время на drain. После
+drain gateway force-ит pending audit records, seal-ит active segment, затем
+закрывает inspection, upstream и telemetry resources. Quiet period и force
+timeout конфигурируются через `VIGILANT_SHUTDOWN_*`.

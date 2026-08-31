@@ -28,13 +28,15 @@ Client
   -> TracingService
   -> PiiShadowProxyService
        -> descriptor validation
+       -> bounded audit reservation
        -> config-driven identity extraction and trust check
        -> bounded request ingest
        -> ShadowInspectionWorkflow
             -> Chat Completions parser
             -> normalized request policy context and scoped handoff
             -> policy selection and fast-pii inspection
-            -> safe aggregate shadow audit
+            -> immutable safe record -> local WAL -> force(true)
+            -> best-effort stdout projection
             -> Forward | Reject
        -> ReplayReadyRequest one-shot transport handoff
   -> BypassProxyService
@@ -65,6 +67,10 @@ context клиенту и передаёт его upstream.
 `PiiShadowProxyService` до чтения body проверяет method, path и media type.
 Неподдерживаемый descriptor получает stable `400 unsupported_schema` и не
 создаёт shadow audit.
+
+Поддержанный descriptor атомарно резервирует один pending audit event и его
+worst-case disk bytes до identity extraction и body demand. Exhausted или
+unhealthy store возвращает `503 audit_unavailable` без чтения body и upstream.
 
 Затем `IdentityExtractor` применяет ровно один startup mode. `ANONYMOUS` не
 потребляет headers. `TRUSTED_HEADERS` читает только настроенные user/groups
@@ -153,22 +159,23 @@ metadata, но не matched text. Фрагменты больше одновыз
 Complete-source orchestration выполняет синхронный
 `ShadowInspectionWorkflow` на существующем blocking-safe inspection executor.
 Он последовательно открывает единственный parser view, собирает и сохраняет
-request context, оценивает каждый независимый text fragment, получает replay
-ровно один раз и возвращает взаимоисключающий `Forward` или expected `Reject`.
-Unexpected exception и cancellation не превращаются в expected result и
-остаются outer failures HTTP-адаптера.
+request context, оценивает каждый независимый text fragment и создаёт immutable
+safe record. `LocalAuditStore` назначает persistent sequence, пишет versioned
+JSON в length/checksum frame и завершает acknowledgement только после
+`force(true)`, покрывающего frame и recovery metadata. Лишь затем workflow
+возвращает `Forward` или исходный stable `Reject`.
 
-После policy evaluation `ShadowAuditLogger` пишет один aggregate
-`policy.shadow_decision`. В нём есть coverage, policy/detector identities,
-числа fragments/findings и безопасные агрегаты по типам. Payload, matched text,
-locators и headers в audit не попадают.
+`ShadowAuditLogger` строит bounded schema с coverage, policy/detector
+identities, числами fragments/findings и безопасными агрегатами по типам.
+Payload, matched text, locators, identity, session и headers в record не
+попадают. После durable acceptance тот же record проецируется в
+`policy.shadow_decision`; discardable async stdout не участвует в acceptance.
 
-Эта safe aggregate schema не является durable acceptance: current
-`ShadowAuditLogger` публикует INFO record через discardable async stdout.
-Обязательная WAL-backed acceptance boundary определена отдельным
-[minimum audit trail contract](../spec/MINIMUM_AUDIT_TRAIL_CONTRACT.md), ещё не
-реализована и принадлежит
-[EPIC-22](../spec/epics/epic_22_durable_minimum_audit_trail.md).
+WAL использует один blocking-safe worker, exclusive directory lock, monotonic
+sequence metadata и active/sealed segments. Recovery сохраняет complete valid
+frames и отбрасывает partial или checksum-invalid tail. File I/O, force и wait
+никогда не выполняются на Netty event loop. Нормативная модель находится в
+[minimum audit trail contract](../spec/MINIMUM_AUDIT_TRAIL_CONTRACT.md).
 
 `ReplayReadyRequest` инкапсулирует demand-driven publisher и immutable strip
 set. Его `transferTo` допускает ровно один transport handoff. `close()` до
@@ -202,6 +209,7 @@ configured concurrent-source limit. Policy detector waits и deadlines такж�
 | Resource | Owner | Ограничение или lifecycle |
 |---|---|---|
 | Request bodies | `RequestSourceQuota` | byte/owner/segment limits из configuration |
+| Durable audit | `LocalAuditStore` | pending/retained/segment bounds, exclusive persistent directory |
 | Inspection orchestration | `InspectionResources` | virtual-thread executor |
 | Fast PII CPU | `InspectionResources` | bounded fixed-size pool и bounded queue |
 | Upstream connections | `UpstreamClientResources` | dedicated Armeria `ClientFactory` |
@@ -210,16 +218,18 @@ configured concurrent-source limit. Policy detector waits и deadlines такж�
 ## Startup и shutdown
 
 `MainKt` через Metro создаёт dependency graph и до старта server eagerly
-проверяет application configuration и immutable policy snapshot. Ошибка
-configuration печатается в stderr и завершает процесс с code `2`.
+проверяет application configuration, immutable policy snapshot, открывает,
+lock-ит и восстанавливает audit store. Ошибка печатается безопасно в stderr и
+завершает процесс с code `2`.
 
 При `SIGTERM` shutdown hook выполняет порядок:
 
-1. readiness становится `503`, admission нового traffic прекращается;
+1. readiness становится `503`, новые audit admissions и traffic запрещаются;
 2. Armeria server выполняет bounded graceful drain;
-3. закрываются inspection executors;
-4. закрывается upstream connection factory;
-5. traces и metrics flush-ятся и закрываются.
+3. pending audit appends завершаются, active segment seal-ится, store закрывается;
+4. закрываются inspection executors;
+5. закрывается upstream connection factory;
+6. traces и metrics flush-ятся и закрываются.
 
 Quiet period и force timeout настраиваются. Полный операторский контракт
 описан в [deployment guide](deployment.md), telemetry - в
@@ -233,6 +243,7 @@ Quiet period и force timeout настраиваются. Полный опер�
 |---|---|
 | Composition и lifecycle | `gateway/Main.kt`, `gateway/AppComponent.kt` |
 | Application configuration | `gateway/config/AppConfig.kt` |
+| Durable audit WAL | `audit/*` |
 | Admission и probes | `gateway/health/*` |
 | Request inspection | `gateway/proxy/PiiShadowProxyService.kt`, `ShadowInspectionWorkflow.kt`, `ReplayReadyRequest.kt`, `InspectionResources.kt` |
 | Transport proxy | `gateway/proxy/BypassProxyService.kt`, `UpstreamClientResources.kt` |

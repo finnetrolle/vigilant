@@ -17,6 +17,7 @@ import java.net.Socket
 import java.net.SocketException
 import java.net.URI
 import java.nio.charset.StandardCharsets
+import java.nio.file.Files
 import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
@@ -139,6 +140,7 @@ class UpstreamConnectionPoolingTest {
             env = mapOf(
                 "VIGILANT_UPSTREAM_URL" to upstream.uri.toString(),
                 "VIGILANT_UPSTREAM_CONNECTION_IDLE_TIMEOUT" to "${connectionIdleTimeout.toMillis()}ms",
+                "VIGILANT_AUDIT_DIRECTORY" to Files.createTempDirectory("vigilant-pool-audit").toString(),
             ),
             defaultConfigPaths = emptyList(),
         )

@@ -15,13 +15,13 @@ CONFIG_CONTAINER_ID=""
 
 cleanup() {
     if [[ -n "$CONTAINER_ID" ]]; then
-        docker rm --force "$CONTAINER_ID" >/dev/null 2>&1 || true
+        docker rm --force --volumes "$CONTAINER_ID" >/dev/null 2>&1 || true
     fi
     if [[ -n "$CONFIG_CONTAINER_ID" ]]; then
-        docker rm --force "$CONFIG_CONTAINER_ID" >/dev/null 2>&1 || true
+        docker rm --force --volumes "$CONFIG_CONTAINER_ID" >/dev/null 2>&1 || true
     fi
-    docker rm --force "$INVALID_CONTAINER_NAME" >/dev/null 2>&1 || true
-    docker rm --force "$INVALID_POLICY_CONTAINER_NAME" >/dev/null 2>&1 || true
+    docker rm --force --volumes "$INVALID_CONTAINER_NAME" >/dev/null 2>&1 || true
+    docker rm --force --volumes "$INVALID_POLICY_CONTAINER_NAME" >/dev/null 2>&1 || true
     if [[ -n "$UPSTREAM_PID" ]]; then
         kill "$UPSTREAM_PID" >/dev/null 2>&1 || true
         wait "$UPSTREAM_PID" >/dev/null 2>&1 || true
@@ -233,7 +233,7 @@ if [[ "$STOP_EXIT_CODE" != "0" && "$STOP_EXIT_CODE" != "143" ]]; then
     echo "gateway stopped with unexpected exit code $STOP_EXIT_CODE; expected 0 or SIGTERM code 143" >&2
     exit 1
 fi
-docker rm "$CONTAINER_ID" >/dev/null
+docker rm --volumes "$CONTAINER_ID" >/dev/null
 CONTAINER_ID=""
 
 printf '%s\n' \
@@ -272,7 +272,7 @@ assert_shadow_exchange \
     "$TMP_DIR/file-container.log" \
     "$TMP_DIR/file-response.json"
 docker stop --timeout 35 "$CONFIG_CONTAINER_ID" >/dev/null
-docker rm "$CONFIG_CONTAINER_ID" >/dev/null
+docker rm --volumes "$CONFIG_CONTAINER_ID" >/dev/null
 CONFIG_CONTAINER_ID=""
 
 set +e
@@ -291,7 +291,7 @@ if grep -q 'invalid.example' "$TMP_DIR/invalid-config.log"; then
     echo "invalid application configuration leaked its raw value" >&2
     exit 1
 fi
-docker rm "$INVALID_CONTAINER_NAME" >/dev/null
+docker rm --volumes "$INVALID_CONTAINER_NAME" >/dev/null
 
 sed 's/id = "default-request-pii"/id = "secret-policy-value"/; s/disposition = "ALLOW"/disposition = "BLOCK"/' \
     politics.conf.example >"$TMP_DIR/invalid-politics.conf"
@@ -313,6 +313,6 @@ if grep -q 'secret-policy-value' "$TMP_DIR/invalid-policy.log"; then
     echo "invalid policy configuration leaked its sensitive policy ID" >&2
     exit 1
 fi
-docker rm "$INVALID_POLICY_CONTAINER_NAME" >/dev/null
+docker rm --volumes "$INVALID_POLICY_CONTAINER_NAME" >/dev/null
 
 echo "OCI smoke passed: artifact, env/file config, read-only policy, health/readiness, exact shadow forwarding, JSONL audit, non-root, invalid config, SIGTERM"

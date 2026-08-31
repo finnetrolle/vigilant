@@ -18,8 +18,8 @@ application JAR, runtime dependencies и start scripts. Для локально�
 ./build/install/vigilant/bin/vigilant
 ~~~
 
-Перед запуском необходимо настроить upstream и предоставить валидный
-`politics.conf`. Полный список настроек находится в
+Перед запуском необходимо настроить upstream, предоставить валидный
+`politics.conf` и создать persistent audit directory. Полный список настроек находится в
 [configuration reference](configuration.md).
 
 ## OCI image
@@ -37,7 +37,8 @@ Container:
 - использует `/opt/vigilant/bin/vigilant` как entrypoint;
 - объявляет port `8080`;
 - использует `STOPSIGNAL SIGTERM`;
-- не содержит встроенной application или policy configuration.
+- объявляет `/var/lib/vigilant/audit` как writable audit volume;
+- не содержит встроенной upstream или policy configuration.
 
 ## Запуск через environment
 
@@ -48,6 +49,7 @@ docker run --rm --name vigilant \
   --env VIGILANT_UPSTREAM_URL=https://api.openai.com \
   --env VIGILANT_POLITICS_CONFIG=/etc/vigilant/politics.conf \
   --mount type=bind,src="$PWD/politics.conf",dst=/etc/vigilant/politics.conf,readonly \
+  --mount type=volume,src=vigilant-audit,dst=/var/lib/vigilant/audit \
   vigilant:0.1.0-SNAPSHOT
 ~~~
 
@@ -60,10 +62,13 @@ docker run --rm --name vigilant \
   --mount type=bind,src="$PWD/vigilant.conf",dst=/etc/vigilant/vigilant.conf,readonly \
   --env VIGILANT_POLITICS_CONFIG=/etc/vigilant/politics.conf \
   --mount type=bind,src="$PWD/politics.conf",dst=/etc/vigilant/politics.conf,readonly \
+  --mount type=volume,src=vigilant-audit,dst=/var/lib/vigilant/audit \
   vigilant:0.1.0-SNAPSHOT
 ~~~
 
-Configuration files монтируются read-only. Для production deployment secrets
+Configuration files монтируются read-only. Audit volume обязан сохраняться при
+container restart, быть доступен только UID/GID `10001` и использовать
+подходящее deployment encryption at rest. Для production deployment secrets
 должны передаваться через предназначенный для них secret mechanism, а не
 записываться в image или config committed в repository.
 
@@ -74,9 +79,10 @@ Orchestrator probes:
 - `GET /healthz` - liveness;
 - `GET /readyz` - readiness.
 
-`SIGTERM` запускает JVM shutdown hook. Readiness переключается на `503` до
-закрытия server, active exchanges получают bounded drain, затем owned upstream
-и OpenTelemetry resources закрываются в определённом порядке.
+`SIGTERM` запускает JVM shutdown hook. Readiness переключается на `503`, новые
+audit admissions запрещаются, active exchanges получают bounded drain, затем
+WAL force-ится и seal-ится до закрытия inspection, upstream и OpenTelemetry
+resources.
 
 Default graceful shutdown force timeout равен 30 seconds. Container stop
 timeout 35 seconds сохраняет этот budget и снижает риск последующего

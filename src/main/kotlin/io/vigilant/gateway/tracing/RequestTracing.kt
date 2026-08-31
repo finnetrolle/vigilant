@@ -88,10 +88,17 @@ internal fun pathWithoutQuery(path: String): String = path.substringBefore('?')
 internal fun configuredPropagationHeaderName(key: String, traceparentHeader: String): String =
     if (key.equals("traceparent", ignoreCase = true)) traceparentHeader else key
 
-/** Runs [block] with the complete safe request tracing context installed in MDC. */
+/**
+ * Runs [block] with the safe request tracing context installed in MDC.
+ *
+ * @param includeUserControlledCorrelation whether session and received propagation values may be
+ * added for ordinary operational logs. Mandatory audit projections set this to `false` because
+ * those request-controlled values are outside their safe schema.
+ */
 internal fun <T> withRequestTracingMdc(
     ctx: com.linecorp.armeria.server.ServiceRequestContext,
     activeSpan: Span? = null,
+    includeUserControlledCorrelation: Boolean = true,
     block: () -> T,
 ): T {
     val traceContext = ctx.attr(RequestTracing.CONTEXT)
@@ -100,16 +107,18 @@ internal fun <T> withRequestTracingMdc(
     val spanContext = activeSpan?.spanContext?.takeIf { it.isValid } ?: serverSpanContext
     val parentSpanId = if (activeSpan == null) traceContext.parentSpanId else serverSpanContext.spanId
     val values = linkedMapOf(
-        RequestTracing.SESSION_ID_MDC_KEY to traceContext.sessionId,
         RequestTracing.TRACE_ID_MDC_KEY to spanContext.traceId,
         RequestTracing.SPAN_ID_MDC_KEY to spanContext.spanId,
         RequestTracing.PARENT_SPAN_ID_MDC_KEY to parentSpanId,
-        RequestTracing.SESSION_ID_GENERATED_MDC_KEY to traceContext.sessionIdGenerated.toString(),
         RequestTracing.TRACE_CONTEXT_GENERATED_MDC_KEY to traceContext.traceContextGenerated.toString(),
         RequestTracing.TRACE_CONTEXT_REPLACED_MDC_KEY to traceContext.traceContextReplaced.toString(),
     )
-    traceContext.receivedTraceparent?.let { values[RequestTracing.TRACEPARENT_MDC_KEY] = it }
-    traceContext.receivedTracestate?.let { values[RequestTracing.TRACESTATE_MDC_KEY] = it }
+    if (includeUserControlledCorrelation) {
+        values[RequestTracing.SESSION_ID_MDC_KEY] = traceContext.sessionId
+        values[RequestTracing.SESSION_ID_GENERATED_MDC_KEY] = traceContext.sessionIdGenerated.toString()
+        traceContext.receivedTraceparent?.let { values[RequestTracing.TRACEPARENT_MDC_KEY] = it }
+        traceContext.receivedTracestate?.let { values[RequestTracing.TRACESTATE_MDC_KEY] = it }
+    }
     val closeables = values.map { (key, value) -> MDC.putCloseable(key, value) }
     return try {
         block()

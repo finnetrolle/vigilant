@@ -6,9 +6,11 @@ import com.linecorp.armeria.common.HttpResponse
 import com.linecorp.armeria.common.HttpStatus
 import com.linecorp.armeria.common.MediaType
 import com.linecorp.armeria.server.Server
+import io.vigilant.audit.AuditStoreOutcomeCode
 import io.vigilant.gateway.AppComponent
 import io.vigilant.gateway.GatewayProcessFixture
 import io.vigilant.gateway.proxy.BypassProxyService
+import io.vigilant.gateway.proxy.ControllableAuditStore
 import java.net.URI
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
@@ -20,7 +22,8 @@ import kotlin.test.assertTrue
 
 class HealthEndpointsTest {
     private val servers = mutableListOf<Server>()
-    private val readinessService = ReadinessService()
+    private val auditStore = ControllableAuditStore()
+    private val readinessService = ReadinessService(auditStore)
 
     @AfterTest
     fun stopServers() {
@@ -65,6 +68,20 @@ class HealthEndpointsTest {
             upstreamPaths.contains("/readyz"),
             "the readiness probe must be served by the gateway itself, but the upstream saw: $upstreamPaths",
         )
+    }
+
+    /** Readiness follows dynamic durable-audit admission loss and recovery. */
+    @Test
+    fun `readyz is unavailable until audit capacity recovers`() {
+        val upstream = startServer { HttpResponse.of(HttpStatus.OK) }
+        val gateway = startGateway(upstream)
+        val client = WebClient.of(serverUri(gateway).toString())
+
+        auditStore.setAdmissionFailure(AuditStoreOutcomeCode.CAPACITY_EXHAUSTED)
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, client.get("/readyz").aggregate().join().status())
+
+        auditStore.setAdmissionFailure(null)
+        assertEquals(HttpStatus.OK, client.get("/readyz").aggregate().join().status())
     }
 
     @Test

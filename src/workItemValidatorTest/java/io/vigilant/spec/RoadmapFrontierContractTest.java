@@ -21,7 +21,7 @@ final class RoadmapFrontierContractTest {
         String frontier = section(Files.readString(ROADMAP), "## Текущий roadmap frontier");
 
         assertFalse(frontier.contains("Полный repository frontier сохраняет VIG-01A"));
-        assertTrue(frontier.contains("VIG-22-01"));
+        assertTrue(frontier.contains("VIG-22-03"));
     }
 
     /** Keeps the historical load baseline distinct from the later max-shape qualification. */
@@ -58,7 +58,7 @@ final class RoadmapFrontierContractTest {
                 () -> assertTrue(exclusions.contains("current runtime")));
     }
 
-    /** Separates safe event contents from the not-yet-implemented durability guarantee. */
+    /** Separates best-effort stdout projection from the implemented local durability guarantee. */
     @Test
     void distinguishesSafeAggregateFromGuaranteedAuditTrail() throws IOException {
         String roadmap = Files.readString(ROADMAP);
@@ -70,8 +70,9 @@ final class RoadmapFrontierContractTest {
                 () -> assertTrue(roadmap.contains("### Guaranteed minimum audit trail")),
                 () -> assertTrue(observability.contains("## Safe aggregate shadow event")),
                 () -> assertTrue(observability.contains("## Guaranteed minimum audit trail")),
-                () -> assertTrue(architecture.contains("не является durable acceptance")),
-                () -> assertTrue(architecture.contains("EPIC-22")));
+                () -> assertTrue(architecture.contains("acknowledgement только после")),
+                () -> assertTrue(observability.contains("Текущий runtime реализует local durable стадии")),
+                () -> assertTrue(roadmap.contains("EPIC-22")));
     }
 
     /** Records closed test gaps while retaining EPIC-20 as the sole response-spooling owner. */

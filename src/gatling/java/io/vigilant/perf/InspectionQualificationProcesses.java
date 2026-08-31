@@ -144,6 +144,11 @@ final class InspectionQualificationProcesses implements AutoCloseable {
         command.add(profile.projectDirectory().resolve("build/install/vigilant/lib/*").toString());
         command.add("io.vigilant.gateway.MainKt");
         ProcessBuilder builder = PerformanceProcessSupport.process(command, profile.projectDirectory(), logFile);
+        PerformanceProcessSupport.configureAuditDirectory(
+            builder,
+            profile.projectDirectory(),
+            "inspection-qualification-" + port
+        );
         builder.environment().put("VIGILANT_UPSTREAM_URL", profile.upstreamBaseUrl());
         builder.environment().put("VIGILANT_PORT", Integer.toString(port));
         builder.environment().put(

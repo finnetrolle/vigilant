@@ -7,6 +7,7 @@ import com.linecorp.armeria.common.HttpResponseWriter
 import com.linecorp.armeria.common.HttpStatus
 import com.linecorp.armeria.common.ResponseHeaders
 import java.time.Duration
+import java.nio.file.Files
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -76,6 +77,12 @@ class ShutdownLifecycleTest {
             gateway.process.waitFor(PROCESS_EXIT_TIMEOUT.toSeconds(), TimeUnit.SECONDS),
             "gateway did not exit after the active stream drained; output: ${gateway.output()}",
         )
+        val segmentNames =
+            Files.list(gateway.auditDirectory).use { paths ->
+                paths.map { path -> path.fileName.toString() }.toList()
+            }
+        assertTrue(segmentNames.any { name -> name.endsWith(".wal") }, segmentNames.toString())
+        assertTrue(segmentNames.none { name -> name.endsWith(".active") }, segmentNames.toString())
     }
 
     /** A non-terminating exchange receives a bounded drain window and is then force-closed. */

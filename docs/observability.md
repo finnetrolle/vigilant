@@ -70,16 +70,17 @@ event `event.name=policy.shadow_decision`. Он содержит:
 - evaluation duration;
 - safe error code для failed request.
 
-Неподдерживаемый descriptor отклоняется до body demand и audit event не
-создаёт.
+Неподдерживаемый descriptor и invalid tracing session отклоняются до audit
+reservation и body demand, поэтому durable record и stdout projection не
+создаются.
 
 Identity extraction failure поддержанного descriptor создаёт тот же один
 aggregate event с `decision=ERROR` и bounded `error.code`. Configured header
 values, Basic username/password и raw `Authorization` в event не добавляются.
 
-Этот event определяет safe contents и correlation, но не durability.
-`AsyncAppender` может отбросить INFO record до stdout, поэтому
-`policy.shadow_decision` не является mandatory audit acceptance.
+Этот event является projection уже durably accepted record. `AsyncAppender`
+может отбросить INFO record до stdout, поэтому `policy.shadow_decision` сам по
+себе не является mandatory audit acceptance.
 
 ## Guaranteed minimum audit trail
 
@@ -89,10 +90,18 @@ external delivery. Минимальная guarantee - application-owned WAL reco
 подтверждённая covering `force(true)` до forwarding или normal
 supported-request response.
 
-Текущий runtime эту guarantee ещё не реализует. Её implementation
-принадлежит [EPIC-22](../spec/epics/epic_22_durable_minimum_audit_trail.md).
-До завершения этого epic safe aggregate stdout event остаётся
-best-effort observability, а не guaranteed minimum audit trail.
+Текущий runtime реализует local durable стадии `RESERVED`, `DECISION_CREATED`,
+`STORE_OWNED` и `DURABLY_RETAINED`. Application-owned segmented WAL использует
+versioned JSON, length/checksum frame, persistent sequence, exclusive directory
+lock и `force(true)` до upstream handoff или original supported-request
+response. Directory и bounds перечислены в
+[configuration reference](configuration.md).
+
+`CAPACITY_EXHAUSTED`, `EVENT_TOO_LARGE`, `IO_FAILURE` и `CLOSED` дают только
+`503 {"error":"audit_unavailable"}` и переводят readiness в `503`, пока store
+не восстановил admission. External delivery, Collector acknowledgement и
+segment reclaim остаются следующими задачами
+[EPIC-22](../spec/epics/epic_22_durable_minimum_audit_trail.md).
 
 ## Upstream failure event
 

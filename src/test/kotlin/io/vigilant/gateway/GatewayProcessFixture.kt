@@ -5,6 +5,7 @@ import com.linecorp.armeria.common.HttpStatus
 import java.io.IOException
 import java.net.ServerSocket
 import java.net.URI
+import java.nio.file.Path
 import java.time.Duration
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
@@ -17,6 +18,8 @@ import kotlin.random.Random
 internal class GatewayProcessFixture private constructor(
     val process: Process,
     val port: Int,
+    /** Process-exclusive persistent audit directory available to lifecycle assertions. */
+    val auditDirectory: Path,
     private val outputBuffer: StringBuilder,
     private val outputReader: Thread,
 ) : AutoCloseable {
@@ -65,6 +68,7 @@ internal class GatewayProcessFixture private constructor(
             environment: Map<String, String> = emptyMap(),
         ): GatewayProcessFixture {
             val port = reserveNonEphemeralPort()
+            val auditDirectory = Path.of(newTestAuditDirectory())
             val command = buildList {
                 add("${System.getProperty("java.home")}/bin/java")
                 addAll(jvmArguments)
@@ -74,7 +78,7 @@ internal class GatewayProcessFixture private constructor(
             }
             val process = ProcessBuilder(command)
                 .redirectErrorStream(true)
-                .withTestPolicyConfiguration()
+                .withTestRuntimeConfiguration(auditDirectory.toString())
                 .apply {
                     environment().apply {
                         put("VIGILANT_UPSTREAM_URL", upstream.toString())
@@ -88,7 +92,7 @@ internal class GatewayProcessFixture private constructor(
                     synchronized(output) { output.append(line).append('\n') }
                 }
             }
-            return GatewayProcessFixture(process, port, output, outputReader)
+            return GatewayProcessFixture(process, port, auditDirectory, output, outputReader)
         }
 
         /**

@@ -1,6 +1,6 @@
 # VIG-22-02: Mandatory audit acceptance в request path
 
-**Статус:** Ready for implementation
+**Статус:** Done
 **Epic:** [EPIC-22](../../epics/epic_22_durable_minimum_audit_trail.md)
 **Ветка:** Request-path tracer bullet > durable-before-forwarding
 **Зависит от:** [VIG-22-01](issue_22_01_local_durable_audit_store.md)
@@ -23,47 +23,62 @@ contract; [minimum audit trail contract](../../MINIMUM_AUDIT_TRAIL_CONTRACT.md).
 
 ## Критерии готовности
 
-- [ ] Supported descriptor резервирует audit token до identity extraction и
+- [x] Supported descriptor резервирует audit token до identity extraction и
   body demand. Unsupported descriptor и invalid tracing session сохраняют
   текущий no-shadow-audit contract.
-- [ ] Reservation exhaustion возвращает
+- [x] Reservation exhaustion возвращает
   `503 {"error":"audit_unavailable"}`, не demand-ит request body и не вызывает
   upstream.
-- [ ] Existing aggregate decision формируется как immutable safe record, а
+- [x] Existing aggregate decision формируется как immutable safe record, а
   stdout `policy.shadow_decision`, если сохранён, является только производной
   best-effort projection и не завершает audit acceptance.
-- [ ] Matrix `CLEAN`, `DETECTED`, `INSPECTION_GAP` и detector/policy `ERROR`
+- [x] Matrix `CLEAN`, `DETECTED`, `INSPECTION_GAP` и detector/policy `ERROR`
   подтверждает, что первый upstream request byte наблюдается только после
   durable acknowledgement соответствующей record.
-- [ ] Все supported identity, source, parser, URL/context assembly, handoff и
+- [x] Все supported identity, source, parser, URL/context assembly, handoff и
   unexpected inspection failures сохраняют одну `ERROR` record до публикации
   исходного stable response. Exact error code и HTTP mapping остаются
   неизменными, если audit acceptance успешен.
-- [ ] Audit `CAPACITY_EXHAUSTED`, `EVENT_TOO_LARGE`, `IO_FAILURE` и `CLOSED`
+- [x] Audit `CAPACITY_EXHAUSTED`, `EVENT_TOO_LARGE`, `IO_FAILURE` и `CLOSED`
   outcomes отображаются только в `503 audit_unavailable`; raw exception, path
   и record contents не попадают в client response или operational telemetry.
-- [ ] Audit failure supersedes ещё не опубликованный normal supported-request
+- [x] Audit failure supersedes ещё не опубликованный normal supported-request
   response, не вызывает upstream и переводит `/readyz` в `503` до
   подтверждённого восстановления store capacity/health.
-- [ ] Client cancellation до decision освобождает reservation без record.
+- [x] Client cancellation до decision освобождает reservation без record.
   Cancellation после decision не снимает append obligation: workflow завершает
   handoff в `STORE_OWNED`, затем store сохраняет ownership до durable outcome;
   новый upstream handoff запрещён.
-- [ ] Graceful shutdown сначала переводит readiness в not-ready и запрещает
+- [x] Graceful shutdown сначала переводит readiness в not-ready и запрещает
   новые audit admissions, затем boundedly ждёт active decisions и durable
   appends, seal-ит store и только потом завершает normal process stop.
-- [ ] Request, tracing, packaged-process, performance, OCI smoke и другие
+- [x] Request, tracing, packaged-process, performance, OCI smoke и другие
   shared launch fixtures получают mandatory audit directory и settings через
   canonical configuration helper; released ephemeral ports не используются.
-- [ ] No file operation, force или blocking future wait выполняется на Netty
+- [x] No file operation, force или blocking future wait выполняется на Netty
   event loop. Orchestration ждёт store на существующей blocking-safe boundary.
-- [ ] Audit record и captured logs не содержат body, matched-text, query,
+- [x] Audit record и captured logs не содержат body, matched-text, query,
   identity, session, auth/cookie или locator sentinels во всех success и
   failure cases.
-- [ ] Для всех добавленных и изменённых Kotlin/Java declarations, lifecycle
+- [x] Для всех добавленных и изменённых Kotlin/Java declarations, lifecycle
   helpers и test methods написан актуальный KDoc/Javadoc.
-- [ ] Focused real-Armeria E2E suite, affected process tests и
+- [x] Focused real-Armeria E2E suite, affected process tests и
   `./gradlew build` проходят.
+
+## Evidence
+
+- `PiiShadowProxyServiceTest` и `ShadowInspectionWorkflowTest` покрывают
+  reservation-before-demand, decision/error matrices, causal durable barriers,
+  все identity failure codes, detector `ERROR`, parser/source/context/unexpected
+  failure categories, audit outcomes, cancellation до decision, во время append
+  и после durable acceptance, а также отсутствие upstream до разрешённого
+  transport handoff.
+- Captured audit projections сохраняют нормализованные trace/span correlation,
+  но исключают user-controlled `traceparent`/`tracestate`, session, identity,
+  credential, body и locator sentinels.
+- `HealthEndpointsTest`, `MainTest`, `ShutdownLifecycleTest` и process fixtures
+  покрывают readiness, safe startup, shutdown seal и mandatory configuration.
+- Focused audit/request/process suite и полный `./gradlew build` проходят.
 
 ## Test/demo seam
 

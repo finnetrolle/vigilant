@@ -2,7 +2,7 @@
 
 **ID:** `EPIC-22`
 **Тип:** Epic
-**Статус:** Ready for implementation
+**Статус:** In progress
 **Приоритет:** High
 **Суммарная оценка:** 14-20 инженерных дней
 **Связанные требования:** `MVP-18`, `MVP-19`, `OUT-06`, `CONC-01`, `CONC-03`
@@ -49,13 +49,13 @@ EPIC-22 Durable minimum audit trail
 
 ## Дочерние issues
 
-- [ ] [VIG-22-01: Локально durable audit store](../issues/epic_22/issue_22_01_local_durable_audit_store.md) - `Ready for implementation`
-- [ ] [VIG-22-02: Mandatory audit acceptance в request path](../issues/epic_22/issue_22_02_request_path_audit_acceptance.md) - `Ready for implementation`
+- [x] [VIG-22-01: Локально durable audit store](../issues/epic_22/issue_22_01_local_durable_audit_store.md) - `Done`
+- [x] [VIG-22-02: Mandatory audit acceptance в request path](../issues/epic_22/issue_22_02_request_path_audit_acceptance.md) - `Done`
 - [ ] [VIG-22-03: Acknowledged Collector handoff и reclaim](../issues/epic_22/issue_22_03_collector_handoff_reclaim.md) - `Ready for implementation`
 - [ ] [VIG-22-04: Packaged durability qualification](../issues/epic_22/issue_22_04_packaged_durability_qualification.md) - `Ready for implementation`
 
-VIG-22-01 является текущей frontier. После неё VIG-22-02 и VIG-22-03 могут
-выполняться параллельно. VIG-22-04 требует оба production paths.
+VIG-22-01 и VIG-22-02 завершены. Текущая frontier - VIG-22-03. VIG-22-04
+требует завершения Collector path из VIG-22-03.
 
 ## Не входит
 
