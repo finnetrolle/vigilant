@@ -17,7 +17,7 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 /** Canonical process-launch, readiness and shutdown mechanics shared by performance fixtures. */
-final class PerformanceProcessSupport {
+public final class PerformanceProcessSupport {
     private static final Duration STARTUP_TIMEOUT = Duration.ofSeconds(30);
     private static final Duration HEALTH_REQUEST_TIMEOUT = Duration.ofSeconds(2);
     private static final Duration HEALTH_POLL_INTERVAL = Duration.ofMillis(100);
@@ -28,7 +28,7 @@ final class PerformanceProcessSupport {
     }
 
     /** Returns the configured JDK executable as a mutable child-command prefix. */
-    static List<String> javaCommand() {
+    public static List<String> javaCommand() {
         List<String> command = new ArrayList<>();
         command.add(System.getProperty(
             "perf.javaExecutable",
@@ -38,7 +38,7 @@ final class PerformanceProcessSupport {
     }
 
     /** Creates one child process with deterministic working directory and merged output. */
-    static ProcessBuilder process(List<String> command, Path projectDirectory, Path logFile) {
+    public static ProcessBuilder process(List<String> command, Path projectDirectory, Path logFile) {
         return new ProcessBuilder(command)
             .directory(projectDirectory.toFile())
             .redirectErrorStream(true)
@@ -46,7 +46,7 @@ final class PerformanceProcessSupport {
     }
 
     /** Adds one process-exclusive mandatory durable-audit directory under the fixture output tree. */
-    static void configureAuditDirectory(ProcessBuilder builder, Path projectDirectory, String runName)
+    public static void configureAuditDirectory(ProcessBuilder builder, Path projectDirectory, String runName)
         throws IOException {
         Path parent = projectDirectory.resolve("build/perf-audit");
         Files.createDirectories(parent);
@@ -55,7 +55,7 @@ final class PerformanceProcessSupport {
     }
 
     /** Runs one local command with complete output and fail-closed bounded child cleanup. */
-    static String run(List<String> command, Path projectDirectory, Duration timeout, String name) {
+    public static String run(List<String> command, Path projectDirectory, Duration timeout, String name) {
         ProcessBuilder builder = new ProcessBuilder(command).redirectErrorStream(true);
         if (projectDirectory != null) {
             builder.directory(projectDirectory.toFile());
@@ -68,7 +68,7 @@ final class PerformanceProcessSupport {
     }
 
     /** Joins one command, captures its output, and terminates it before publishing any failure. */
-    static String awaitSuccessful(
+    public static String awaitSuccessful(
         Process process,
         Duration completionTimeout,
         Duration forcibleTimeout,
@@ -100,7 +100,7 @@ final class PerformanceProcessSupport {
     }
 
     /** Rejects an occupied fixed non-ephemeral port before launching any child. */
-    static void ensurePortAvailable(int port, String occupiedMessage) throws IOException {
+    public static void ensurePortAvailable(int port, String occupiedMessage) throws IOException {
         try (ServerSocket socket = new ServerSocket()) {
             socket.setReuseAddress(true);
             socket.bind(new InetSocketAddress("127.0.0.1", port));
@@ -110,7 +110,7 @@ final class PerformanceProcessSupport {
     }
 
     /** Polls one public health endpoint until HTTP 200 or a bounded failure. */
-    static void awaitHealthy(Process process, String endpoint, String name) {
+    public static void awaitHealthy(Process process, String endpoint, String name) {
         HttpClient client = HttpClient.newBuilder().connectTimeout(HEALTH_REQUEST_TIMEOUT).build();
         HttpRequest request = HttpRequest.newBuilder(URI.create(endpoint))
             .timeout(HEALTH_REQUEST_TIMEOUT)
@@ -147,14 +147,14 @@ final class PerformanceProcessSupport {
     }
 
     /** Registers one named cleanup hook and returns it for explicit normal-run removal. */
-    static Thread addShutdownHook(Runnable cleanup, String name) {
+    public static Thread addShutdownHook(Runnable cleanup, String name) {
         Thread hook = new Thread(cleanup, name);
         Runtime.getRuntime().addShutdownHook(hook);
         return hook;
     }
 
     /** Removes one explicit cleanup hook when normal execution owns child shutdown. */
-    static void removeShutdownHook(Thread hook) {
+    public static void removeShutdownHook(Thread hook) {
         if (hook == null || hook == Thread.currentThread()) {
             return;
         }
@@ -166,7 +166,7 @@ final class PerformanceProcessSupport {
     }
 
     /** Gracefully stops one child and escalates after the supplied bounded waits. */
-    static void stop(Process process, Duration gracefulTimeout, Duration forcibleTimeout) {
+    public static void stop(Process process, Duration gracefulTimeout, Duration forcibleTimeout) {
         if (process == null || !process.isAlive()) {
             return;
         }
@@ -192,7 +192,7 @@ final class PerformanceProcessSupport {
     }
 
     /** Attempts every child stop and publishes the complete failure population afterwards. */
-    static void stopAll(List<StopTarget> targets) {
+    public static void stopAll(List<StopTarget> targets) {
         IllegalStateException failure = null;
         for (StopTarget target : targets) {
             try {
@@ -211,7 +211,7 @@ final class PerformanceProcessSupport {
     }
 
     /** Attempts every resource close and publishes the complete failure population afterwards. */
-    static void closeAll(List<? extends AutoCloseable> resources) {
+    public static void closeAll(List<? extends AutoCloseable> resources) {
         IllegalStateException failure = null;
         for (AutoCloseable resource : resources) {
             try {
@@ -259,6 +259,6 @@ final class PerformanceProcessSupport {
     }
 
     /** One child handle and the exact graceful/forcible deadlines used by aggregate cleanup. */
-    record StopTarget(Process process, Duration gracefulTimeout, Duration forcibleTimeout) {
+    public record StopTarget(Process process, Duration gracefulTimeout, Duration forcibleTimeout) {
     }
 }

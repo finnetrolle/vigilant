@@ -21,12 +21,12 @@ class TrafficAdmissionService(
     private val delegate: MetricsService,
     private val readinessService: ReadinessService,
 ) : HttpService {
-    /** Serves new traffic only while the shared readiness state permits admission. */
+    /** Serves new traffic only while lifecycle state permits admission. */
     override fun serve(
         ctx: ServiceRequestContext,
         request: HttpRequest,
     ): HttpResponse =
-        if (readinessService.isReady()) {
+        if (readinessService.isAcceptingTraffic()) {
             delegate.serve(ctx, request)
         } else {
             HttpResponse.of(HttpStatus.SERVICE_UNAVAILABLE, MediaType.PLAIN_TEXT_UTF_8, "draining")

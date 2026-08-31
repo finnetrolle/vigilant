@@ -106,7 +106,7 @@ Issue является листом mind map, если:
 | [EPIC-10: Повышение качества детерминированного PII-распознавания](epics/epic_10_pii_detection_quality.md) | `Done` | 8/8 | 0 дней осталось |
 | [EPIC-20: Atomic response spooling and secure disk spill](epics/epic_20_response_spooling_secure_spill.md) | `Draft` | 0/0 | future scope не оценён |
 | [EPIC-21: Post-milestone architecture closure](epics/epic_21_post_milestone_architecture_closure.md) | `Done` | 5/5 | 0 дней осталось |
-| [EPIC-22: Durable minimum audit trail](epics/epic_22_durable_minimum_audit_trail.md) | `In progress` | 3/4 | 3-5 инженерных дней |
+| [EPIC-22: Durable minimum audit trail](epics/epic_22_durable_minimum_audit_trail.md) | `Done` | 5/5 | 0 дней осталось |
 | [VIG-11: Fast PII policy adapter](issues/issue_11_fast_pii_policy_adapter.md) | `Done` | завершена | 0 дней осталось |
 | [VIG-12: Global shadow coverage validation](issues/issue_12_global_shadow_coverage_validation.md) | `Done` | завершена | 0 дней осталось |
 | [VIG-13: PII shadow request tracer bullet](issues/issue_13_pii_shadow_request_tracer.md) | `Done` | завершена | 0 дней осталось |

@@ -309,6 +309,34 @@ class LocalAuditStoreTest {
         assertTrue(recovered.isEmpty())
     }
 
+    /** A causal failure before the first frame byte returns typed IO_FAILURE and closes admission. */
+    @Test
+    fun `failure before frame write fails closed as IO failure`() {
+        assertAppendBarrierFailure(
+            "before-frame-write",
+            object : AuditStoreObserver {
+                /** Injects the test failure after sequence force and before the first frame byte. */
+                override fun afterSequenceForce(sequence: Long) {
+                    throw IOException("test-local frame write failure at sequence $sequence")
+                }
+            },
+        )
+    }
+
+    /** A causal failure after frame write and before its force returns typed IO_FAILURE and closes admission. */
+    @Test
+    fun `failure before frame force fails closed as IO failure`() {
+        assertAppendBarrierFailure(
+            "before-frame-force",
+            object : AuditStoreObserver {
+                /** Injects the test failure after complete frame write and before its covering force. */
+                override fun afterFrameWrite(sequence: Long) {
+                    throw IOException("test-local frame force failure at sequence $sequence")
+                }
+            },
+        )
+    }
+
     /** Rotates before a complete frame would exceed the exact segment byte bound. */
     @Test
     fun `segment byte bound rotates without splitting records`() {
@@ -363,6 +391,36 @@ class LocalAuditStoreTest {
             findingsByEvidenceStrength = emptyMap(),
             evaluationDuration = Duration.ofMillis(1),
         )
+
+    /**
+     * Requires one causal append-barrier failure to surface as fail-closed typed I/O evidence.
+     *
+     * @param directoryName safe suffix identifying the isolated filesystem fixture.
+     * @param observer test-local causal barrier that fails the single writer.
+     */
+    private fun assertAppendBarrierFailure(
+        directoryName: String,
+        observer: AuditStoreObserver,
+    ) {
+        val directory = Files.createTempDirectory("vigilant-audit-$directoryName")
+        LocalAuditStore.open(AuditStoreSettings(directory), observer).use { store ->
+            val reservation = assertIs<AuditReservationResult.Granted>(store.reserve()).reservation
+            val accepted =
+                assertIs<AuditSubmissionResult.Accepted>(
+                    reservation.submit(safeRecord("51234567-89ab-cdef-0123-456789abcdef")),
+                )
+
+            assertEquals(
+                AuditStoreOutcomeCode.IO_FAILURE,
+                assertIs<AuditAppendResult.Failed>(accepted.durable.get(5, TimeUnit.SECONDS)).code,
+            )
+            assertEquals(
+                AuditStoreOutcomeCode.IO_FAILURE,
+                assertIs<AuditReservationResult.Rejected>(store.reserve()).code,
+            )
+            assertFalse(store.isAvailableForAdmission())
+        }
+    }
 
     /** Opens one real store while capturing only its startup recovery result for assertions. */
     private fun openWithRecovery(

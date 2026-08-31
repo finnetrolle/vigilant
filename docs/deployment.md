@@ -125,7 +125,6 @@ storage. Collector должен разделять записи по top-level `
 
 Требования:
 
-- `cmp`;
 - `curl`;
 - Docker;
 - Python 3.
@@ -139,11 +138,26 @@ storage. Collector должен разделять записи по top-level `
 - реальный PII Chat Completions request;
 - byte-identical request replay;
 - safe JSONL shadow audit;
+- fixed JVM memory settings;
+- restart container с тем же named audit volume и сохранённым WAL;
 - exit code `2` для невалидной application/policy configuration;
 - graceful SIGTERM shutdown.
 
 Smoke test удаляет созданные container/image resources при завершении. Он
 запускается явно и не входит в `./gradlew build` или CI.
+
+Полная packaged durability matrix запускается командой:
+
+~~~bash
+./gradlew durabilityQualification
+~~~
+
+Она добавляет exact audit bounds, real Armeria upstream, отдельный fake
+Collector, crash/recovery и exhaustion phases. Текущий versioned
+[qualification report](durability-qualification-2026-08-31.md) имеет verdict
+`PASS`: retained-capacity admission возвращает exact `503 audit_unavailable`,
+OCI restart сохраняет WAL на том же volume, ack/reclaim восстанавливает
+readiness и новые requests.
 
 ## Не входит в поставку
 

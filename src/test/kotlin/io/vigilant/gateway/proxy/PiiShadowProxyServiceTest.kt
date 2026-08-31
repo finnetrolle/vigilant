@@ -31,6 +31,7 @@ import io.vigilant.audit.AuditStoreSettings
 import io.vigilant.audit.LocalAuditStore
 import io.vigilant.gateway.GatewayProcessFixture
 import io.vigilant.gateway.GatewayTestFixture
+import io.vigilant.gateway.DemandObservingPublisher
 import io.vigilant.gateway.chatCompletionsBody
 import io.vigilant.gateway.chatCompletionsRequest
 import io.vigilant.context.PolicyContextHandoff
@@ -61,6 +62,7 @@ import io.vigilant.policy.engine.PolicyEngine
 import io.vigilant.policy.execution.DetectorExecutionCoordinator
 import io.vigilant.policy.execution.DetectorExecutor
 import io.vigilant.policy.provider.DummyPolicyProvider
+import io.vigilant.policy.provider.PolicyProvider
 import io.vigilant.policy.selection.PolicySelector
 import io.vigilant.source.RequestSourceLimits
 import io.vigilant.source.RequestSourceOpenResult
@@ -89,7 +91,6 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
-import org.reactivestreams.Publisher
 import org.reactivestreams.Subscriber
 import org.reactivestreams.Subscription
 import org.slf4j.LoggerFactory
@@ -206,14 +207,16 @@ class PiiShadowProxyServiceTest {
         assertEquals(2, upstreamRequests.get())
     }
 
-    /** Every post-admission audit failure becomes one stable 503 without upstream handoff. */
+    /** Every post-admission audit failure becomes one safe stable 503 without upstream handoff. */
     @Test
     fun `audit append failures suppress upstream and return audit unavailable`() {
+        val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
         listOf(
             AuditStoreOutcomeCode.EVENT_TOO_LARGE,
             AuditStoreOutcomeCode.IO_FAILURE,
             AuditStoreOutcomeCode.CLOSED,
         ).forEach { code ->
+            val sentinel = "append-failure-sensitive-$code"
             val upstreamRequests = AtomicInteger()
             val auditStore = ControllableAuditStore(appendFailure = code)
             val upstream = fixture.startServer {
@@ -228,7 +231,7 @@ class PiiShadowProxyServiceTest {
 
             val response =
                 WebClient.of(fixture.serverUri(gateway))
-                    .execute(chatCompletionsRequest(chatCompletionsBody("append-failure-$code")))
+                    .execute(chatCompletionsRequest(chatCompletionsBody(sentinel)))
                     .aggregate()
                     .join()
 
@@ -237,6 +240,11 @@ class PiiShadowProxyServiceTest {
             assertEquals(0, upstreamRequests.get(), code.name)
             assertTrue(auditStore.records().isEmpty(), code.name)
             assertFalse(auditStore.isAvailableForAdmission(), code.name)
+            val renderedLogs = events.joinToString("\n") { event ->
+                event.formattedMessage + event.keyValuePairs.orEmpty()
+            }
+            assertFalse(response.contentUtf8().contains(sentinel), "${code.name} leaked request body to client")
+            assertFalse(renderedLogs.contains(sentinel), "${code.name} leaked request body to logs")
         }
     }
 
@@ -1420,7 +1428,7 @@ class PiiShadowProxyServiceTest {
         assertEquals(io.vigilant.audit.AuditDecision.ERROR, auditStore.records().single().record.decision)
     }
 
-    /** Detector failure remains shadow-ALLOW but cannot reach upstream before durable acceptance. */
+    /** Detector failure remains shadow-ALLOW without exposing its raw exception before durability. */
     @Test
     fun `detector error waits for durable audit before upstream handoff`() {
         val upstreamRequests = AtomicInteger()
@@ -1435,6 +1443,7 @@ class PiiShadowProxyServiceTest {
             )
         }
         val auditStore = ControllableAuditStore(autoComplete = false)
+        val engineEvents = fixture.attachAppenderTo(PolicyEngine::class.java)
         val gateway =
             startShadowGateway(
                 upstreamUri = fixture.serverUri(upstream),
@@ -1454,12 +1463,66 @@ class PiiShadowProxyServiceTest {
         assertFalse(upstreamBody.isDone, "detector ERROR body reached upstream before durability")
         auditStore.completeNext()
 
-        assertEquals(HttpStatus.OK, response.join().status())
+        val completedResponse = response.join()
+        assertEquals(HttpStatus.OK, completedResponse.status())
         assertEquals(1, upstreamRequests.get())
         assertTrue(body.toByteArray().contentEquals(upstreamBody.join()))
         val record = auditStore.records().single().record
         assertEquals(io.vigilant.audit.AuditDecision.ERROR, record.decision)
         assertEquals("DETECTOR_EXECUTION_FAILED", record.errorCode)
+        val renderedLogs = engineEvents.joinToString("\n") { it.formattedMessage + it.keyValuePairs.orEmpty() }
+        assertFalse(renderedLogs.contains("detector sentinel"), "raw detector exception leaked into logs")
+        assertFalse(
+            completedResponse.contentUtf8().contains("detector sentinel"),
+            "raw detector exception leaked to client",
+        )
+    }
+
+    /** Unexpected policy orchestration failure is durably rejected without disclosure or upstream handoff. */
+    @Test
+    fun `unexpected policy failure returns safe inspection error after durable audit`() {
+        val sentinel = "policy provider sentinel"
+        val upstreamRequests = AtomicInteger()
+        val quota = RequestSourceQuota()
+        val auditStore = ControllableAuditStore(autoComplete = false)
+        val proxyEvents = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
+        val engineEvents = fixture.attachAppenderTo(PolicyEngine::class.java)
+        val upstream = fixture.startServer {
+            upstreamRequests.incrementAndGet()
+            HttpResponse.of(HttpStatus.OK)
+        }
+        val gateway =
+            startShadowGateway(
+                upstreamUri = fixture.serverUri(upstream),
+                quota = quota,
+                policyProvider = PolicyProvider { error(sentinel) },
+                auditStore = auditStore,
+            )
+
+        val response =
+            WebClient.of(fixture.serverUri(gateway))
+                .execute(chatCompletionsRequest("unexpected policy failure"))
+                .aggregate()
+
+        assertTrue(auditStore.awaitStoreOwned(), "inspection ERROR did not reach STORE_OWNED")
+        assertFalse(response.isDone, "inspection failure escaped before durable acceptance")
+        assertEquals(0, upstreamRequests.get())
+        auditStore.completeNext()
+
+        val completedResponse = response.join()
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, completedResponse.status())
+        assertEquals("""{"error":"inspection_failed"}""", completedResponse.contentUtf8())
+        assertEquals(0, upstreamRequests.get())
+        val record = auditStore.records().single().record
+        assertEquals(io.vigilant.audit.AuditDecision.ERROR, record.decision)
+        assertEquals("INSPECTION_FAILED", record.errorCode)
+        assertSourceReservationsReleased(quota, "unexpected policy failure")
+        val renderedLogs =
+            (proxyEvents + engineEvents).joinToString("\n") { event ->
+                event.formattedMessage + event.keyValuePairs.orEmpty()
+            }
+        assertFalse(renderedLogs.contains(sentinel), "raw policy exception leaked into logs")
+        assertFalse(completedResponse.contentUtf8().contains(sentinel), "raw policy exception leaked to client")
     }
 
     /** Verifies SSE stays streaming while the same request snapshot reaches response phase. */
@@ -1558,6 +1621,7 @@ class PiiShadowProxyServiceTest {
      * @param responseContexts optional response-phase contexts observed through the public handoff.
      * @param serviceContexts optional request scopes used for lifecycle control and terminal-release assertions.
      * @param requestBodyDemandObserved optional observer set when inspection demands request content.
+     * @param policyProvider policy snapshot source used by the real orchestration boundary.
      * @param inspectionExecutor optional deterministic executor supplied by lifecycle tests.
      * @param configureServer optional Armeria settings for lifecycle scenarios.
      */
@@ -1572,6 +1636,7 @@ class PiiShadowProxyServiceTest {
         responseContexts: MutableList<PolicyContext>? = null,
         serviceContexts: MutableList<com.linecorp.armeria.server.ServiceRequestContext>? = null,
         requestBodyDemandObserved: AtomicBoolean? = null,
+        policyProvider: PolicyProvider = DummyPolicyProvider(listOf(shadowPolicy(policyDeadline))),
         auditStore: AuditStore = ControllableAuditStore(),
         inspectionExecutor: ExecutorService? = null,
         configureServer: ServerBuilder.() -> Unit = {},
@@ -1581,7 +1646,7 @@ class PiiShadowProxyServiceTest {
         val cpuExecutor = Executors.newFixedThreadPool(2).also(closeables::add)
         val policyEngine =
             PolicyEngine(
-                policyProvider = DummyPolicyProvider(listOf(shadowPolicy(policyDeadline))),
+                policyProvider = policyProvider,
                 policySelector = PolicySelector(),
                 detectorExecutionCoordinator =
                     DetectorExecutionCoordinator(
@@ -1786,43 +1851,6 @@ class PiiShadowProxyServiceTest {
         }
     }
 
-    /** Request-body publisher that records demand issued by the inspection adapter. */
-    private class DemandObservingPublisher(
-        private val delegate: Publisher<HttpObject>,
-        private val demandObserved: AtomicBoolean,
-    ) : Publisher<HttpObject> {
-        /** Relays the original body while wrapping only its downstream subscription. */
-        override fun subscribe(subscriber: Subscriber<in HttpObject>) {
-            delegate.subscribe(
-                object : Subscriber<HttpObject> {
-                    /** Exposes a subscription that records positive inspection demand. */
-                    override fun onSubscribe(subscription: Subscription) {
-                        subscriber.onSubscribe(
-                            object : Subscription {
-                                /** Records positive demand before forwarding it to the server request. */
-                                override fun request(elements: Long) {
-                                    if (elements > 0) demandObserved.set(true)
-                                    subscription.request(elements)
-                                }
-
-                                /** Propagates cancellation to the original server request. */
-                                override fun cancel() = subscription.cancel()
-                            },
-                        )
-                    }
-
-                    /** Relays one request-body object unchanged. */
-                    override fun onNext(item: HttpObject) = subscriber.onNext(item)
-
-                    /** Relays the original request-body failure unchanged. */
-                    override fun onError(failure: Throwable) = subscriber.onError(failure)
-
-                    /** Relays original request-body completion unchanged. */
-                    override fun onComplete() = subscriber.onComplete()
-                },
-            )
-        }
-    }
 }
 
 /** Returns one structured event key without relying on key order. */

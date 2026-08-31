@@ -105,6 +105,9 @@ variable `VIGILANT_SOME_SETTING`.
 - Admission резервирует worst-case framed record и bounded ready manifest.
   Active segment учитывает будущий manifest reserve; ready segment учитывает
   exact WAL и manifest bytes до valid contiguous Collector ack.
+- Packaged [qualification 2026-08-31](durability-qualification-2026-08-31.md)
+  подтвердила exact bounds, retained-capacity fail-closed response и recovery
+  admission после valid Collector ack/reclaim.
 - Duration принимает значения вида `300ms`, `10s`, `5m` или `PT5M`.
 - Duration должен быть положительным и помещаться в signed nanosecond scheduler
   bound, кроме

@@ -2,9 +2,9 @@
 
 **ID:** `EPIC-22`
 **Тип:** Epic
-**Статус:** In progress
+**Статус:** Done
 **Приоритет:** High
-**Суммарная оценка:** 14-20 инженерных дней
+**Суммарная оценка:** 15-22 инженерных дня
 **Связанные требования:** `MVP-18`, `MVP-19`, `OUT-06`, `CONC-01`, `CONC-03`
 
 ## Контекст и целевой результат
@@ -40,7 +40,8 @@ EPIC-22 Durable minimum audit trail
 ├── local durability module seam
 │   └── bounded WAL, framing, force, recovery and typed outcomes
 ├── request-path tracer bullet
-│   └── admission, durable-before-forwarding, errors and shutdown
+│   ├── admission, durable-before-forwarding, errors and shutdown
+│   └── exact audit-unavailable mapping through production admission
 ├── external-delivery tracer bullet
 │   └── immutable segments, acknowledged prefix and reclaim
 └── production evidence
@@ -52,10 +53,12 @@ EPIC-22 Durable minimum audit trail
 - [x] [VIG-22-01: Локально durable audit store](../issues/epic_22/issue_22_01_local_durable_audit_store.md) - `Done`
 - [x] [VIG-22-02: Mandatory audit acceptance в request path](../issues/epic_22/issue_22_02_request_path_audit_acceptance.md) - `Done`
 - [x] [VIG-22-03: Acknowledged Collector handoff и reclaim](../issues/epic_22/issue_22_03_collector_handoff_reclaim.md) - `Done`
-- [ ] [VIG-22-04: Packaged durability qualification](../issues/epic_22/issue_22_04_packaged_durability_qualification.md) - `Ready for implementation`
+- [x] [VIG-22-05: Exact audit exhaustion response через production admission chain](../issues/epic_22/issue_22_05_audit_exhaustion_admission_mapping.md) - `Done`
+- [x] [VIG-22-04: Packaged durability qualification](../issues/epic_22/issue_22_04_packaged_durability_qualification.md) - `Done`
 
-VIG-22-01, VIG-22-02 и VIG-22-03 завершены. Текущая frontier - VIG-22-04,
-которая квалифицирует полный packaged/OCI durability matrix.
+VIG-22-01..05 завершены. Versioned packaged/OCI qualification подтверждает
+полный decision, exhaustion, crash, recovery, shutdown и Collector matrix,
+включая exact separation `audit_unavailable` и lifecycle `draining`.
 
 ## Не входит
 
@@ -70,7 +73,7 @@ VIG-22-01, VIG-22-02 и VIG-22-03 завершены. Текущая frontier - 
 
 ## Критерии готовности
 
-- VIG-22-01..04 имеют status `Done`, а checklist и `WORK_ITEMS.md` обновлены в
+- VIG-22-01..05 имеют status `Done`, а checklist и `WORK_ITEMS.md` обновлены в
   тех же change sets.
 - Каждый outcome и boundary из
   [minimum audit trail contract](../MINIMUM_AUDIT_TRAIL_CONTRACT.md) имеет

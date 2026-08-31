@@ -4,7 +4,7 @@
 **Epic:** [EPIC-22](../../epics/epic_22_durable_minimum_audit_trail.md)
 **Ветка:** Request-path tracer bullet > durable-before-forwarding
 **Зависит от:** [VIG-22-01](issue_22_01_local_durable_audit_store.md)
-**Блокирует:** [VIG-22-04](issue_22_04_packaged_durability_qualification.md)
+**Блокирует:** [VIG-22-04](issue_22_04_packaged_durability_qualification.md), [VIG-22-05](issue_22_05_audit_exhaustion_admission_mapping.md)
 **Оценка:** 4-5 инженерных дней
 **Уверенность:** High
 

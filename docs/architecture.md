@@ -186,6 +186,13 @@ worker, а не на Netty event loop. Публичный adapter описан �
 [Collector file handoff](audit-collector-file-handoff.md), нормативная модель -
 в [minimum audit trail contract](../spec/MINIMUM_AUDIT_TRAIL_CONTRACT.md).
 
+`ReadinessService` публикует composite lifecycle/audit probe state, но
+`TrafficAdmissionService` использует только lifecycle predicate. Поэтому audit
+exhaustion достигает typed owner в `PiiShadowProxyService`, а graceful shutdown
+по-прежнему отклоняет новое traffic как `draining`. Packaged
+[durability qualification](durability-qualification-2026-08-31.md)
+подтверждает оба независимых outcome.
+
 `ReplayReadyRequest` инкапсулирует demand-driven publisher и immutable strip
 set. Его `transferTo` допускает ровно один transport handoff. `close()` до
 handoff и synchronous callback failure освобождают source; после принятого

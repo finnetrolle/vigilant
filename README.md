@@ -133,7 +133,7 @@ versioned artifact, lifecycle и требования smoke-теста опис�
 ./scripts/oci-smoke-test
 ~~~
 
-Smoke-тест требует `cmp`, `curl`, Docker и Python 3. Он запускается явно и не
+Smoke-тест требует `curl`, Docker и Python 3. Он запускается явно и не
 входит в `build` или CI.
 
 ## Observability

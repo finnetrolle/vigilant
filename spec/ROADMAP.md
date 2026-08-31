@@ -401,8 +401,11 @@ request-path acceptance
 [VIG-22-02](issues/epic_22/issue_22_02_request_path_audit_acceptance.md) и
 acknowledged Collector handoff
 [VIG-22-03](issues/epic_22/issue_22_03_collector_handoff_reclaim.md) имеют status
-`Done`. Текущая implementation frontier -
-[VIG-22-04](issues/epic_22/issue_22_04_packaged_durability_qualification.md).
+`Done`. Exact admission mapping
+[VIG-22-05](issues/epic_22/issue_22_05_audit_exhaustion_admission_mapping.md)
+и packaged qualification
+[VIG-22-04](issues/epic_22/issue_22_04_packaged_durability_qualification.md)
+тоже имеют status `Done`; EPIC-22 завершён с versioned PASS evidence.
 VIG-01A, EPIC-10 и VIG-10-08 имеют status `Done` и не входят в current
 frontier.
 

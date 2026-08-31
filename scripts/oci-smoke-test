@@ -7,11 +7,18 @@ TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/vigilant-oci-smoke.XXXXXX")"
 IMAGE_TAG="vigilant:smoke-$$"
 CONTAINER_NAME="vigilant-smoke-$$"
 CONFIG_CONTAINER_NAME="${CONTAINER_NAME}-config"
+RECOVERY_CONTAINER_NAME="${CONTAINER_NAME}-recovery"
 INVALID_CONTAINER_NAME="${CONTAINER_NAME}-invalid"
 INVALID_POLICY_CONTAINER_NAME="${CONTAINER_NAME}-invalid-policy"
+UPSTREAM_CONTROL_DIR="$TMP_DIR/upstream-control"
+OCI_AUDIT_DIR="$TMP_DIR/oci-audit"
+OCI_EXTERNAL_DIR="$TMP_DIR/oci-external"
+OCI_COLLECTOR_CONTROL_DIR="$TMP_DIR/oci-collector-control"
 UPSTREAM_PID=""
+COLLECTOR_PID=""
 CONTAINER_ID=""
 CONFIG_CONTAINER_ID=""
+RECOVERY_CONTAINER_ID=""
 
 cleanup() {
     if [[ -n "$CONTAINER_ID" ]]; then
@@ -20,11 +27,19 @@ cleanup() {
     if [[ -n "$CONFIG_CONTAINER_ID" ]]; then
         docker rm --force --volumes "$CONFIG_CONTAINER_ID" >/dev/null 2>&1 || true
     fi
+    if [[ -n "$RECOVERY_CONTAINER_ID" ]]; then
+        docker rm --force "$RECOVERY_CONTAINER_ID" >/dev/null 2>&1 || true
+    fi
+    docker rm --force "$RECOVERY_CONTAINER_NAME" >/dev/null 2>&1 || true
     docker rm --force --volumes "$INVALID_CONTAINER_NAME" >/dev/null 2>&1 || true
     docker rm --force --volumes "$INVALID_POLICY_CONTAINER_NAME" >/dev/null 2>&1 || true
     if [[ -n "$UPSTREAM_PID" ]]; then
         kill "$UPSTREAM_PID" >/dev/null 2>&1 || true
         wait "$UPSTREAM_PID" >/dev/null 2>&1 || true
+    fi
+    if [[ -n "$COLLECTOR_PID" ]]; then
+        kill "$COLLECTOR_PID" >/dev/null 2>&1 || true
+        wait "$COLLECTOR_PID" >/dev/null 2>&1 || true
     fi
     docker image rm --force "$IMAGE_TAG" >/dev/null 2>&1 || true
     rm -rf "$TMP_DIR"
@@ -32,7 +47,7 @@ cleanup() {
 
 trap cleanup EXIT
 
-for COMMAND in cmp curl docker python3; do
+for COMMAND in curl docker python3; do
     if ! command -v "$COMMAND" >/dev/null 2>&1; then
         echo "$COMMAND is required for the OCI smoke test" >&2
         exit 1
@@ -50,6 +65,38 @@ await_gateway() {
     done
     curl --fail --silent "http://127.0.0.1:$gateway_port/healthz" >/dev/null
     curl --fail --silent "http://127.0.0.1:$gateway_port/readyz" >/dev/null
+}
+
+await_path() {
+    local path="$1"
+    local required_state="$2"
+    local attempts="$3"
+    local attempt
+    for ((attempt = 0; attempt < attempts; attempt++)); do
+        if [[ "$required_state" == "nonempty" && -s "$path" ]] ||
+            [[ "$required_state" == "present" && -f "$path" ]]; then
+            return
+        fi
+        sleep 0.25
+    done
+    if [[ "$required_state" == "nonempty" ]]; then
+        test -s "$path"
+    else
+        test -f "$path"
+    fi
+}
+
+await_http_ok() {
+    local endpoint="$1"
+    local attempts="$2"
+    local attempt
+    for ((attempt = 0; attempt < attempts; attempt++)); do
+        if curl --fail --silent "$endpoint" >/dev/null; then
+            return
+        fi
+        sleep 0.25
+    done
+    curl --fail --silent "$endpoint" >/dev/null
 }
 
 shadow_log_is_valid() {
@@ -105,14 +152,22 @@ assert_shadow_exchange() {
     curl --fail --silent --show-error \
         --request POST \
         --header 'content-type: application/json' \
+        --header 'x-vigilant-qualification-case: oci-shadow' \
         --data-binary "@$TMP_DIR/request.json" \
         --output "$response_file" \
         "http://127.0.0.1:$gateway_port/v1/chat/completions?oci=kept"
-    if ! cmp --silent "$TMP_DIR/request.json" "$TMP_DIR/upstream.body"; then
-        echo "OCI gateway did not replay the exact request body" >&2
+    REQUEST_BYTES="$(wc -c <"$TMP_DIR/request.json" | tr -d '[:space:]')"
+    UPSTREAM_BYTES="$(curl --fail --silent "http://127.0.0.1:$UPSTREAM_PORT/control/bytes/oci-shadow")"
+    if [[ "$UPSTREAM_BYTES" != "$REQUEST_BYTES" ]]; then
+        echo "OCI gateway did not replay the exact request byte count" >&2
         exit 1
     fi
-    if [[ "$(<"$response_file")" != '{"ok":true}' ]]; then
+    UPSTREAM_EXACT="$(curl --fail --silent "http://127.0.0.1:$UPSTREAM_PORT/control/exact/oci-shadow")"
+    if [[ "$UPSTREAM_EXACT" != "true" ]]; then
+        echo "OCI gateway did not replay the request body byte-for-byte" >&2
+        exit 1
+    fi
+    if [[ "$(<"$response_file")" != '{"qualification":"ok"}' ]]; then
         echo "unexpected proxied response: $(<"$response_file")" >&2
         exit 1
     fi
@@ -129,7 +184,9 @@ assert_shadow_exchange() {
 }
 
 cd "$PROJECT_DIR"
-./gradlew --no-daemon ociArtifact
+if [[ "${VIGILANT_SKIP_OCI_ARTIFACT:-0}" != "1" ]]; then
+    ./gradlew --no-daemon ociArtifact
+fi
 
 ARTIFACT="$(find build/distributions -maxdepth 1 -type f -name 'vigilant-*.tar' -print -quit)"
 if [[ -z "$ARTIFACT" ]]; then
@@ -146,57 +203,31 @@ POLICY_CONFIG_ARGS=(
     --env VIGILANT_POLITICS_CONFIG=/etc/vigilant/politics.conf
     --mount "type=bind,src=$TMP_DIR/politics.conf,dst=/etc/vigilant/politics.conf,readonly"
 )
-python3 -u -c '
-import http.server
-import pathlib
-import sys
-
-body_path = pathlib.Path(sys.argv[1])
-
-class Handler(http.server.BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.path != "/health":
-            self.send_error(404)
-            return
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"ok")
-
-    def do_POST(self):
-        if self.path != "/v1/chat/completions?oci=kept":
-            self.send_error(404)
-            return
-        body = self.rfile.read(int(self.headers.get("content-length", "0")))
-        body_path.write_bytes(body)
-        response = b"{\"ok\":true}"
-        self.send_response(200)
-        self.send_header("content-type", "application/json")
-        self.send_header("content-length", str(len(response)))
-        self.end_headers()
-        self.wfile.write(response)
-
-with http.server.ThreadingHTTPServer(("0.0.0.0", 0), Handler) as server:
-    print(server.server_port, flush=True)
-    server.serve_forever()
-' "$TMP_DIR/upstream.body" >"$TMP_DIR/upstream.port" 2>"$TMP_DIR/upstream.log" &
+RUNTIME_ARGS=(
+    --env "JAVA_OPTS=$VIGILANT_QUALIFICATION_JAVA_OPTIONS"
+)
+: "${VIGILANT_QUALIFICATION_JAVA:?qualification Java executable is required}"
+: "${VIGILANT_QUALIFICATION_CLASSPATH:?qualification classpath is required}"
+: "${VIGILANT_QUALIFICATION_JAVA_OPTIONS:?qualification JVM options are required}"
+mkdir -p "$UPSTREAM_CONTROL_DIR" "$OCI_AUDIT_DIR" "$OCI_EXTERNAL_DIR" "$OCI_COLLECTOR_CONTROL_DIR"
+chmod 0777 "$OCI_AUDIT_DIR" "$OCI_EXTERNAL_DIR" "$OCI_COLLECTOR_CONTROL_DIR"
+read -r -a QUALIFICATION_JAVA_OPTIONS <<<"$VIGILANT_QUALIFICATION_JAVA_OPTIONS"
+"$VIGILANT_QUALIFICATION_JAVA" \
+    "${QUALIFICATION_JAVA_OPTIONS[@]}" \
+    -cp "$VIGILANT_QUALIFICATION_CLASSPATH" \
+    io.vigilant.durability.DurabilityQualificationUpstreamMain \
+    0 \
+    "$UPSTREAM_CONTROL_DIR" \
+    "$TMP_DIR/request.json" \
+    >"$TMP_DIR/upstream.log" 2>&1 &
 UPSTREAM_PID="$!"
 
-for _ in {1..40}; do
-    if [[ -s "$TMP_DIR/upstream.port" ]]; then
-        break
-    fi
-    sleep 0.25
-done
-UPSTREAM_PORT="$(head -n 1 "$TMP_DIR/upstream.port")"
-for _ in {1..40}; do
-    if curl --fail --silent "http://127.0.0.1:$UPSTREAM_PORT/health" >/dev/null; then
-        break
-    fi
-    sleep 0.25
-done
-curl --fail --silent "http://127.0.0.1:$UPSTREAM_PORT/health" >/dev/null
+await_path "$UPSTREAM_CONTROL_DIR/upstream.port" nonempty 40
+UPSTREAM_PORT="$(<"$UPSTREAM_CONTROL_DIR/upstream.port")"
+await_http_ok "http://127.0.0.1:$UPSTREAM_PORT/healthz" 40
 
 docker build --tag "$IMAGE_TAG" .
+IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$IMAGE_TAG")"
 
 CONTAINER_UID="$(docker run --rm --entrypoint /usr/bin/id "$IMAGE_TAG" -u)"
 if [[ "$CONTAINER_UID" == "0" ]]; then
@@ -209,7 +240,9 @@ CONTAINER_ID="$(
         --name "$CONTAINER_NAME" \
         --add-host host.docker.internal:host-gateway \
         --env "VIGILANT_UPSTREAM_URL=http://host.docker.internal:$UPSTREAM_PORT" \
+        "${RUNTIME_ARGS[@]}" \
         "${POLICY_CONFIG_ARGS[@]}" \
+        --mount "type=bind,src=$OCI_AUDIT_DIR,dst=/var/lib/vigilant/audit" \
         --publish 127.0.0.1::8080 \
         "$IMAGE_TAG"
 )"
@@ -233,8 +266,51 @@ if [[ "$STOP_EXIT_CODE" != "0" && "$STOP_EXIT_CODE" != "143" ]]; then
     echo "gateway stopped with unexpected exit code $STOP_EXIT_CODE; expected 0 or SIGTERM code 143" >&2
     exit 1
 fi
-docker rm --volumes "$CONTAINER_ID" >/dev/null
+docker rm "$CONTAINER_ID" >/dev/null
 CONTAINER_ID=""
+
+RECOVERY_CONTAINER_ID="$(
+    docker run --detach \
+        --name "$RECOVERY_CONTAINER_NAME" \
+        --add-host host.docker.internal:host-gateway \
+        --env "VIGILANT_UPSTREAM_URL=http://host.docker.internal:$UPSTREAM_PORT" \
+        "${RUNTIME_ARGS[@]}" \
+        "${POLICY_CONFIG_ARGS[@]}" \
+        --mount "type=bind,src=$OCI_AUDIT_DIR,dst=/var/lib/vigilant/audit" \
+        --publish 127.0.0.1::8080 \
+        "$IMAGE_TAG"
+)"
+RECOVERY_GATEWAY_PORT="$(
+    docker port "$RECOVERY_CONTAINER_ID" 8080/tcp | sed -E 's/.*:([0-9]+)$/\1/' | head -n 1
+)"
+await_gateway "$RECOVERY_GATEWAY_PORT"
+RECOVERED_WAL_COUNT="$(
+    docker exec "$RECOVERY_CONTAINER_ID" \
+        /bin/sh -c 'find /var/lib/vigilant/audit -maxdepth 1 -type f -name "*.wal" | wc -l' \
+        | tr -d '[:space:]'
+)"
+if [[ "$RECOVERED_WAL_COUNT" -lt 1 ]]; then
+    echo "OCI restart did not recover the persistent WAL segment" >&2
+    exit 1
+fi
+"$VIGILANT_QUALIFICATION_JAVA" \
+    "${QUALIFICATION_JAVA_OPTIONS[@]}" \
+    -cp "$VIGILANT_QUALIFICATION_CLASSPATH" \
+    io.vigilant.durability.DurabilityFakeCollectorMain \
+    "$OCI_AUDIT_DIR" \
+    "$OCI_EXTERNAL_DIR" \
+    "$OCI_COLLECTOR_CONTROL_DIR" \
+    1 \
+    >"$TMP_DIR/oci-collector.log" 2>&1 &
+COLLECTOR_PID="$!"
+await_path "$OCI_COLLECTOR_CONTROL_DIR/stored-1" present 120
+printf '%s' continue >"$OCI_COLLECTOR_CONTROL_DIR/allow-ack-1"
+await_path "$OCI_COLLECTOR_CONTROL_DIR/acked-1" present 120
+wait "$COLLECTOR_PID"
+COLLECTOR_PID=""
+docker stop --timeout 35 "$RECOVERY_CONTAINER_ID" >/dev/null
+docker rm "$RECOVERY_CONTAINER_ID" >/dev/null
+RECOVERY_CONTAINER_ID=""
 
 printf '%s\n' \
     'vigilant {' \
@@ -248,6 +324,7 @@ CONFIG_CONTAINER_ID="$(
     docker run --detach \
         --name "$CONFIG_CONTAINER_NAME" \
         --add-host host.docker.internal:host-gateway \
+        "${RUNTIME_ARGS[@]}" \
         --mount "type=bind,src=$TMP_DIR/vigilant.conf,dst=/etc/vigilant/vigilant.conf,readonly" \
         "${POLICY_CONFIG_ARGS[@]}" \
         --publish 127.0.0.1::8080 \
@@ -278,6 +355,7 @@ CONFIG_CONTAINER_ID=""
 set +e
 docker run --name "$INVALID_CONTAINER_NAME" \
     --env VIGILANT_UPSTREAM_URL=ftp://invalid.example \
+    "${RUNTIME_ARGS[@]}" \
     "${POLICY_CONFIG_ARGS[@]}" \
     "$IMAGE_TAG" >"$TMP_DIR/invalid-config.log" 2>&1
 INVALID_CONFIG_EXIT="$?"
@@ -299,6 +377,7 @@ chmod 0444 "$TMP_DIR/invalid-politics.conf"
 set +e
 docker run --name "$INVALID_POLICY_CONTAINER_NAME" \
     --env "VIGILANT_UPSTREAM_URL=http://host.docker.internal:$UPSTREAM_PORT" \
+    "${RUNTIME_ARGS[@]}" \
     --env VIGILANT_POLITICS_CONFIG=/etc/vigilant/politics.conf \
     --mount "type=bind,src=$TMP_DIR/invalid-politics.conf,dst=/etc/vigilant/politics.conf,readonly" \
     "$IMAGE_TAG" >"$TMP_DIR/invalid-policy.log" 2>&1
@@ -315,4 +394,10 @@ if grep -q 'secret-policy-value' "$TMP_DIR/invalid-policy.log"; then
 fi
 docker rm --volumes "$INVALID_POLICY_CONTAINER_NAME" >/dev/null
 
-echo "OCI smoke passed: artifact, env/file config, read-only policy, health/readiness, exact shadow forwarding, JSONL audit, non-root, invalid config, SIGTERM"
+echo "OCI_IMAGE_ID=$IMAGE_ID"
+echo "OCI_LAUNCHED=true"
+echo "OCI_FIXED_JVM_SETTINGS=true"
+echo "OCI_PERSISTENT_RESTART=true"
+echo "OCI_REAL_ARMERIA_UPSTREAM=true"
+echo "OCI_SEPARATE_COLLECTOR_PROCESS=true"
+echo "OCI smoke passed: artifact, fixed JVM, persistent audit restart, real Armeria upstream, separate Collector, env/file config, read-only policy, health/readiness, exact shadow forwarding, JSONL audit, non-root, invalid config, SIGTERM"

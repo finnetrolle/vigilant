@@ -97,6 +97,12 @@ request outcome, пока хватает `audit-max-retained-bytes`; после 
 upstream. Valid ack освобождает capacity и автоматически восстанавливает
 readiness/admission.
 
+Packaged [qualification 2026-08-31](durability-qualification-2026-08-31.md)
+подтверждает эту строку контракта: retained-capacity admission получает exact
+`503 audit_unavailable`, readiness остаётся `503`, body не demand-ится и
+upstream не вызывается. Lifecycle shutdown независимо сохраняет plain
+`503 draining` для нового traffic.
+
 Policy deadline или typed detector error отражается как decision `ERROR` с
 disposition `ALLOW`: current shadow policy не блокирует request, поэтому при
 успешной orchestration исходный body всё равно отправляется upstream.

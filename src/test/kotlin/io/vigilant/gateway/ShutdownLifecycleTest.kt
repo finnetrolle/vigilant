@@ -2,9 +2,13 @@ package io.vigilant.gateway
 
 import com.linecorp.armeria.client.WebClient
 import com.linecorp.armeria.common.HttpData
+import com.linecorp.armeria.common.HttpMethod
+import com.linecorp.armeria.common.HttpRequest
 import com.linecorp.armeria.common.HttpResponse
 import com.linecorp.armeria.common.HttpResponseWriter
 import com.linecorp.armeria.common.HttpStatus
+import com.linecorp.armeria.common.MediaType
+import com.linecorp.armeria.common.RequestHeaders
 import com.linecorp.armeria.common.ResponseHeaders
 import java.time.Duration
 import java.nio.file.Files
@@ -31,7 +35,7 @@ class ShutdownLifecycleTest {
         fixture.close()
     }
 
-    /** Active traffic drains after SIGTERM while traffic arriving during drain is rejected locally. */
+    /** Active traffic drains after SIGTERM while header-only new traffic is rejected locally. */
     @Test
     fun `shutdown drains active stream and rejects new proxy traffic`() {
         val upstreamPaths = CopyOnWriteArrayList<String>()
@@ -61,8 +65,16 @@ class ShutdownLifecycleTest {
         gateway.process.destroy()
         awaitDraining(client, gateway)
 
-        val rejected = client.chatCompletions("new request during drain").aggregate().join()
+        val rejectedRequest =
+            HttpRequest.streaming(
+                RequestHeaders.builder(HttpMethod.POST, CHAT_COMPLETIONS_PATH)
+                    .contentType(MediaType.JSON)
+                    .build(),
+            )
+        val rejected = client.execute(rejectedRequest).aggregate().join()
+        rejectedRequest.abort()
         assertEquals(HttpStatus.SERVICE_UNAVAILABLE, rejected.status())
+        assertEquals("draining", rejected.contentUtf8())
         assertEquals(
             listOf(CHAT_COMPLETIONS_PATH),
             upstreamPaths.toList(),

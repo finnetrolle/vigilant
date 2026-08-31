@@ -106,6 +106,11 @@ contiguous ack force-backed переводит segment в `EXTERNALLY_DELIVERED`
 разрешает reclaim; Collector outage оставляет records локально до retained
 bound и не добавляет synchronous delivery в request path.
 
+Packaged [qualification report](durability-qualification-2026-08-31.md)
+подтверждает exact retained-capacity `503 audit_unavailable` и отсутствие
+payload, identity, session, credentials, locators и reversible hashes в WAL,
+manifests, acks, stdout, errors и самом report.
+
 Rejected acknowledgement пишет один bounded WARN
 `event.name=audit.collector_ack_rejected` только со stable `error.code`:
 `MALFORMED_ACK`, `UNKNOWN_SEGMENT`, `DUPLICATE_ACK`, `OUT_OF_ORDER_ACK`,

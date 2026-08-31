@@ -25,10 +25,13 @@ import java.util.concurrent.atomic.AtomicBoolean
 class ReadinessService(
     private val auditStore: AuditStore,
 ) : HttpService {
-    private val ready = AtomicBoolean(true)
+    private val acceptingTraffic = AtomicBoolean(true)
 
-    /** Returns whether new ordinary traffic may still enter the gateway. */
-    fun isReady(): Boolean = ready.get() && auditStore.isAvailableForAdmission()
+    /** Returns whether lifecycle state still permits a new proxy exchange. */
+    fun isAcceptingTraffic(): Boolean = acceptingTraffic.get()
+
+    /** Returns composite probe readiness across lifecycle and mandatory audit admission. */
+    fun isReady(): Boolean = isAcceptingTraffic() && auditStore.isAvailableForAdmission()
 
     /**
      * Answers the probe locally without touching the upstream, according to the
@@ -49,6 +52,6 @@ class ReadinessService(
      * shutdown starts, before the server stops accepting connections.
      */
     fun markNotReady() {
-        ready.set(false)
+        acceptingTraffic.set(false)
     }
 }
