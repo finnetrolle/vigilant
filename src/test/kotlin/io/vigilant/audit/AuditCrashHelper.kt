@@ -30,10 +30,26 @@ fun main(arguments: Array<String>) {
             override fun afterFrameForce(sequence: Long) {
                 if (phase == CrashPhase.AFTER_FRAME_FORCE) signalAndBlock(marker, sequence, blocker)
             }
+
+            /** Stops after immutable segment rename but before ready manifest publication. */
+            override fun afterReadySegmentRename(segmentId: String) {
+                if (phase == CrashPhase.AFTER_READY_SEGMENT_RENAME) {
+                    signalAndBlock(marker, segmentId, blocker)
+                }
+            }
         }
-    val store = LocalAuditStore.open(AuditStoreSettings(directory), observer)
+    val record = crashRecord()
+    val frameBytes = AuditRecordCodec.encode(1, record, Int.MAX_VALUE).size
+    val settings =
+        AuditStoreSettings(
+            directory = directory,
+            maxEventBytes = frameBytes,
+            maxRetainedBytes = frameBytes.toLong() * 4,
+            maxSegmentBytes = frameBytes.toLong(),
+        )
+    val store = LocalAuditStore.open(settings, observer)
     val reservation = (store.reserve() as AuditReservationResult.Granted).reservation
-    val submission = reservation.submit(crashRecord()) as AuditSubmissionResult.Accepted
+    val submission = reservation.submit(record) as AuditSubmissionResult.Accepted
     submission.durable.join()
 }
 
@@ -42,11 +58,20 @@ private enum class CrashPhase {
     BEFORE_FRAME_WRITE,
     AFTER_FRAME_WRITE,
     AFTER_FRAME_FORCE,
+
+    /** Immutable WAL rename completed but ready-manifest publication has not started. */
+    AFTER_READY_SEGMENT_RENAME,
 }
 
 /** Publishes one path-safe marker after the target boundary and blocks forever. */
 private fun signalAndBlock(marker: Path, sequence: Long, blocker: CountDownLatch) {
     Files.writeString(marker, sequence.toString())
+    blocker.await()
+}
+
+/** Publishes one path-safe segment marker after the target boundary and blocks forever. */
+private fun signalAndBlock(marker: Path, segmentId: String, blocker: CountDownLatch) {
+    Files.writeString(marker, segmentId)
     blocker.await()
 }
 

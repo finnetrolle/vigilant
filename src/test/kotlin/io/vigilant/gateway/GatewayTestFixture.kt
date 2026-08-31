@@ -1,5 +1,7 @@
 package io.vigilant.gateway
 
+import io.vigilant.testing.awaitUntil as awaitCondition
+
 import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.AppenderBase
@@ -138,14 +140,9 @@ internal class GatewayTestFixture {
         appender.stop()
     }
 
-    /**
-     * Polls [condition] every 20 ms until it holds or [timeout] elapses;
-     * returns the final value of [condition].
-     */
+    /** Polls [condition] at the shared bounded interval and returns its value by [timeout]. */
     fun awaitUntil(timeout: Duration, condition: () -> Boolean): Boolean {
-        val deadline = System.nanoTime() + timeout.toNanos()
-        while (!condition() && System.nanoTime() < deadline) Thread.sleep(20)
-        return condition()
+        return awaitCondition(timeout, condition)
     }
 
     /**

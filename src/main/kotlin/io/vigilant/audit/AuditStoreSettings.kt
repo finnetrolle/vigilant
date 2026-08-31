@@ -9,7 +9,7 @@ import java.time.Duration
  * @property directory required persistent directory exclusively owned by one process.
  * @property maxEventBytes maximum encoded framed record size.
  * @property maxPendingEvents maximum admitted reservations not yet durably completed.
- * @property maxRetainedBytes maximum active and sealed WAL bytes retained locally.
+ * @property maxRetainedBytes maximum active/ready WAL and manifest bytes retained locally.
  * @property maxSegmentBytes maximum bytes in one WAL segment.
  * @property maxSegmentAge maximum age of a non-empty active segment before sealing.
  */

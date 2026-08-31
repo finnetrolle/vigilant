@@ -8,6 +8,7 @@ vigilant {
   audit-directory = "./.vigilant-audit"
   audit-max-event-bytes = 65536
   audit-max-pending-events = 128
+  # Active/ready WAL и bounded ready manifests до valid contiguous Collector ack.
   audit-max-retained-bytes = 1073741824
   audit-max-segment-bytes = 16777216
   audit-max-segment-age = 5s

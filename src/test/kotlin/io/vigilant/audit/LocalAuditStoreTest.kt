@@ -1,5 +1,6 @@
 package io.vigilant.audit
 
+import io.vigilant.testing.awaitUntil
 import java.io.IOException
 import java.nio.file.Files
 import java.time.Duration
@@ -149,16 +150,32 @@ class LocalAuditStoreTest {
         }
     }
 
-    /** Reserves worst-case framed bytes before ownership transfer and releases them on cancel. */
+    /** Reserves worst-case framed and ready-manifest bytes before ownership transfer. */
     @Test
     fun `retained byte capacity is reserved before record creation`() {
-        val directory = Files.createTempDirectory("vigilant-audit-retained-reservation")
+        val rejectedDirectory = Files.createTempDirectory("vigilant-audit-retained-rejected")
         LocalAuditStore.open(
             AuditStoreSettings(
-                directory = directory,
+                directory = rejectedDirectory,
                 maxEventBytes = 1_024,
                 maxPendingEvents = 4,
-                maxRetainedBytes = 1_032,
+                maxRetainedBytes = 1_535,
+                maxSegmentBytes = 1_024,
+            ),
+        ).use { store ->
+            assertEquals(
+                AuditStoreOutcomeCode.CAPACITY_EXHAUSTED,
+                assertIs<AuditReservationResult.Rejected>(store.reserve()).code,
+            )
+        }
+
+        val exactDirectory = Files.createTempDirectory("vigilant-audit-retained-exact")
+        LocalAuditStore.open(
+            AuditStoreSettings(
+                directory = exactDirectory,
+                maxEventBytes = 1_024,
+                maxPendingEvents = 4,
+                maxRetainedBytes = 1_536,
                 maxSegmentBytes = 1_024,
             ),
         ).use { store ->
@@ -219,12 +236,14 @@ class LocalAuditStoreTest {
         }
     }
 
-    /** Seals a non-empty active segment after the configured age without another append. */
+    /** Publishes an idle segment within its age bound plus explicit scheduling tolerance. */
     @Test
     fun `segment age seals idle active segment`() {
         val directory = Files.createTempDirectory("vigilant-audit-age-seal")
         val settings = AuditStoreSettings(directory = directory, maxSegmentAge = Duration.ofMillis(100))
+        val publicationBound = settings.maxSegmentAge.plus(AGE_SEAL_SCHEDULING_TOLERANCE)
         LocalAuditStore.open(settings).use { store ->
+            val appendStartedAt = System.nanoTime()
             val reservation = assertIs<AuditReservationResult.Granted>(store.reserve()).reservation
             val accepted =
                 assertIs<AuditSubmissionResult.Accepted>(
@@ -232,12 +251,19 @@ class LocalAuditStoreTest {
                 )
             assertIs<AuditAppendResult.Durable>(accepted.durable.get(5, TimeUnit.SECONDS))
 
-            assertTrue(
-                awaitSegmentState(directory, Duration.ofSeconds(2)) { names ->
+            val remainingPublicationNanos =
+                (publicationBound.toNanos() - (System.nanoTime() - appendStartedAt)).coerceAtLeast(0)
+            val publishedWithinBound =
+                awaitSegmentState(directory, Duration.ofNanos(remainingPublicationNanos)) { names ->
                     names.count { name -> name.endsWith(".wal") } == 1 &&
+                        names.count { name -> name.endsWith(".ready.json") } == 1 &&
                         names.none { name -> name.endsWith(".active") }
-                },
-                "active segment was not sealed by age; files=${segmentNames(directory)}",
+                }
+            val publicationElapsed = Duration.ofNanos(System.nanoTime() - appendStartedAt)
+            assertTrue(
+                publishedWithinBound && publicationElapsed <= publicationBound,
+                "active segment exceeded age plus scheduling tolerance; " +
+                    "elapsed=$publicationElapsed, bound=$publicationBound, files=${segmentNames(directory)}",
             )
         }
     }
@@ -358,33 +384,29 @@ class LocalAuditStoreTest {
         directory: java.nio.file.Path,
         timeout: Duration,
         predicate: (List<String>) -> Boolean,
-    ): Boolean {
-        val deadline = System.nanoTime() + timeout.toNanos()
-        while (System.nanoTime() < deadline) {
-            if (predicate(segmentNames(directory))) return true
-            Thread.sleep(10)
-        }
-        return predicate(segmentNames(directory))
-    }
+    ): Boolean = awaitUntil(timeout) { predicate(segmentNames(directory)) }
 
     /** Waits until no startup worker remains to own an unpublished initialization result. */
-    private fun awaitAuditWorkerExit(timeout: Duration): Boolean {
-        val deadline = System.nanoTime() + timeout.toNanos()
-        while (System.nanoTime() < deadline) {
-            if (Thread.getAllStackTraces().keys.none { thread -> thread.name.startsWith("vigilant-audit-store") }) {
-                return true
-            }
-            Thread.sleep(10)
+    private fun awaitAuditWorkerExit(timeout: Duration): Boolean =
+        awaitUntil(timeout) {
+            Thread.getAllStackTraces().keys.none { thread -> thread.name.startsWith("vigilant-audit-store") }
         }
-        return Thread.getAllStackTraces().keys.none { thread -> thread.name.startsWith("vigilant-audit-store") }
-    }
 
     /** Returns deterministic visible segment filenames for a failure diagnostic. */
     private fun segmentNames(directory: java.nio.file.Path): List<String> =
         Files.list(directory).use { paths ->
             paths.map { path -> path.fileName.toString() }
-                .filter { name -> name.endsWith(".active") || name.endsWith(".wal") }
+                .filter { name ->
+                    name.endsWith(".active") || name.endsWith(".wal") ||
+                        name.endsWith(".ready.json")
+                }
                 .sorted()
                 .toList()
         }
+
+    /** Timing bounds used by age-seal scheduling assertions. */
+    private companion object {
+        /** Bounded host-scheduling allowance beyond the configured segment age. */
+        val AGE_SEAL_SCHEDULING_TOLERANCE: Duration = Duration.ofSeconds(1)
+    }
 }

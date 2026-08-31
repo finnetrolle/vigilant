@@ -1,6 +1,6 @@
 # VIG-22-03: Acknowledged Collector handoff и reclaim
 
-**Статус:** Ready for implementation
+**Статус:** Done
 **Epic:** [EPIC-22](../../epics/epic_22_durable_minimum_audit_trail.md)
 **Ветка:** External-delivery tracer bullet > immutable segment acknowledgement
 **Зависит от:** [VIG-22-01](issue_22_01_local_durable_audit_store.md)
@@ -22,42 +22,59 @@ Collector outage не блокирует requests до исчерпания reta
 
 ## Критерии готовности
 
-- [ ] Active segment публикуется только после successful force and seal через
+- [x] Active segment публикуется только после successful force and seal через
   atomic rename. Ready manifest содержит version, segment ID, first/last
   sequence, record count, byte size и digest без record-derived preview.
-- [ ] Segment seal срабатывает для exact max bytes, max age и graceful close;
+- [x] Segment seal срабатывает для exact max bytes, max age и graceful close;
   low-volume record становится доступна Collector не позднее age bound плюс
   bounded scheduling tolerance.
-- [ ] Documented file handoff является vendor-neutral public adapter:
+- [x] Documented file handoff является vendor-neutral public adapter:
   Collector читает ready segments в sequence order и не изменяет WAL files.
-- [ ] Ack публикуется атомарно и содержит version, segment ID, terminal
+- [x] Ack публикуется атомарно и содержит version, segment ID, terminal
   sequence и digest. Ack означает, что весь segment durably retained external
   consumer; stdout write или network send без destination acknowledgement не
   считается delivery.
-- [ ] Vigilant принимает только valid contiguous ack prefix. Unknown,
+- [x] Vigilant принимает только valid contiguous ack prefix. Unknown,
   duplicate, out-of-order, missing-segment или digest-mismatched ack не
   продвигает reclaim и создаёт bounded safe operational error.
-- [ ] Valid ack переводит все records segment в `EXTERNALLY_DELIVERED`, после
+- [x] Valid ack переводит все records segment в `EXTERNALLY_DELIVERED`, после
   чего segment bytes и ack metadata удаляются идемпотентно. Crash до/после ack
   и до/после deletion восстанавливает один эквивалентный state без потери
   unacknowledged records.
-- [ ] Fake Collector crash после external store, но до ack, приводит к
+- [x] Fake Collector crash после external store, но до ack, приводит к
   повторной delivery того же event ID. Contract явно at-least-once; consumer
   deduplicate-ит по event ID.
-- [ ] Collector outage не меняет request outcome, пока audit store имеет
+- [x] Collector outage не меняет request outcome, пока audit store имеет
   capacity. При достижении retained bound request path получает typed capacity
   failure и применяет `audit_unavailable` из VIG-22-02.
-- [ ] Ack watcher, seal и reclaim выполняются на store-owned blocking-safe
+- [x] Ack watcher, seal и reclaim выполняются на store-owned blocking-safe
   worker и не добавляют network client или file I/O на Netty event loop.
-- [ ] Directory permissions, volume encryption, Collector credentials,
+- [x] Directory permissions, volume encryption, Collector credentials,
   destination retention/queryability и disaster recovery документированы как
   deployment/Collector responsibility.
-- [ ] Tests используют только synthetic safe records и проверяют отсутствие
+- [x] Tests используют только synthetic safe records и проверяют отсутствие
   payload, identity, credentials, locators и reversible hashes в manifest,
   ack, errors и filenames.
-- [ ] Для всех добавленных и изменённых Kotlin/Java declarations, callbacks и
+- [x] Для всех добавленных и изменённых Kotlin/Java declarations, callbacks и
   test methods написан актуальный KDoc/Javadoc.
-- [ ] Focused segment/ack tests, fake-Collector process suite и
+- [x] Focused segment/ack tests, fake-Collector process suite и
+  `./gradlew build` проходят.
+
+## Evidence
+
+- `AuditSegmentHandoffTest` покрывает exact schema и filenames, force/seal для
+  close, exact byte и age boundaries, worker ownership, contiguous reclaim,
+  invalid acknowledgement matrix, self-verification и safe error metadata.
+- `LocalAuditStoreCrashTest` причинно завершает процесс после ready rename,
+  forced reclaimed high-water и segment deletion, затем проверяет
+  эквивалентное восстановленное состояние без потери unacknowledged records.
+- `AuditCollectorProcessTest` использует отдельный fake Collector process,
+  crash после durable external store до ack, повторную delivery того же event
+  ID, consumer deduplication и последующий acknowledged reclaim.
+- `PiiShadowProxyServiceTest` с real Armeria доказывает, что Collector outage
+  не меняет outcome до retained bound, capacity exhaustion даёт
+  `audit_unavailable`, а valid ack восстанавливает admission.
+- Focused audit/real-Armeria suite, project validators и полный
   `./gradlew build` проходят.
 
 ## Test/demo seam

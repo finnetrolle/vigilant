@@ -91,7 +91,8 @@ external delivery. Минимальная guarantee - application-owned WAL reco
 supported-request response.
 
 Текущий runtime реализует local durable стадии `RESERVED`, `DECISION_CREATED`,
-`STORE_OWNED` и `DURABLY_RETAINED`. Application-owned segmented WAL использует
+`STORE_OWNED`, `DURABLY_RETAINED` и `EXTERNALLY_DELIVERED`.
+Application-owned segmented WAL использует
 versioned JSON, length/checksum frame, persistent sequence, exclusive directory
 lock и `force(true)` до upstream handoff или original supported-request
 response. Directory и bounds перечислены в
@@ -99,9 +100,18 @@ response. Directory и bounds перечислены в
 
 `CAPACITY_EXHAUSTED`, `EVENT_TOO_LARGE`, `IO_FAILURE` и `CLOSED` дают только
 `503 {"error":"audit_unavailable"}` и переводят readiness в `503`, пока store
-не восстановил admission. External delivery, Collector acknowledgement и
-segment reclaim остаются следующими задачами
-[EPIC-22](../spec/epics/epic_22_durable_minimum_audit_trail.md).
+не восстановил admission. External Collector асинхронно читает immutable ready
+segments по [file handoff contract](audit-collector-file-handoff.md). Exact
+contiguous ack force-backed переводит segment в `EXTERNALLY_DELIVERED` и
+разрешает reclaim; Collector outage оставляет records локально до retained
+bound и не добавляет synchronous delivery в request path.
+
+Rejected acknowledgement пишет один bounded WARN
+`event.name=audit.collector_ack_rejected` только со stable `error.code`:
+`MALFORMED_ACK`, `UNKNOWN_SEGMENT`, `DUPLICATE_ACK`, `OUT_OF_ORDER_ACK`,
+`MISSING_SEGMENT`, `TERMINAL_SEQUENCE_MISMATCH`, `DIGEST_MISMATCH` или
+`SEGMENT_INTEGRITY_MISMATCH`. Event не содержит filename, path, manifest/ack
+contents, record fields или raw exception.
 
 ## Upstream failure event
 

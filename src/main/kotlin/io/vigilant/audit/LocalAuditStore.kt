@@ -7,7 +7,6 @@ import java.nio.channels.FileLock
 import java.nio.channels.OverlappingFileLockException
 import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutionException
@@ -18,6 +17,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
+import org.slf4j.LoggerFactory
 
 /**
  * Bounded application-owned segmented WAL with force-backed acknowledgement and recovery.
@@ -39,14 +39,22 @@ class LocalAuditStore private constructor(
     private var retainedBytes = initialized.retainedBytes
     private var nextSequence = initialized.nextSequence
     private val sequenceChannel = initialized.sequenceChannel
+    /** Force-backed externally-delivered high-water metadata channel. */
+    private val reclaimedSequenceChannel = initialized.reclaimedSequenceChannel
+
+    /** Highest persistent sequence durably delivered to the external Collector. */
+    private var reclaimedThrough = initialized.reclaimedThrough
     private var activeSegmentPath = initialized.activeSegmentPath
     private var activeSegmentChannel = initialized.activeSegmentChannel
     private val lockChannel = initialized.lockChannel
     private val directoryLock = initialized.directoryLock
     private val closed = AtomicBoolean()
+    /** Bounded fingerprints of unchanged Collector errors already reported. */
+    private val reportedCollectorErrors = LinkedHashSet<String>()
 
     init {
         activeSegmentPath?.let { path -> scheduleAgeSeal(path) }
+        scheduleAcknowledgementWatch()
     }
 
     /** Atomically reserves one pending event and its worst-case framed bytes. */
@@ -86,13 +94,22 @@ class LocalAuditStore private constructor(
                 var failure: Throwable? = null
                 try {
                     sealActiveSegment()
+                    processAcknowledgements()
                     sequenceChannel.force(true)
+                    reclaimedSequenceChannel.force(true)
                 } catch (caught: Throwable) {
                     failure = caught
                 }
                 closeAuditResources(
                     primaryFailure = failure,
-                    resources = listOf(activeSegmentChannel, sequenceChannel, directoryLock, lockChannel),
+                    resources =
+                        listOf(
+                            activeSegmentChannel,
+                            sequenceChannel,
+                            reclaimedSequenceChannel,
+                            directoryLock,
+                            lockChannel,
+                        ),
                 )?.let { terminalFailure -> throw terminalFailure }
             }.get(CLOSE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         } catch (_: Exception) {
@@ -106,7 +123,10 @@ class LocalAuditStore private constructor(
     /** Returns whether one more worst-case reservation fits every exact configured bound. */
     private fun hasReservationCapacityLocked(): Boolean =
         pendingEvents < settings.maxPendingEvents &&
-            retainedBytes + (pendingEvents + 1L) * settings.maxEventBytes <= settings.maxRetainedBytes
+            retainedBytes +
+            (pendingEvents + 1L) *
+            (settings.maxEventBytes + AuditSegmentHandoff.MAX_MANIFEST_BYTES) <=
+            settings.maxRetainedBytes
 
     /** Submits one accepted immutable record to the single writer. */
     private fun submit(record: AuditRecord): AuditSubmissionResult {
@@ -129,13 +149,14 @@ class LocalAuditStore private constructor(
             observer.afterSequenceForce(sequence)
             ensureWritableSegment(sequence, frame.size)
             val channel = checkNotNull(activeSegmentChannel)
-            writeFully(channel, ByteBuffer.wrap(frame), channel.size())
+            writeAuditFully(channel, ByteBuffer.wrap(frame), channel.size())
             observer.afterFrameWrite(sequence)
             channel.force(true)
             observer.afterFrameForce(sequence)
             synchronized(stateLock) {
                 retainedBytes += frame.size
             }
+            if (channel.size() == settings.maxSegmentBytes) sealActiveSegment()
             nextSequence = sequence + 1
             durable.complete(AuditAppendResult.Durable(AuditAcknowledgement(sequence, record.eventId)))
         } catch (_: AuditRecordTooLargeException) {
@@ -152,7 +173,7 @@ class LocalAuditStore private constructor(
     /** Persists the exclusive next-sequence high-water mark before writing the record frame. */
     private fun persistNextSequence(value: Long) {
         val buffer = ByteBuffer.allocate(Long.SIZE_BYTES).putLong(value).flip()
-        writeFully(sequenceChannel, buffer, 0)
+        writeAuditFully(sequenceChannel, buffer, 0)
         sequenceChannel.force(true)
     }
 
@@ -172,6 +193,9 @@ class LocalAuditStore private constructor(
                     StandardOpenOption.READ,
                     StandardOpenOption.WRITE,
                 )
+            synchronized(stateLock) {
+                retainedBytes += AuditSegmentHandoff.MAX_MANIFEST_BYTES
+            }
             scheduleAgeSeal(path)
         }
     }
@@ -193,14 +217,181 @@ class LocalAuditStore private constructor(
         )
     }
 
+    /** Polls atomically published acknowledgements on the same file-owned worker. */
+    private fun scheduleAcknowledgementWatch() {
+        worker.scheduleWithFixedDelay(
+            {
+                if (!closed.get()) {
+                    try {
+                        processAcknowledgements()
+                    } catch (_: Exception) {
+                        synchronized(stateLock) { healthy = false }
+                    }
+                }
+            },
+            0,
+            ACK_WATCH_INTERVAL_MILLIS,
+            TimeUnit.MILLISECONDS,
+        )
+    }
+
+    /** Accepts the oldest exact acknowledgement prefix and reclaims its local files. */
+    private fun processAcknowledgements() {
+        while (processOldestAcknowledgement()) {
+            // Continue only while the contiguous prefix advanced.
+        }
+    }
+
+    /** Processes one oldest ready segment and returns whether another prefix may now advance. */
+    @Suppress("ReturnCount")
+    private fun processOldestAcknowledgement(): Boolean {
+        val manifestPaths = listReadyManifestPaths(settings.directory)
+        val manifestPath = manifestPaths.firstOrNull()
+        if (manifestPath == null) {
+            reportUnmatchedAcknowledgements(emptySet())
+            return false
+        }
+        val manifest = AuditSegmentHandoff.readManifest(manifestPath)
+        val acknowledgementPath =
+            AuditSegmentHandoff.acknowledgementPath(settings.directory, manifest.segmentId)
+        if (!Files.exists(acknowledgementPath)) {
+            val laterSegmentIds =
+                manifestPaths.drop(1).map { path -> AuditSegmentHandoff.readManifest(path).segmentId }.toSet()
+            reportUnmatchedAcknowledgements(laterSegmentIds)
+            return false
+        }
+        val acknowledgement = readAcknowledgementOrReport(acknowledgementPath) ?: return false
+        val error = acknowledgementError(acknowledgement, manifest)
+        if (error != null) {
+            reportCollectorError(error, acknowledgementPath)
+            return false
+        }
+        return reclaim(manifestPath, manifest, acknowledgementPath)
+    }
+
+    /** Reports malformed, duplicate, unknown, and non-prefix acknowledgements without reclaim. */
+    private fun reportUnmatchedAcknowledgements(laterSegmentIds: Set<String>) {
+        var deletedDuplicate = false
+        listAcknowledgementPaths(settings.directory).forEach { acknowledgementPath ->
+            val acknowledgement = readAcknowledgementOrReport(acknowledgementPath) ?: return@forEach
+            val code =
+                when {
+                    acknowledgement.terminalSequence <= reclaimedThrough -> AuditCollectorErrorCode.DUPLICATE_ACK
+                    acknowledgement.segmentId in laterSegmentIds -> AuditCollectorErrorCode.OUT_OF_ORDER_ACK
+                    else -> AuditCollectorErrorCode.UNKNOWN_SEGMENT
+                }
+            reportCollectorError(code, acknowledgementPath)
+            if (code == AuditCollectorErrorCode.DUPLICATE_ACK) {
+                Files.deleteIfExists(acknowledgementPath)
+                deletedDuplicate = true
+            }
+        }
+        if (deletedDuplicate) forceAuditDirectory(settings.directory)
+    }
+
+    /** Decodes one bounded acknowledgement or publishes its stable malformed code. */
+    private fun readAcknowledgementOrReport(path: Path): AuditSegmentAcknowledgement? =
+        try {
+            AuditSegmentHandoff.readAcknowledgement(path)
+        } catch (_: InvalidAuditCollectorMetadataException) {
+            reportCollectorError(AuditCollectorErrorCode.MALFORMED_ACK, path)
+            null
+        }
+
+    /** Returns the exact semantic mismatch that prevents one acknowledgement from advancing. */
+    private fun acknowledgementError(
+        acknowledgement: AuditSegmentAcknowledgement,
+        manifest: AuditSegmentManifest,
+    ): AuditCollectorErrorCode? =
+        when {
+            acknowledgement.segmentId != manifest.segmentId -> AuditCollectorErrorCode.UNKNOWN_SEGMENT
+            acknowledgement.terminalSequence != manifest.lastSequence ->
+                AuditCollectorErrorCode.TERMINAL_SEQUENCE_MISMATCH
+            acknowledgement.digest != manifest.digest -> AuditCollectorErrorCode.DIGEST_MISMATCH
+            else -> null
+        }
+
+    /** Persists EXTERNALLY_DELIVERED and removes one complete immutable segment idempotently. */
+    private fun reclaim(
+        manifestPath: Path,
+        manifest: AuditSegmentManifest,
+        acknowledgementPath: Path,
+    ): Boolean {
+        val segmentPath = AuditSegmentHandoff.segmentPath(settings.directory, manifest.segmentId)
+        val error =
+            when {
+                !Files.isRegularFile(segmentPath) -> AuditCollectorErrorCode.MISSING_SEGMENT
+                !hasSegmentIntegrity(segmentPath, manifest) ->
+                    AuditCollectorErrorCode.SEGMENT_INTEGRITY_MISMATCH
+                else -> null
+            }
+        return if (error != null) {
+            reportCollectorError(error, acknowledgementPath)
+            synchronized(stateLock) { healthy = false }
+            false
+        } else {
+            persistReclaimedThrough(manifest)
+            val removedBytes = Files.size(segmentPath) + Files.size(manifestPath)
+            Files.delete(segmentPath)
+            observer.afterReclaimedSegmentDelete(manifest.segmentId)
+            Files.delete(manifestPath)
+            Files.deleteIfExists(acknowledgementPath)
+            forceAuditDirectory(settings.directory)
+            synchronized(stateLock) { retainedBytes -= removedBytes }
+            true
+        }
+    }
+
+    /** Recomputes exact immutable segment metadata before allowing destructive reclaim. */
+    private fun hasSegmentIntegrity(segmentPath: Path, manifest: AuditSegmentManifest): Boolean =
+        try {
+            AuditSegmentHandoff.inspect(segmentPath, settings.maxEventBytes) == manifest
+        } catch (_: Exception) {
+            false
+        }
+
+    /** Publishes each unchanged invalid acknowledgement at most once with safe bounded fields. */
+    private fun reportCollectorError(code: AuditCollectorErrorCode, acknowledgementPath: Path) {
+        val size = runCatching { Files.size(acknowledgementPath) }.getOrDefault(-1L)
+        val modified =
+            runCatching { Files.getLastModifiedTime(acknowledgementPath).toMillis() }.getOrDefault(-1L)
+        val fingerprint =
+            "$code:${acknowledgementPath.fileName}:$size:$modified"
+        if (!reportedCollectorErrors.add(fingerprint)) return
+        while (reportedCollectorErrors.size > MAX_REPORTED_COLLECTOR_ERRORS) {
+            reportedCollectorErrors.remove(reportedCollectorErrors.first())
+        }
+        observer.afterCollectorError(code)
+        COLLECTOR_LOGGER.atWarn()
+            .addKeyValue("event.name", "audit.collector_ack_rejected")
+            .addKeyValue("error.code", code.name)
+            .log("Collector acknowledgement did not advance audit reclaim")
+    }
+
+    /** Forces the monotonic externally-delivered prefix before any reclaim deletion. */
+    private fun persistReclaimedThrough(manifest: AuditSegmentManifest) {
+        check(manifest.lastSequence > reclaimedThrough)
+        val buffer = ByteBuffer.allocate(Long.SIZE_BYTES).putLong(manifest.lastSequence).flip()
+        writeAuditFully(reclaimedSequenceChannel, buffer, 0)
+        reclaimedSequenceChannel.force(true)
+        reclaimedThrough = manifest.lastSequence
+        observer.afterReclaimedSequenceForce(manifest.segmentId, manifest.lastSequence)
+    }
+
     /** Forces, closes, and atomically renames one non-empty active segment. */
     private fun sealActiveSegment() {
         val path = activeSegmentPath ?: return
         val channel = activeSegmentChannel ?: return
         channel.force(true)
         channel.close()
-        val sealed = replaceSuffix(path, ACTIVE_SUFFIX, SEALED_SUFFIX)
-        Files.move(path, sealed, StandardCopyOption.ATOMIC_MOVE)
+        val manifest =
+            AuditSegmentHandoff.publish(path, settings.maxEventBytes) { segmentId ->
+                observer.afterReadySegmentRename(segmentId)
+            }
+        val manifestBytes = Files.size(AuditSegmentHandoff.manifestPath(settings.directory, manifest.segmentId))
+        synchronized(stateLock) {
+            retainedBytes += manifestBytes - AuditSegmentHandoff.MAX_MANIFEST_BYTES
+        }
         activeSegmentPath = null
         activeSegmentChannel = null
     }
@@ -279,44 +470,112 @@ class LocalAuditStore private constructor(
             val lockChannel = openLockChannel(settings.directory)
             val directoryLock = acquireDirectoryLock(lockChannel)
             var sequenceChannel: FileChannel? = null
+            var reclaimedSequenceChannel: FileChannel? = null
             var activeChannel: FileChannel? = null
             try {
                 val openedSequenceChannel = openSequenceChannel(settings.directory)
                 sequenceChannel = openedSequenceChannel
-                val segmentPaths = listSegmentPaths(settings.directory)
-                val activePaths = segmentPaths.filter { path -> path.fileName.toString().endsWith(ACTIVE_SUFFIX) }
-                require(activePaths.size <= 1) { AUDIT_RECOVERY_FAILED }
-                val recovered = segmentPaths.flatMap { path -> recoverSegment(path, settings.maxEventBytes) }
-                require(recovered.map(StoredAuditRecord::sequence).distinct().size == recovered.size) {
-                    AUDIT_RECOVERY_FAILED
-                }
-                val metadataNext = readOrInitializeNextSequence(openedSequenceChannel)
-                val recoveredNext = (recovered.maxOfOrNull(StoredAuditRecord::sequence) ?: 0L) + 1L
-                val nextSequence = maxOf(metadataNext, recoveredNext)
-                if (nextSequence != metadataNext) persistInitialNextSequence(openedSequenceChannel, nextSequence)
-                val retainedBytes = openedSequenceChannel.size() + segmentPaths.sumOf { path -> Files.size(path) }
-                require(retainedBytes <= settings.maxRetainedBytes) { "Audit retained-byte bound is exhausted" }
-                val activePath = activePaths.singleOrNull()
-                val openedActiveChannel = activePath?.let(::openActiveSegment)
+                val openedReclaimedSequenceChannel = openReclaimedSequenceChannel(settings.directory)
+                reclaimedSequenceChannel = openedReclaimedSequenceChannel
+                val recoveredState =
+                    recoverPersistentState(
+                        settings,
+                        openedSequenceChannel,
+                        openedReclaimedSequenceChannel,
+                    )
+                observer.afterRecovery(java.util.List.copyOf(recoveredState.records))
+                val openedActiveChannel = recoveredState.activePath?.let(::openActiveSegment)
                 activeChannel = openedActiveChannel
-                observer.afterRecovery(java.util.List.copyOf(recovered.sortedBy(StoredAuditRecord::sequence)))
                 return InitializedStore(
                     lockChannel = lockChannel,
                     directoryLock = directoryLock,
                     sequenceChannel = openedSequenceChannel,
-                    activeSegmentPath = activePath,
+                    reclaimedSequenceChannel = openedReclaimedSequenceChannel,
+                    activeSegmentPath = recoveredState.activePath,
                     activeSegmentChannel = openedActiveChannel,
-                    nextSequence = nextSequence,
-                    retainedBytes = retainedBytes,
+                    nextSequence = recoveredState.nextSequence,
+                    retainedBytes = recoveredState.retainedBytes,
+                    reclaimedThrough = recoveredState.reclaimedThrough,
                 )
             } catch (failure: Throwable) {
                 closeAuditResources(
                     primaryFailure = failure,
-                    resources = listOf(activeChannel, sequenceChannel, directoryLock, lockChannel),
+                    resources =
+                        listOf(
+                            activeChannel,
+                            sequenceChannel,
+                            reclaimedSequenceChannel,
+                            directoryLock,
+                            lockChannel,
+                        ),
                 )
                 throw failure
             }
         }
+
+        /** Reconciles metadata, discards an empty active file, and returns valid local state. */
+        private fun recoverPersistentState(
+            settings: AuditStoreSettings,
+            sequenceChannel: FileChannel,
+            reclaimedSequenceChannel: FileChannel,
+        ): RecoveredPersistentState {
+            val metadataNext = readOrInitializeNextSequence(sequenceChannel)
+            val reclaimedThrough = readOrInitializeReclaimedThrough(reclaimedSequenceChannel)
+            listSegmentPaths(settings.directory)
+                .filter { path -> path.fileName.toString().endsWith(READY_SEGMENT_SUFFIX) }
+                .forEach { path -> AuditSegmentHandoff.ensureReadyManifest(path, settings.maxEventBytes) }
+            reconcileReclaimedFiles(settings.directory, reclaimedThrough)
+            val segmentPaths = listSegmentPaths(settings.directory)
+            val activePaths = segmentPaths.filter { path -> path.fileName.toString().endsWith(ACTIVE_SUFFIX) }
+            require(activePaths.size <= 1) { AUDIT_RECOVERY_FAILED }
+            val recovered = segmentPaths.flatMap { path -> recoverSegment(path, settings.maxEventBytes) }
+            require(recovered.map(StoredAuditRecord::sequence).distinct().size == recovered.size) {
+                AUDIT_RECOVERY_FAILED
+            }
+            require(recovered.all { record -> record.sequence > reclaimedThrough }) { AUDIT_RECOVERY_FAILED }
+            val recoveredActivePath = activePaths.singleOrNull()
+            val activePath = recoveredActivePath?.takeUnless { path -> Files.size(path) == 0L }
+            if (recoveredActivePath != null && activePath == null) {
+                Files.delete(recoveredActivePath)
+                forceAuditDirectory(settings.directory)
+            }
+            val retainedSegmentPaths =
+                segmentPaths.filterNot { path -> path == recoveredActivePath && activePath == null }
+            val recoveredNext = (recovered.maxOfOrNull(StoredAuditRecord::sequence) ?: 0L) + 1L
+            val nextSequence = maxOf(metadataNext, recoveredNext, reclaimedThrough + 1L)
+            if (nextSequence != metadataNext) persistInitialNextSequence(sequenceChannel, nextSequence)
+            val manifestPaths = listReadyManifestPaths(settings.directory)
+            requireReadySegments(settings.directory, manifestPaths)
+            val retainedBytes = retainedBytes(retainedSegmentPaths, manifestPaths, activePath != null)
+            require(retainedBytes <= settings.maxRetainedBytes) { "Audit retained-byte bound is exhausted" }
+            return RecoveredPersistentState(
+                activePath = activePath,
+                nextSequence = nextSequence,
+                retainedBytes = retainedBytes,
+                reclaimedThrough = reclaimedThrough,
+                records = recovered.sortedBy(StoredAuditRecord::sequence),
+            )
+        }
+
+        /** Requires every remaining ready manifest to have its immutable WAL segment. */
+        private fun requireReadySegments(directory: Path, manifestPaths: List<Path>) {
+            require(
+                manifestPaths.all { path ->
+                    val manifest = AuditSegmentHandoff.readManifest(path)
+                    Files.isRegularFile(AuditSegmentHandoff.segmentPath(directory, manifest.segmentId))
+                },
+            ) { AUDIT_RECOVERY_FAILED }
+        }
+
+        /** Calculates exact retained WAL and manifest bytes plus one active manifest reserve. */
+        private fun retainedBytes(
+            segmentPaths: List<Path>,
+            manifestPaths: List<Path>,
+            hasActiveSegment: Boolean,
+        ): Long =
+            segmentPaths.sumOf { path -> Files.size(path) } +
+                manifestPaths.sumOf { path -> Files.size(path) } +
+                if (hasActiveSegment) AuditSegmentHandoff.MAX_MANIFEST_BYTES else 0
 
         /** Opens the private lock file without exposing its path in failures. */
         private fun openLockChannel(directory: Path): FileChannel =
@@ -357,13 +616,64 @@ class LocalAuditStore private constructor(
                 StandardOpenOption.WRITE,
             )
 
+        /** Opens the fixed-size persistent externally-delivered high-water metadata file. */
+        private fun openReclaimedSequenceChannel(directory: Path): FileChannel =
+            FileChannel.open(
+                directory.resolve(RECLAIMED_SEQUENCE_FILE),
+                StandardOpenOption.CREATE,
+                StandardOpenOption.READ,
+                StandardOpenOption.WRITE,
+            )
+
+        /** Reads or initializes the force-backed externally-delivered high-water mark. */
+        @Suppress("ThrowsCount")
+        private fun readOrInitializeReclaimedThrough(channel: FileChannel): Long {
+            if (channel.size() == 0L) persistInitialNextSequence(channel, 0L)
+            if (channel.size() != Long.SIZE_BYTES.toLong()) throw IOException(INVALID_SEQUENCE_METADATA)
+            val buffer = ByteBuffer.allocate(Long.SIZE_BYTES)
+            if (readAuditFully(channel, buffer, 0) != Long.SIZE_BYTES) throw IOException(INVALID_SEQUENCE_METADATA)
+            buffer.flip()
+            return buffer.long.takeIf { value -> value >= 0 } ?: throw IOException(INVALID_SEQUENCE_METADATA)
+        }
+
+        /** Completes any deletion covered by the force-backed externally-delivered prefix. */
+        private fun reconcileReclaimedFiles(directory: Path, reclaimedThrough: Long) {
+            if (reclaimedThrough == 0L) return
+            var changed = false
+            listReadyManifestPaths(directory).forEach { manifestPath ->
+                val manifest = AuditSegmentHandoff.readManifest(manifestPath)
+                require(
+                    manifest.lastSequence <= reclaimedThrough || manifest.firstSequence > reclaimedThrough,
+                ) { AUDIT_RECOVERY_FAILED }
+                if (manifest.lastSequence <= reclaimedThrough) {
+                    Files.deleteIfExists(AuditSegmentHandoff.segmentPath(directory, manifest.segmentId))
+                    Files.deleteIfExists(manifestPath)
+                    Files.deleteIfExists(AuditSegmentHandoff.acknowledgementPath(directory, manifest.segmentId))
+                    changed = true
+                }
+            }
+            listAcknowledgementPaths(directory).forEach { acknowledgementPath ->
+                val acknowledgement =
+                    try {
+                        AuditSegmentHandoff.readAcknowledgement(acknowledgementPath)
+                    } catch (_: InvalidAuditCollectorMetadataException) {
+                        return@forEach
+                    }
+                if (acknowledgement.terminalSequence <= reclaimedThrough) {
+                    Files.deleteIfExists(acknowledgementPath)
+                    changed = true
+                }
+            }
+            if (changed) forceAuditDirectory(directory)
+        }
+
         /** Reads the high-water mark or creates and forces its initial value. */
         @Suppress("ThrowsCount")
         private fun readOrInitializeNextSequence(channel: FileChannel): Long {
             if (channel.size() == 0L) persistInitialNextSequence(channel, 1L)
             if (channel.size() != Long.SIZE_BYTES.toLong()) throw IOException(INVALID_SEQUENCE_METADATA)
             val buffer = ByteBuffer.allocate(Long.SIZE_BYTES)
-            if (readFully(channel, buffer, 0) != Long.SIZE_BYTES) throw IOException(INVALID_SEQUENCE_METADATA)
+            if (readAuditFully(channel, buffer, 0) != Long.SIZE_BYTES) throw IOException(INVALID_SEQUENCE_METADATA)
             buffer.flip()
             return buffer.long.takeIf { value -> value > 0 } ?: throw IOException(INVALID_SEQUENCE_METADATA)
         }
@@ -371,7 +681,7 @@ class LocalAuditStore private constructor(
         /** Writes and forces one fixed-size sequence high-water mark during recovery. */
         private fun persistInitialNextSequence(channel: FileChannel, value: Long) {
             val buffer = ByteBuffer.allocate(Long.SIZE_BYTES).putLong(value).flip()
-            writeFully(channel, buffer, 0)
+            writeAuditFully(channel, buffer, 0)
             channel.truncate(Long.SIZE_BYTES.toLong())
             channel.force(true)
         }
@@ -417,12 +727,12 @@ class LocalAuditStore private constructor(
             maxEventBytes: Int,
         ): RecoveredAuditFrame? {
             val header = ByteBuffer.allocate(AuditRecordCodec.HEADER_BYTES)
-            if (readFully(channel, header, position) != AuditRecordCodec.HEADER_BYTES) return null
+            if (readAuditFully(channel, header, position) != AuditRecordCodec.HEADER_BYTES) return null
             val headerBytes = header.array()
             val frameSize = declaredFrameSizeOrNull(headerBytes, maxEventBytes) ?: return null
             val frame = ByteBuffer.allocate(frameSize).put(headerBytes)
             val bodyBytes = frameSize - AuditRecordCodec.HEADER_BYTES
-            if (readFully(channel, frame, position + AuditRecordCodec.HEADER_BYTES) != bodyBytes) return null
+            if (readAuditFully(channel, frame, position + AuditRecordCodec.HEADER_BYTES) != bodyBytes) return null
             val record = decodeFrameOrNull(frame.array(), maxEventBytes) ?: return null
             return RecoveredAuditFrame(record, frameSize)
         }
@@ -483,10 +793,28 @@ private data class InitializedStore(
     val lockChannel: FileChannel,
     val directoryLock: FileLock,
     val sequenceChannel: FileChannel,
+    /** Open force-backed externally-delivered high-water metadata channel. */
+    val reclaimedSequenceChannel: FileChannel,
     val activeSegmentPath: Path?,
     val activeSegmentChannel: FileChannel?,
     val nextSequence: Long,
     val retainedBytes: Long,
+    /** Highest persistent sequence durably delivered to the external Collector. */
+    val reclaimedThrough: Long,
+)
+
+/** Validated persistent state recovered before reopening the optional active channel. */
+private data class RecoveredPersistentState(
+    /** Remaining active segment path, if a non-sealed segment exists. */
+    val activePath: Path?,
+    /** Next persistent sequence that cannot reuse any recovered or reclaimed sequence. */
+    val nextSequence: Long,
+    /** Exact retained segment, manifest, and active-manifest-reserve bytes. */
+    val retainedBytes: Long,
+    /** Force-backed terminal sequence already delivered externally. */
+    val reclaimedThrough: Long,
+    /** Remaining complete records in deterministic persistent sequence order. */
+    val records: List<StoredAuditRecord>,
 )
 
 /**
@@ -504,7 +832,14 @@ private data class RecoveredAuditFrame(
 private fun InitializedStore.closeResources(primaryFailure: Throwable? = null): Throwable? =
     closeAuditResources(
         primaryFailure = primaryFailure,
-        resources = listOf(activeSegmentChannel, sequenceChannel, directoryLock, lockChannel),
+        resources =
+            listOf(
+                activeSegmentChannel,
+                sequenceChannel,
+                reclaimedSequenceChannel,
+                directoryLock,
+                lockChannel,
+            ),
     )
 
 /** Queues abandoned-result cleanup behind initialization and then drains the startup worker. */
@@ -573,50 +908,97 @@ internal interface AuditStoreObserver {
     /** Called after the covering frame force and before durable future completion. */
     fun afterFrameForce(sequence: Long) = Unit
 
+    /** Receives one stable bounded Collector handoff error without paths or record contents. */
+    fun afterCollectorError(code: AuditCollectorErrorCode) = Unit
+
+    /** Called after the forced active segment is atomically renamed and before manifest publication. */
+    fun afterReadySegmentRename(segmentId: String) = Unit
+
+    /** Called after the externally-delivered high-water force and before reclaim deletion. */
+    fun afterReclaimedSequenceForce(segmentId: String, terminalSequence: Long) = Unit
+
+    /** Called after immutable segment deletion and before manifest or ack metadata deletion. */
+    fun afterReclaimedSegmentDelete(segmentId: String) = Unit
+
     companion object {
         /** Production no-op observer. */
         val NONE: AuditStoreObserver = object : AuditStoreObserver {}
     }
 }
 
-/** Writes every remaining byte at one absolute file position. */
-private fun writeFully(channel: FileChannel, source: ByteBuffer, start: Long) {
-    var position = start
-    while (source.hasRemaining()) {
-        val written = channel.write(source, position)
-        if (written <= 0) throw IOException("Audit write made no progress")
-        position += written
-    }
-}
+/** Stable safe reasons why one Collector acknowledgement cannot advance reclaim. */
+internal enum class AuditCollectorErrorCode {
+    /** Acknowledgement is oversized, malformed, non-canonical, or has an unsupported version. */
+    MALFORMED_ACK,
 
-/** Reads until the target is full or EOF and returns bytes obtained. */
-private fun readFully(channel: FileChannel, target: ByteBuffer, start: Long): Int {
-    var position = start
-    var total = 0
-    while (target.hasRemaining()) {
-        val read = channel.read(target, position)
-        if (read <= 0) break
-        total += read
-        position += read
-    }
-    return total
+    /** Acknowledgement names no ready or previously reclaimed segment. */
+    UNKNOWN_SEGMENT,
+
+    /** Acknowledgement covers only a prefix that was already reclaimed durably. */
+    DUPLICATE_ACK,
+
+    /** Acknowledgement attempts to skip an older ready segment. */
+    OUT_OF_ORDER_ACK,
+
+    /** Ready manifest exists but its immutable WAL segment is missing. */
+    MISSING_SEGMENT,
+
+    /** Acknowledgement terminal sequence does not cover its entire immutable segment. */
+    TERMINAL_SEQUENCE_MISMATCH,
+
+    /** Immutable WAL bytes no longer match their self-verifying ready manifest. */
+    SEGMENT_INTEGRITY_MISMATCH,
+
+    /** Acknowledgement digest does not identify the immutable ready segment. */
+    DIGEST_MISMATCH,
 }
 
 /** Creates one lexically sortable segment filename from its first sequence. */
 private fun segmentName(sequence: Long, suffix: String): String =
     "segment-${sequence.toString().padStart(SEGMENT_SEQUENCE_WIDTH, '0')}$suffix"
 
-/** Replaces one known segment lifecycle suffix without changing its sequence prefix. */
-private fun replaceSuffix(path: Path, old: String, new: String): Path =
-    path.resolveSibling(path.fileName.toString().removeSuffix(old) + new)
-
 private const val LOCK_FILE = "audit.lock"
 private const val SEQUENCE_FILE = "next-sequence.bin"
-private const val ACTIVE_SUFFIX = ".active"
-private const val SEALED_SUFFIX = ".wal"
+
+/** Fixed filename containing the force-backed externally-delivered high-water mark. */
+private const val RECLAIMED_SEQUENCE_FILE = "reclaimed-sequence.bin"
 private const val CLOSE_TIMEOUT_SECONDS = 30L
-private const val SEGMENT_SEQUENCE_WIDTH = 20
+
+/** Fixed delay between bounded Collector acknowledgement scans. */
+private const val ACK_WATCH_INTERVAL_MILLIS = 50L
+
+/** Maximum unchanged Collector-error fingerprints retained for log deduplication. */
+private const val MAX_REPORTED_COLLECTOR_ERRORS = 128
 private val SEGMENT_FILE = Regex("segment-[0-9]{20}\\.(active|wal)")
+
+/** Lists atomically published ready manifests in deterministic segment order. */
+private fun listReadyManifestPaths(directory: Path): List<Path> =
+    Files.list(directory).use { paths ->
+        paths.filter { path -> READY_MANIFEST_FILE.matches(path.fileName.toString()) }
+            .sorted()
+            .toList()
+    }
+
+/** Lists a bounded prefix of atomically published acknowledgement files. */
+private fun listAcknowledgementPaths(directory: Path): List<Path> =
+    Files.list(directory).use { paths ->
+        paths.filter { path -> ACKNOWLEDGEMENT_FILE.matches(path.fileName.toString()) }
+            .sorted()
+            .limit(MAX_ACKNOWLEDGEMENTS_PER_SCAN)
+            .toList()
+    }
+
+/** Exact filename syntax for atomically published ready manifests. */
+private val READY_MANIFEST_FILE = Regex("segment-[0-9]{20}\\.ready\\.json")
+
+/** Exact filename syntax for atomically published Collector acknowledgements. */
+private val ACKNOWLEDGEMENT_FILE = Regex("segment-[0-9]{20}\\.ack\\.json")
+
+/** Path-free operational logger for Collector acknowledgement failures. */
+private val COLLECTOR_LOGGER = LoggerFactory.getLogger(LocalAuditStore::class.java)
+
+/** Maximum acknowledgement files inspected during one worker scan. */
+private const val MAX_ACKNOWLEDGEMENTS_PER_SCAN = 256L
 
 /** Stable path-free startup message for unavailable audit storage. */
 private const val AUDIT_DIRECTORY_UNAVAILABLE = "Audit directory is unavailable"

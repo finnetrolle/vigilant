@@ -67,10 +67,30 @@ docker run --rm --name vigilant \
 ~~~
 
 Configuration files монтируются read-only. Audit volume обязан сохраняться при
-container restart, быть доступен только UID/GID `10001` и использовать
-подходящее deployment encryption at rest. Для production deployment secrets
-должны передаваться через предназначенный для них secret mechanism, а не
-записываться в image или config committed в repository.
+container restart, быть доступен только gateway UID/GID `10001` и явно
+авторизованному Collector service account, а также использовать подходящее
+deployment encryption at rest. Для production deployment secrets должны
+передаваться через предназначенный для них secret mechanism, а не записываться
+в image или config committed в repository.
+
+## External Audit Collector
+
+External delivery использует
+[vendor-neutral file handoff](audit-collector-file-handoff.md). Collector
+получает доступ к тому же persistent audit volume, читает только atomic ready
+manifests и immutable `.wal`, а создаёт только force-backed `.ack.json` после
+durable destination acknowledgement. Он не изменяет WAL или metadata Vigilant.
+Collector outage не блокирует requests до исчерпания configured retained
+bound; затем readiness и новые supported requests получают
+`audit_unavailable` до valid ack/reclaim.
+
+Deployment обязан ограничить directory permissions gateway/Collector service
+accounts, включить volume encryption at rest и передавать Collector credentials
+через внешний secret mechanism. Destination availability, retention,
+queryability, deduplication по `event_id`, backup/restore и disaster recovery
+принадлежат Collector/deployment. Успешный `force(true)` не покрывает volume
+loss, storage corruption, operator deletion или broken hardware flush
+semantics.
 
 ## Health и lifecycle
 
@@ -133,4 +153,4 @@ Smoke test удаляет созданные container/image resources при з
 - multi-arch images;
 - Kubernetes manifests или Helm charts;
 - autoscaling policy;
-- централизованный Collector, log storage, dashboards или alerts.
+- Collector distribution, external audit/log storage, dashboards или alerts.

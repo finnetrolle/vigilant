@@ -16,6 +16,9 @@ exhaustion, graceful shutdown, process crash, recovery и external Collector
 acknowledgement. Report отделяет proven process/volume semantics от hardware
 failure assumptions.
 
+VIG-22-02 и VIG-22-03 завершены; эта issue является текущей implementation
+frontier EPIC-22.
+
 ## Требования
 
 `MVP-18`, `MVP-19`, `OUT-06`, `CONC-01`, `CONC-03`; все строки

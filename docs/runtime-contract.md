@@ -86,6 +86,17 @@ durable acknowledgement. `policy.shadow_decision` публикуется пос�
 best-effort projection. Для неподдержанного descriptor и invalid session ID
 audit reservation и record не создаются.
 
+External Collector не находится в request critical path. Active WAL segment
+становится ready по exact byte bound, age bound или graceful close. Collector
+читает immutable ready segments через документированный
+[file handoff](audit-collector-file-handoff.md) и публикует ack только после
+durable retention всего segment во внешнем destination. Valid contiguous ack
+разрешает asynchronous reclaim. Outage Collector не меняет уже допустимый
+request outcome, пока хватает `audit-max-retained-bytes`; после исчерпания
+следующий supported request получает `503 audit_unavailable` без body demand и
+upstream. Valid ack освобождает capacity и автоматически восстанавливает
+readiness/admission.
+
 Policy deadline или typed detector error отражается как decision `ERROR` с
 disposition `ALLOW`: current shadow policy не блокирует request, поэтому при
 успешной orchestration исходный body всё равно отправляется upstream.

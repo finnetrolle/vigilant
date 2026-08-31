@@ -66,7 +66,7 @@ variable `VIGILANT_SOME_SETTING`.
 | `VIGILANT_AUDIT_DIRECTORY` | Existing persistent directory, exclusively locked by one process | обязательна |
 | `VIGILANT_AUDIT_MAX_EVENT_BYTES` | Максимальный framed audit record | `65536` |
 | `VIGILANT_AUDIT_MAX_PENDING_EVENTS` | Максимум pending audit reservations | `128` |
-| `VIGILANT_AUDIT_MAX_RETAINED_BYTES` | Максимум локально retained WAL bytes | `1073741824` |
+| `VIGILANT_AUDIT_MAX_RETAINED_BYTES` | Максимум locally retained WAL + ready manifest bytes | `1073741824` |
 | `VIGILANT_AUDIT_MAX_SEGMENT_BYTES` | Максимальный WAL segment | `16777216` |
 | `VIGILANT_AUDIT_MAX_SEGMENT_AGE` | Максимальный возраст non-empty active segment | `5s` |
 | `VIGILANT_UPSTREAM_CONNECT_TIMEOUT` | Установка соединения с upstream | `10s` |
@@ -102,6 +102,9 @@ variable `VIGILANT_SOME_SETTING`.
   останавливает startup с code `2` без вывода raw path.
 - Audit bounds положительны, `max-event-bytes <= 65536` и соблюдают
   `max-event-bytes <= max-segment-bytes <= max-retained-bytes`.
+- Admission резервирует worst-case framed record и bounded ready manifest.
+  Active segment учитывает будущий manifest reserve; ready segment учитывает
+  exact WAL и manifest bytes до valid contiguous Collector ack.
 - Duration принимает значения вида `300ms`, `10s`, `5m` или `PT5M`.
 - Duration должен быть положительным и помещаться в signed nanosecond scheduler
   bound, кроме
@@ -129,6 +132,9 @@ username до первого `:`. Password bytes и raw credential не сохр
 Создание trace context, request-scoped JSON logs и сбор метрик внутри процесса
 продолжаются. Настройки Collector endpoint нет: Vigilant не открывает к нему
 сетевое соединение.
+External audit delivery использует только общий filesystem adapter из
+[Collector handoff contract](audit-collector-file-handoff.md); credentials и
+destination configuration принадлежат внешнему Collector.
 
 ## Policy snapshot
 

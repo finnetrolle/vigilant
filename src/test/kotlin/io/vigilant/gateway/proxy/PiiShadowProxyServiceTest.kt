@@ -25,7 +25,10 @@ import io.opentelemetry.sdk.trace.data.SpanData
 import io.opentelemetry.sdk.trace.export.SimpleSpanProcessor
 import io.opentelemetry.sdk.trace.export.SpanExporter
 import io.vigilant.audit.AuditStore
+import io.vigilant.audit.AuditCollectorTestFixture
 import io.vigilant.audit.AuditStoreOutcomeCode
+import io.vigilant.audit.AuditStoreSettings
+import io.vigilant.audit.LocalAuditStore
 import io.vigilant.gateway.GatewayProcessFixture
 import io.vigilant.gateway.GatewayTestFixture
 import io.vigilant.gateway.chatCompletionsBody
@@ -66,6 +69,8 @@ import io.vigilant.windowing.WindowedFastPiiExecutor
 import java.net.URI
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.Path
 import java.time.Duration
 import java.util.Base64
 import java.util.concurrent.CancellationException
@@ -144,6 +149,61 @@ class PiiShadowProxyServiceTest {
         assertEquals(1, auditStore.reservationCalls.get())
         assertFalse(bodyDemanded.get())
         assertEquals(0, upstreamRequests.get())
+    }
+
+    /** Collector outage preserves requests until retained capacity, then valid ack restores it. */
+    @Test
+    fun `collector outage exhausts and acknowledgement restores request capacity`() {
+        val upstreamRequests = AtomicInteger()
+        val directory = Files.createTempDirectory("vigilant-audit-request-reclaim")
+        val auditStore =
+            LocalAuditStore.open(
+                AuditStoreSettings(
+                    directory = directory,
+                    maxEventBytes = 1_024,
+                    maxRetainedBytes = 1_536,
+                    maxSegmentBytes = 1_024,
+                    maxSegmentAge = Duration.ofMillis(50),
+                ),
+            ).also(closeables::add)
+        val upstream = fixture.startServer {
+            upstreamRequests.incrementAndGet()
+            HttpResponse.of(HttpStatus.OK)
+        }
+        val gateway =
+            startShadowGateway(
+                upstreamUri = fixture.serverUri(upstream),
+                auditStore = auditStore,
+            )
+        val client = WebClient.of(fixture.serverUri(gateway))
+
+        val first = client.execute(chatCompletionsRequest("collector-outage-first")).aggregate().join()
+
+        assertEquals(HttpStatus.OK, first.status())
+        assertEquals(1, upstreamRequests.get())
+        val exhausted = client.execute(chatCompletionsRequest("collector-outage-full")).aggregate().join()
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, exhausted.status())
+        assertEquals("""{"error":"audit_unavailable"}""", exhausted.contentUtf8())
+        assertEquals(1, upstreamRequests.get())
+        assertTrue(
+            fixture.awaitUntil(Duration.ofSeconds(2)) { readyManifestCount(directory) == 1L },
+            "age bound did not publish the retained segment; " +
+                "readyCount=${readyManifestCount(directory)}, files=${auditFileNames(directory)}",
+        )
+
+        AuditCollectorTestFixture.publishAcknowledgement(
+            directory,
+            AuditCollectorTestFixture.singleReadyManifest(directory),
+        )
+
+        assertTrue(
+            fixture.awaitUntil(Duration.ofSeconds(2)) { auditStore.isAvailableForAdmission() },
+            "valid Collector acknowledgement did not restore audit admission; " +
+                "available=${auditStore.isAvailableForAdmission()}, files=${auditFileNames(directory)}",
+        )
+        val recovered = client.execute(chatCompletionsRequest("collector-outage-recovered")).aggregate().join()
+        assertEquals(HttpStatus.OK, recovered.status())
+        assertEquals(2, upstreamRequests.get())
     }
 
     /** Every post-admission audit failure becomes one stable 503 without upstream handoff. */
@@ -1638,6 +1698,18 @@ class PiiShadowProxyServiceTest {
         assertEquals(0L, quota.retainedBytes)
         assertEquals(0, quota.retainedSegments)
     }
+
+    /** Counts only atomically published ready manifests in the shared audit directory. */
+    private fun readyManifestCount(directory: Path): Long =
+        Files.list(directory).use { paths ->
+            paths.filter { path -> path.fileName.toString().endsWith(".ready.json") }.count()
+        }
+
+    /** Returns deterministic audit filenames for Collector-outage timeout diagnostics. */
+    private fun auditFileNames(directory: Path): List<String> =
+        Files.list(directory).use { paths ->
+            paths.map { path -> path.fileName.toString() }.sorted().toList()
+        }
 
     /** Returns the enabled global ALLOW-only policy required by the first increment. */
     private fun shadowPolicy(deadline: Duration): Policy {

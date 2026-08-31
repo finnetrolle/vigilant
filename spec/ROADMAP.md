@@ -116,11 +116,11 @@ accepted record и сама по себе не подтверждает mandator
 
 Отдельный нормативный [contract](MINIMUM_AUDIT_TRAIL_CONTRACT.md) требует
 application-owned WAL и durable acknowledgement до forwarding или normal
-supported-request response. VIG-22-01 и VIG-22-02 реализуют эту local durable
-boundary в current runtime. Оставшиеся owners внутри
-[EPIC-22](epics/epic_22_durable_minimum_audit_trail.md) добавляют external
-Collector handoff/reclaim и packaged qualification; SIEM и query UI не входят
-в minimum durability boundary.
+supported-request response. VIG-22-01, VIG-22-02 и VIG-22-03 реализуют local
+durable boundary, external Collector handoff и acknowledged reclaim в current
+runtime. Оставшийся owner внутри
+[EPIC-22](epics/epic_22_durable_minimum_audit_trail.md) добавляет packaged
+qualification; SIEM и query UI не входят в minimum durability boundary.
 
 ## Discovery map
 
@@ -396,13 +396,15 @@ response/SSE spooling и secure spill decisions; EPIC-21 закрыт без
 дублирующего future scope.
 
 Post-milestone closure EPIC-21 завершён. В EPIC-22 local durable store
-[VIG-22-01](issues/epic_22/issue_22_01_local_durable_audit_store.md) и mandatory
+[VIG-22-01](issues/epic_22/issue_22_01_local_durable_audit_store.md), mandatory
 request-path acceptance
-[VIG-22-02](issues/epic_22/issue_22_02_request_path_audit_acceptance.md) имеют
-status `Done`. Текущая implementation frontier -
-[VIG-22-03](issues/epic_22/issue_22_03_collector_handoff_reclaim.md); VIG-22-04
-ждёт её завершения. VIG-01A, EPIC-10 и VIG-10-08 имеют status `Done` и не
-входят в current frontier.
+[VIG-22-02](issues/epic_22/issue_22_02_request_path_audit_acceptance.md) и
+acknowledged Collector handoff
+[VIG-22-03](issues/epic_22/issue_22_03_collector_handoff_reclaim.md) имеют status
+`Done`. Текущая implementation frontier -
+[VIG-22-04](issues/epic_22/issue_22_04_packaged_durability_qualification.md).
+VIG-01A, EPIC-10 и VIG-10-08 имеют status `Done` и не входят в current
+frontier.
 
 ## Не входит в первый production increment
 

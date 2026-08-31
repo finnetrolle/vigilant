@@ -38,6 +38,7 @@ Client
             -> immutable safe record -> local WAL -> force(true)
             -> best-effort stdout projection
             -> Forward | Reject
+       -> asynchronous ready segment -> external Collector -> atomic ack -> reclaim
        -> ReplayReadyRequest one-shot transport handoff
   -> BypassProxyService
        -> header normalization
@@ -172,10 +173,18 @@ Payload, matched text, locators, identity, session и headers в record не
 `policy.shadow_decision`; discardable async stdout не участвует в acceptance.
 
 WAL использует один blocking-safe worker, exclusive directory lock, monotonic
-sequence metadata и active/sealed segments. Recovery сохраняет complete valid
-frames и отбрасывает partial или checksum-invalid tail. File I/O, force и wait
-никогда не выполняются на Netty event loop. Нормативная модель находится в
-[minimum audit trail contract](../spec/MINIMUM_AUDIT_TRAIL_CONTRACT.md).
+sequence metadata и active/ready segments. Exact byte bound, age bound и
+graceful close force-ят segment, atomic rename публикует immutable `.wal`, а
+bounded ready manifest публикуется последним. External Collector читает ready
+segments по sequence order и после durable destination acknowledgement
+атомарно публикует ack. Store принимает только contiguous exact prefix,
+force-ит delivered high-water mark и идемпотентно reclaim-ит segment bytes.
+Recovery сохраняет complete valid unacknowledged frames, завершает прерванный
+reclaim и отбрасывает partial или checksum-invalid active tail. File I/O,
+digest, ack watcher, seal, force и reclaim работают на том же store-owned
+worker, а не на Netty event loop. Публичный adapter описан в
+[Collector file handoff](audit-collector-file-handoff.md), нормативная модель -
+в [minimum audit trail contract](../spec/MINIMUM_AUDIT_TRAIL_CONTRACT.md).
 
 `ReplayReadyRequest` инкапсулирует demand-driven publisher и immutable strip
 set. Его `transferTo` допускает ровно один transport handoff. `close()` до
@@ -209,7 +218,7 @@ configured concurrent-source limit. Policy detector waits и deadlines такж�
 | Resource | Owner | Ограничение или lifecycle |
 |---|---|---|
 | Request bodies | `RequestSourceQuota` | byte/owner/segment limits из configuration |
-| Durable audit | `LocalAuditStore` | pending/retained/segment bounds, exclusive persistent directory |
+| Durable audit | `LocalAuditStore` | pending/retained/segment/manifest bounds, ready handoff, contiguous ack/reclaim, exclusive persistent directory |
 | Inspection orchestration | `InspectionResources` | virtual-thread executor |
 | Fast PII CPU | `InspectionResources` | bounded fixed-size pool и bounded queue |
 | Upstream connections | `UpstreamClientResources` | dedicated Armeria `ClientFactory` |
