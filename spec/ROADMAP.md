@@ -378,8 +378,8 @@ VIG-21-02 отдельно подтверждает опубликованную
 request-only EPIC-08 также имеют status `Done`. Identity
 scope исторического first production increment был anonymous-only. После
 него VIG-03-03..06 закрыли прежний identity path. VIG-27 заменил его
-development/test-only mode `DUMMY`; production startup намеренно невозможен
-до появления real Bearer extractor.
+development/test-only mode `DUMMY`. VIG-28 добавил production-capable offline
+JWT Bearer extractor с pinned RSA public JWK set и без runtime identity I/O.
 
 Все standalone integration issues Stage 3 закрыты: VIG-11..17 имеют status
 `Done`. Production `MainKt` и OCI image выполняют bounded PII shadow inspection
@@ -419,8 +419,8 @@ frontier.
 - `BLOCK`, `MASK`, `REMOVE` и изменение protocol source.
 - historical scope первого milestone не включал user/group identity
   extraction и trusted ingress model. Это temporal boundary, а не current
-  exclusion: current development/test runtime получает configured identity
-  через Dummy Bearer contract, но real authentication пока отсутствует.
+  exclusion: current runtime поддерживает development/test Dummy и production
+  offline JWT Bearer identity с локально pinned trust snapshot.
 - External object storage.
 - Kubernetes manifests, Helm, autoscaling и centralized log storage.
 - Backend-specific Langfuse/MLflow exporters и authentication внутри Vigilant.

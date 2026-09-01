@@ -59,6 +59,25 @@ vigilant {
 }
 ~~~
 
+Production JWT заменяет три Dummy settings следующим immutable trust snapshot:
+
+~~~hocon
+vigilant {
+  environment = "production"
+  identity-mode = "JWT"
+  identity-jwt-issuer = "https://keycloak.example/realms/platform"
+  identity-jwt-audience = "vigilant"
+  identity-jwt-jwks = [
+    {
+      kty = "RSA"
+      kid = "key-2026-01"
+      n = "<unpadded-base64url-rsa-modulus>"
+      e = "AQAB"
+    }
+  ]
+}
+~~~
+
 Любой HOCON key `vigilant.some-setting` переопределяется environment
 variable `VIGILANT_SOME_SETTING`.
 
@@ -85,15 +104,22 @@ variable `VIGILANT_SOME_SETTING`.
 | `VIGILANT_INSPECTION_MAX_RETAINED_SEGMENTS_PER_REQUEST` | Максимум storage segments одного request | `128` |
 | `VIGILANT_TRACING_SESSION_HEADER` | Header с opaque session ID | `x-session-id` |
 | `VIGILANT_TRACING_TRACEPARENT_HEADER` | Header со значением W3C `traceparent` | `traceparent` |
-| `VIGILANT_IDENTITY_MODE` | Единственный доступный mode: `DUMMY` | обязательна |
-| `VIGILANT_IDENTITY_DUMMY_USER` | Configured user для Dummy identity | обязательна |
+| `VIGILANT_IDENTITY_MODE` | Выбранный mode: `DUMMY` или `JWT` | обязательна |
+| `VIGILANT_IDENTITY_DUMMY_USER` | Configured user для Dummy identity | обязательна в `DUMMY` |
 | `VIGILANT_IDENTITY_DUMMY_GROUPS` | Comma-separated configured Dummy groups | пустой список |
+| `VIGILANT_IDENTITY_JWT_ISSUER` | Exact trusted JWT issuer | обязательна в `JWT` |
+| `VIGILANT_IDENTITY_JWT_AUDIENCE` | Audience, которая должна присутствовать в `aud` | обязательна в `JWT` |
+| `VIGILANT_IDENTITY_JWT_JWKS` | Non-empty pinned RSA public JWK list | обязательна в `JWT` |
 | `VIGILANT_OTLP_ENABLED` | Выводит traces и metrics как OTLP JSON Lines в stdout | `true` |
 | `VIGILANT_CONFIG` | Явный путь к HOCON-файлу | не задан |
 
 `VIGILANT_LOG_LEVEL` настраивает Logback отдельно от HOCON. Допустимые
 значения: `TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR`, `OFF`. Default -
 `INFO`.
+
+Complex `VIGILANT_IDENTITY_JWT_JWKS` задаётся strict JSON array с полями
+`kty`, `kid`, `n`, `e`; HOCON file использует native object-list syntax из
+примера выше. Неизвестные или duplicate JSON fields отклоняются.
 
 ## Validation rules
 
@@ -120,16 +146,24 @@ variable `VIGILANT_SOME_SETTING`.
 - Inspection counts и limits должны быть положительными.
 - Оба tracing header name должны быть валидными HTTP header names и не должны
   совпадать без учёта регистра.
-- `environment`, `identity-mode` и `identity-dummy-user` обязательны. Сейчас
-  доступен только `DUMMY`; он разрешён в `development` и `test`, но
-  детерминированно запрещён в `production`. До появления real Bearer extractor
-  production startup намеренно невозможен.
+- `environment` и `identity-mode` обязательны. `DUMMY` разрешён только в
+  `development`/`test` и требует `identity-dummy-user`. `JWT` разрешён в том
+  числе в `production` и требует issuer, audience и non-empty JWK set. Settings
+  другого mode отклоняются, fallback между mode отсутствует.
 - Удалённые identity modes и их configuration keys не имеют aliases или
   compatibility path и отклоняются strict loader-ом.
 - Dummy user/groups используют grammar
   `[A-Za-z0-9][A-Za-z0-9._:@/\-]{0,127}` и `Locale.ROOT` lowercase. Groups
   дедуплицируются с сохранением первого порядка и ограничены 128 уникальными
   значениями.
+- Каждый JWT JWK обязан иметь `kty=RSA`, non-blank unique `kid`, valid
+  Base64url modulus `n` и exponent `e`. Только public fields принимаются strict
+  loader-ом. Rotation выполняется deployment update: новый и старый keys
+  одновременно добавляются в config, затем старый удаляется отдельным update.
+- JWT принимает только `alg=RS256`; header `kid` выбирает ровно одну pinned
+  key. Signature, exact issuer, containing audience, required integral `exp`
+  и optional integral `nbf` проверяются до `sub`/`groups`. Discovery, JWKS
+  fetch, refresh, introspection и identity lookup отсутствуют.
 
 `VIGILANT_OTLP_ENABLED=false` отключает только вывод OTLP/JSON traces и metrics.
 Создание trace context, request-scoped JSON logs и сбор метрик внутри процесса

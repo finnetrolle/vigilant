@@ -27,7 +27,7 @@ private const val CONFIG_FILE_ENV = "VIGILANT_CONFIG"
 
 /** Vigilant environment settings consumed outside the Hoplite AppConfig boundary. */
 private val EXTERNAL_VIGILANT_ENV =
-    setOf(CONFIG_FILE_ENV, "VIGILANT_POLITICS_CONFIG", "VIGILANT_LOG_LEVEL")
+    setOf(CONFIG_FILE_ENV, "VIGILANT_POLITICS_CONFIG", "VIGILANT_LOG_LEVEL", IDENTITY_JWT_JWKS_ENV)
 
 private const val UPSTREAM_URL_ENV = "VIGILANT_UPSTREAM_URL"
 private const val PORT_ENV = "VIGILANT_PORT"
@@ -104,7 +104,7 @@ private val DEFAULT_CONFIG_PATHS: List<Path> = listOf(
  * @param audit required persistent audit directory and bounded WAL settings.
  * @param inspection bounded in-memory request inspection settings.
  * @param tracing validated tracing header names.
- * @param identity validated Dummy identity returned after Bearer header acceptance.
+ * @param identity validated settings for the selected Bearer identity mode.
  * @param otlp stdout OTLP JSON export settings for traces and metrics.
  */
 data class AppConfig(
@@ -116,7 +116,7 @@ data class AppConfig(
     val audit: AuditStoreSettings,
     val inspection: InspectionSettings,
     val tracing: TracingSettings,
-    val identity: DummyIdentitySettings,
+    val identity: IdentitySettings,
     val otlp: OtlpSettings,
 )
 
@@ -188,6 +188,9 @@ data class UpstreamClientSettings(
  * @param identityMode required sole identity source name.
  * @param identityDummyUser required Dummy user identity.
  * @param identityDummyGroups optional Dummy group identities.
+ * @param identityJwtIssuer exact trusted JWT issuer.
+ * @param identityJwtAudience required JWT audience.
+ * @param identityJwtJwks pinned RSA public JWK set.
  * @param auditDirectory required persistent directory owned exclusively by the local audit store.
  * @param auditMaxEventBytes maximum encoded audit frame size.
  * @param auditMaxPendingEvents maximum concurrently reserved audit events.
@@ -221,6 +224,9 @@ internal data class VigilantSettings(
     val identityMode: String? = null,
     val identityDummyUser: String? = null,
     val identityDummyGroups: List<String> = emptyList(),
+    val identityJwtIssuer: String? = null,
+    val identityJwtAudience: String? = null,
+    val identityJwtJwks: List<IdentityJwkSettings> = emptyList(),
     val otlpEnabled: Boolean = true,
 )
 
@@ -269,7 +275,8 @@ internal fun loadAppConfig(
         is Validated.Invalid -> throw IllegalArgumentException(result.error.description())
     }
 
-    val (runtimeEnvironment, identity) = root.vigilant.validatedRuntimeIdentity()
+    val identitySettings = root.vigilant.withJwtJwksEnvironmentOverride(env[IDENTITY_JWT_JWKS_ENV])
+    val (runtimeEnvironment, identity) = identitySettings.validatedRuntimeIdentity()
     return AppConfig(
         upstreamUri = validatedUpstreamUri(root.vigilant.upstreamUrl.orEmpty()),
         port = validatedPort(root.vigilant.port),
@@ -360,7 +367,8 @@ private fun resolveConfigFile(env: Map<String, String>, defaultConfigPaths: List
  * The re-keyed double underscore makes Hoplite's built-in separator mapping apply
  * (`VIGILANT__UPSTREAM_URL` -> `vigilant.upstreamUrl`), so any future `vigilant.some-setting`
  * gets a `VIGILANT_SOME_SETTING` override for free. Keys in [EXTERNAL_VIGILANT_ENV] are excluded
- * because the config locator, policy loader or Logback owns them instead of [AppConfig].
+ * because the config locator, policy loader, Logback, or the strict complex JWK adapter owns them
+ * instead of Hoplite's generic scalar/list mapping.
  *
  * @param env environment variables to read instead of [System.getenv].
  */

@@ -74,8 +74,8 @@ reservation и body demand, поэтому durable record и stdout projection �
 создаются.
 
 Identity extraction failure поддержанного descriptor создаёт тот же один
-aggregate event с `decision=ERROR` и bounded `error.code`. Configured identity
-values и raw `Authorization` в event не добавляются.
+aggregate event с `decision=ERROR` и bounded `error.code`. Configured Dummy
+identity, decoded JWT claim values и raw `Authorization` в event не добавляются.
 
 Этот event является projection уже durably accepted record. `AsyncAppender`
 может отбросить INFO record до stdout, поэтому `policy.shadow_decision` сам по

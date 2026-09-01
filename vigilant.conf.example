@@ -5,7 +5,7 @@
 # VIGILANT_AUDIT_*, VIGILANT_SHUTDOWN_*, VIGILANT_INSPECTION_*, VIGILANT_TRACING_*,
 # VIGILANT_IDENTITY_* и VIGILANT_OTLP_ENABLED переопределяют значения файла.
 vigilant {
-  # DUMMY permitted only for development/test. Production has no valid mode until VIG-28.
+  # DUMMY permitted only for development/test; production selects JWT below.
   environment = "development"
   upstream-url = "http://127.0.0.1:18081"
   audit-directory = "./.vigilant-audit"
@@ -42,6 +42,15 @@ vigilant {
   identity-mode = "DUMMY"
   identity-dummy-user = "local-user"
   identity-dummy-groups = ["local-group"]
+
+  # Production alternative (replace the Dummy block and public-key placeholders):
+  # environment = "production"
+  # identity-mode = "JWT"
+  # identity-jwt-issuer = "https://keycloak.example/realms/platform"
+  # identity-jwt-audience = "vigilant"
+  # identity-jwt-jwks = [
+  #   { kty = "RSA", kid = "key-2026-01", n = "<base64url-modulus>", e = "AQAB" }
+  # ]
 
   # OTLP JSON Lines traces и metrics в stdout. Сетевого подключения к Collector нет.
   otlp-enabled = true

@@ -31,18 +31,31 @@ identity сохраняются в request-scoped handoff. Response context ис
 же snapshot и отличается только phase `RESPONSE`; модель из upstream response
 его не переопределяет.
 
-## Dummy Bearer identity
+## Bearer identity
 
-Startup требует `identity-mode=DUMMY`, configured normalized user и optional
-groups. Mode разрешён только в `development` и `test`; `production` всегда
-отклоняется, пока отдельный work item не добавит real Bearer extractor.
+Startup выбирает ровно один общий Bearer extractor. `DUMMY` доступен только в
+`development`/`test`, проверяет representation header и возвращает configured
+normalized user/groups. `JWT` доступен в том числе в `production` и выполняет
+полностью локальную проверку RS256 по immutable pinned public JWK set. Сетевые
+discovery, JWKS fetch, refresh, introspection, UserInfo и identity lookup
+отсутствуют.
 
 Каждый поддержанный request обязан содержать ровно один `Authorization` с
-case-insensitive scheme `Bearer`. Token может быть пустым и не проверяется,
-не сохраняется и не попадает в context, audit, logs, metrics, traces или
-errors. Принятый header передаётся upstream без изменения. Missing или другой
-scheme получает `401` с `WWW-Authenticate: Bearer realm="vigilant"`; duplicate
-или malformed representation получает safe `400`.
+case-insensitive scheme `Bearer`. Missing или другой scheme получает `401` с
+`WWW-Authenticate: Bearer realm="vigilant"`; duplicate или malformed
+representation получает safe `400`. В `DUMMY` token может быть пустым и
+игнорируется. В `JWT` compact token обязан иметь `alg=RS256` и точный `kid`,
+который выбирает одну configured key. Signature, exact `iss`, containing
+`aud`, обязательный неистёкший `exp` и optional `nbf` проверяются до чтения
+identity claims. Затем required string `sub` и optional top-level array
+`groups` нормализуются по общему identity contract; missing `groups` даёт
+empty set, а invalid/duplicate normalized values получают safe `400`.
+
+JWT validation выполняется на blocking-safe request executor до body demand.
+Raw token и decoded claim values не сохраняются и не попадают в audit, logs,
+metrics, traces или errors; policy context получает только normalized
+user/groups. Принятый Authorization передаётся upstream с исходным значением
+без изменений.
 
 ## Shadow PII decision
 
@@ -69,7 +82,7 @@ content-bearing structure обрабатываются fail-closed и не до�
 | Malformed supported message | `400` | `{"error":"malformed_message"}` |
 | Ambiguous content | `400` | `{"error":"ambiguous_content"}` |
 | External или unresolved context | `400` | `{"error":"unresolved_context"}` |
-| Duplicate или malformed identity | `400` | `{"error":"invalid_identity"}` |
+| Duplicate, malformed или invalid JWT identity | `400` | `{"error":"invalid_identity"}` |
 | Missing или non-Bearer Authorization | `401` | `{"error":"authentication_required"}` + Bearer challenge |
 | Некорректный request source, включая несовпадение `Content-Length` | `400` | `{"error":"invalid_request_source"}` |
 | Per-request byte limit | `413` | `{"error":"request_too_large"}` |

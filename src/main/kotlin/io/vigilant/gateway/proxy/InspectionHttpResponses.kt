@@ -18,6 +18,7 @@ internal object InspectionHttpResponses {
 
             IdentityExtractionErrorCode.MALFORMED_IDENTITY,
             IdentityExtractionErrorCode.DUPLICATE_IDENTITY,
+            IdentityExtractionErrorCode.INVALID_CREDENTIAL,
             -> stableProxyError(HttpStatus.BAD_REQUEST, "invalid_identity")
         }
 

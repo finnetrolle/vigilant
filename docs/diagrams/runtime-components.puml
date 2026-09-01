@@ -14,6 +14,7 @@ node "Процесс Vigilant" as Vigilant {
   component "MetricsService" as Metrics
   component "TracingService" as Tracing
   component "PiiShadowProxyService" as ShadowProxy
+  component "BearerIdentityExtractor\nDummy / offline JWT" as Identity
   component "ShadowInspectionWorkflow" as Workflow
   component "ChatCompletionsRequestParser" as Parser
   component "Сборщик PolicyContext" as Context
@@ -29,6 +30,7 @@ Client --> Admission : HTTP-запрос
 Admission --> Metrics
 Metrics --> Tracing
 Tracing --> ShadowProxy
+ShadowProxy --> Identity : blocking-safe validation\nдо body demand
 ShadowProxy --> Workflow : полный ограниченный источник
 Workflow --> Parser : представление только для чтения
 Parser --> Context : модель и фрагменты

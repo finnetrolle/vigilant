@@ -2,7 +2,7 @@
 
 - **ID:** `VIG-28`
 - **Тип:** Issue
-- **Статус:** Ready for implementation
+- **Статус:** Done
 - **Приоритет:** High
 - **Зависит от:** [VIG-27](issue_27_dummy_identity_extractor.md)
 - **Блокирует:** нет
@@ -79,22 +79,22 @@ occurs at runtime.
 
 ## Критерии приёмки
 
-- [ ] Common Bearer identity contract selects `JWT` mode at startup without
+- [x] Common Bearer identity contract selects `JWT` mode at startup without
   mixing Dummy behavior into `OfflineJwtIdentityExtractor`.
-- [ ] Table-driven JWT matrix covers all required claims, valid RS256 signature,
+- [x] Table-driven JWT matrix covers all required claims, valid RS256 signature,
   each configured key, unknown/missing `kid`, duplicate JWK kid, invalid JWK,
   wrong algorithm/signature/issuer/audience, expired/not-before token and every
   invalid `sub`/`groups` shape; each invalid case fails before body demand.
-- [ ] Runtime makes no network call for discovery, key fetch, Keycloak or
+- [x] Runtime makes no network call for discovery, key fetch, Keycloak or
   identity lookup. Key rotation is proven solely by configuration containing
   old/new JWK sets.
-- [ ] Existing Bearer HTTP matrix remains exact: missing/non-Bearer gives `401`
+- [x] Existing Bearer HTTP matrix remains exact: missing/non-Bearer gives `401`
   challenge, malformed/duplicate header gives `400`, valid JWT with empty
   `groups` reaches policy selection and original Authorization reaches LiteLLM
   byte-for-byte.
-- [ ] Raw JWT and decoded claim values never appear in policy context beyond
+- [x] Raw JWT and decoded claim values never appear in policy context beyond
   normalized user/groups, audit, logs, metrics, traces or errors.
-- [ ] Modified Kotlin declarations/tests contain KDoc; focused tests,
+- [x] Modified Kotlin declarations/tests contain KDoc; focused tests,
   `./gradlew build` and `./gradlew validateWorkItems` pass.
 
 ## План и test seam

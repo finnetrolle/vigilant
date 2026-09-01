@@ -49,10 +49,10 @@ events, включая model, извлекает отдельный
 [EPIC-06](epic_06_llm_message_parsing.md). EPIC-03 получает их в готовом
 нормализованном виде и не разбирает raw body повторно.
 
-Текущая migration state после VIG-27 использует development/test-only Dummy
-Bearer extractor: он проверяет только representation единственного
-Authorization header и возвращает configured normalized user/groups. Real
-Bearer authentication принадлежит следующему identity increment.
+Текущий общий Bearer boundary поддерживает development/test-only Dummy из
+VIG-27 и production offline JWT из VIG-28. JWT проверяет pinned RS256 trust
+snapshot до нормализации `sub`/`groups`; оба mode передают assembler-у только
+normalized identity.
 
 Извлечение и нормализация этих значений отделяются от механизма выбора политик. Policy engine должен получать готовый контекст и не должен самостоятельно разбирать HTTP-запрос, авторизацию или тело сообщения.
 
@@ -126,19 +126,22 @@ transport, fragments, provenance и inspection gaps не входят в
 set`. Это valid anonymous context, который совпадает с subject `ANY` и не
 совпадает с USER/GROUP по contract EPIC-04.
 
-## Temporary Dummy Bearer boundary
+## Bearer identity boundary
 
-Strict config требует `environment`, sole mode `DUMMY`, configured user и
-optional groups. `DUMMY` разрешён только в development/test и запрещён в
-production. User/groups используют ASCII grammar
+Strict config требует `environment` и ровно один mode. `DUMMY` разрешён только
+в development/test и требует configured user/optional groups. `JWT` разрешён
+в production и требует exact issuer, audience и non-empty pinned RSA public
+JWK set с unique `kid`. User/groups используют ASCII grammar
 `[A-Za-z0-9][A-Za-z0-9._:@/\-]{0,127}` и Locale.ROOT lowercase; groups
-deduplicate-ятся и ограничены 128 values.
+ограничены 128 values, а JWT отклоняет duplicate normalized group.
 
 Request обязан содержать ровно один case-insensitive Bearer Authorization.
-Token может быть пустым, игнорируется и не сохраняется. Missing/non-Bearer
-получает typed authentication challenge; duplicate/malformed representation
-получает typed safe failure. Accepted Authorization остаётся end-to-end и
-передаётся upstream с исходным value.
+В Dummy token может быть пустым и игнорируется. JWT token локально проверяется
+по signature/issuer/audience/time contract до чтения identity claims; runtime
+network I/O отсутствует. Missing/non-Bearer получает typed authentication
+challenge; duplicate/malformed/invalid credential получает typed safe failure.
+Accepted Authorization остаётся end-to-end и передаётся upstream с исходным
+value.
 
 ## Immutable assembly и handoff
 
@@ -166,7 +169,8 @@ VIG-03-04.
   EPIC-06 и не извлекаются в EPIC-03.
 - Фаза определяется точкой вызова policy engine, а не содержимым payload.
 - Пользователь и группы поступают в normalized contract из выбранного
-  extractor-а; текущий Dummy использует configured values.
+  extractor-а; Dummy использует configured values, JWT - validated `sub` и
+  top-level `groups`.
 - Accepted Bearer Authorization передаётся upstream без изменения.
 - Пароли, токены и исходные значения credentials не должны попадать в контекст политики, ошибки или логи.
 - Результат сборки context не зависит от конкретной реализации

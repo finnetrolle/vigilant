@@ -3,11 +3,15 @@ package io.vigilant.gateway.config
 import java.net.URI
 import java.nio.file.Files
 import java.nio.file.Path
+import java.security.KeyPairGenerator
+import java.security.interfaces.RSAPublicKey
 import java.time.Duration
+import java.util.Base64
 import kotlin.io.path.writeText
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 @Suppress("LargeClass")
@@ -231,7 +235,7 @@ class AppConfigLoadingTest {
         val cases =
             listOf(
                 "VIGILANT_ENVIRONMENT" to "VIGILANT_ENVIRONMENT is required",
-                "VIGILANT_IDENTITY_MODE" to "VIGILANT_IDENTITY_MODE is required and must be DUMMY",
+                "VIGILANT_IDENTITY_MODE" to "VIGILANT_IDENTITY_MODE is required and must be DUMMY or JWT",
                 "VIGILANT_IDENTITY_DUMMY_USER" to "VIGILANT_IDENTITY_DUMMY_USER is required",
             )
 
@@ -262,6 +266,184 @@ class AppConfigLoadingTest {
         assertEquals("DUMMY identity mode is not permitted in production", exception.message)
     }
 
+    /** Production accepts a complete offline JWT trust configuration. */
+    @Test
+    fun `production accepts offline jwt identity mode`() {
+        val file = writeConfig(
+            """
+            vigilant {
+              upstream-url = "http://127.0.0.1:18081"
+              audit-directory = "$TEST_AUDIT_DIRECTORY"
+              environment = "production"
+              identity-mode = "JWT"
+              identity-jwt-issuer = "https://keycloak.example/realms/platform"
+              identity-jwt-audience = "vigilant"
+              identity-jwt-jwks = [${rsaJwk("key-old")}]
+            }
+            """.trimIndent(),
+        )
+
+        val config = loadAppConfigWithoutIdentityDefaults(
+            mapOf("VIGILANT_CONFIG" to file.toString()),
+        )
+
+        assertEquals(RuntimeEnvironment.PRODUCTION, config.environment)
+    }
+
+    /** Environment variables can supply the complete JWT trust snapshot without a file. */
+    @Test
+    fun `jwt identity settings load from environment`() {
+        val config =
+            loadAppConfigWithoutIdentityDefaults(
+                mapOf(
+                    "VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081",
+                    "VIGILANT_ENVIRONMENT" to "production",
+                    "VIGILANT_IDENTITY_MODE" to "JWT",
+                    "VIGILANT_IDENTITY_JWT_ISSUER" to "https://keycloak.example/realms/platform",
+                    "VIGILANT_IDENTITY_JWT_AUDIENCE" to "vigilant",
+                    "VIGILANT_IDENTITY_JWT_JWKS" to "[${rsaJwkJson("key-env")}]",
+                ),
+            )
+
+        val identity = config.identity as JwtIdentitySettings
+        assertEquals("https://keycloak.example/realms/platform", identity.issuer)
+        assertEquals("vigilant", identity.audience)
+        assertEquals(setOf("key-env"), identity.publicKeys.keys)
+    }
+
+    /** Invalid, duplicate, unknown, and private JWK JSON never escapes source values in errors. */
+    @Test
+    fun `jwt environment jwks reject unsafe json shapes`() {
+        val secret = "private-key-sentinel"
+        val cases =
+            listOf(
+                "not-json-$secret",
+                """[{"kty":"RSA","kty":"RSA","kid":"key","n":"AQ","e":"AQAB"}]""",
+                """[{"kty":"RSA","kid":"key","n":"AQ","e":"AQAB","unknown":"$secret"}]""",
+                """[{"kty":"RSA","kid":"key","n":"AQ","e":"AQAB","d":"$secret"}]""",
+            )
+
+        cases.forEach { rawJwks ->
+            val exception = assertFailsWith<IllegalArgumentException> {
+                loadAppConfigWithoutIdentityDefaults(
+                    mapOf("VIGILANT_IDENTITY_JWT_JWKS" to rawJwks),
+                )
+            }
+            assertEquals(
+                "VIGILANT_IDENTITY_JWT_JWKS must contain a valid JSON public JWK array",
+                exception.message,
+            )
+            assertFalse(exception.message.orEmpty().contains(secret))
+        }
+    }
+
+    /** Duplicate pinned JWK identifiers fail startup instead of replacing a trusted key. */
+    @Test
+    fun `jwt identity rejects duplicate configured kid`() {
+        val file = writeConfig(
+            """
+            vigilant {
+              upstream-url = "http://127.0.0.1:18081"
+              audit-directory = "$TEST_AUDIT_DIRECTORY"
+              environment = "production"
+              identity-mode = "JWT"
+              identity-jwt-issuer = "https://keycloak.example/realms/platform"
+              identity-jwt-audience = "vigilant"
+              identity-jwt-jwks = [${rsaJwk("duplicate")}, ${rsaJwk("duplicate")}]
+            }
+            """.trimIndent(),
+        )
+
+        val exception = assertFailsWith<IllegalArgumentException> {
+            loadAppConfigWithoutIdentityDefaults(mapOf("VIGILANT_CONFIG" to file.toString()))
+        }
+
+        assertEquals("VIGILANT_IDENTITY_JWT_JWKS must contain unique kid values", exception.message)
+    }
+
+    /** JWT and Dummy configuration remain complete and mutually isolated mode contracts. */
+    @Test
+    @Suppress("LongMethod")
+    fun `identity modes reject incomplete invalid and foreign settings`() {
+        val validJwk = validIdentityJwk("key-valid")
+        val cases =
+            listOf(
+                VigilantSettings(
+                    environment = "test",
+                    identityMode = "DUMMY",
+                    identityDummyUser = "user",
+                    identityJwtIssuer = "foreign",
+                ) to
+                    "VIGILANT_IDENTITY_JWT_* settings are permitted only in JWT mode",
+                VigilantSettings(environment = "production", identityMode = "JWT", identityDummyUser = "foreign") to
+                    "VIGILANT_IDENTITY_DUMMY_* settings are not permitted in JWT mode",
+                VigilantSettings(environment = "production", identityMode = "JWT") to
+                    "VIGILANT_IDENTITY_JWT_ISSUER is required",
+                VigilantSettings(environment = "production", identityMode = "JWT", identityJwtIssuer = "issuer") to
+                    "VIGILANT_IDENTITY_JWT_AUDIENCE is required",
+                VigilantSettings(
+                    environment = "production",
+                    identityMode = "JWT",
+                    identityJwtIssuer = "issuer",
+                    identityJwtAudience = "audience",
+                ) to "VIGILANT_IDENTITY_JWT_JWKS must contain at least one public JWK",
+                VigilantSettings(
+                    environment = "production",
+                    identityMode = "JWT",
+                    identityJwtIssuer = "issuer",
+                    identityJwtAudience = "audience",
+                    identityJwtJwks = listOf(validJwk.copy(kty = "EC")),
+                ) to "VIGILANT_IDENTITY_JWT_JWKS must contain valid RSA public JWKs",
+                VigilantSettings(
+                    environment = "production",
+                    identityMode = "JWT",
+                    identityJwtIssuer = "issuer",
+                    identityJwtAudience = "audience",
+                    identityJwtJwks = listOf(validJwk.copy(kid = "")),
+                ) to "VIGILANT_IDENTITY_JWT_JWKS must contain non-empty kid values",
+                VigilantSettings(
+                    environment = "production",
+                    identityMode = "JWT",
+                    identityJwtIssuer = "issuer",
+                    identityJwtAudience = "audience",
+                    identityJwtJwks = listOf(validJwk.copy(kid = "   ")),
+                ) to "VIGILANT_IDENTITY_JWT_JWKS must contain non-empty kid values",
+                VigilantSettings(
+                    environment = "production",
+                    identityMode = "JWT",
+                    identityJwtIssuer = "issuer",
+                    identityJwtAudience = "audience",
+                    identityJwtJwks = listOf(validJwk.copy(n = null)),
+                ) to "VIGILANT_IDENTITY_JWT_JWKS must contain valid RSA public JWKs",
+                VigilantSettings(
+                    environment = "production",
+                    identityMode = "JWT",
+                    identityJwtIssuer = "issuer",
+                    identityJwtAudience = "audience",
+                    identityJwtJwks = listOf(validJwk.copy(e = null)),
+                ) to "VIGILANT_IDENTITY_JWT_JWKS must contain valid RSA public JWKs",
+                VigilantSettings(
+                    environment = "production",
+                    identityMode = "JWT",
+                    identityJwtIssuer = "issuer",
+                    identityJwtAudience = "audience",
+                    identityJwtJwks = listOf(validJwk.copy(n = "not base64url %")),
+                ) to "VIGILANT_IDENTITY_JWT_JWKS must contain valid RSA public JWKs",
+                VigilantSettings(
+                    environment = "production",
+                    identityMode = "JWT",
+                    identityJwtIssuer = "issuer",
+                    identityJwtAudience = "audience",
+                    identityJwtJwks = listOf(validJwk.copy(n = "AQ")),
+                ) to "VIGILANT_IDENTITY_JWT_JWKS must contain valid RSA public JWKs",
+            )
+
+        cases.forEach { (settings, expectedMessage) ->
+            val exception = assertFailsWith<IllegalArgumentException> { settings.validatedRuntimeIdentity() }
+            assertEquals(expectedMessage, exception.message)
+        }
+    }
+
     /** Every removed mode is rejected without a compatibility alias. */
     @Test
     fun `legacy and unknown identity modes fail startup`() {
@@ -275,7 +457,7 @@ class AppConfigLoadingTest {
                     defaultConfigPaths = emptyList(),
                 )
             }
-            assertEquals("VIGILANT_IDENTITY_MODE is required and must be DUMMY", exception.message)
+            assertEquals("VIGILANT_IDENTITY_MODE is required and must be DUMMY or JWT", exception.message)
         }
     }
 
@@ -795,6 +977,41 @@ class AppConfigLoadingTest {
 
     private fun writeConfig(content: String): Path =
         Files.createTempFile("vigilant-test", ".conf").also { it.writeText(content) }
+
+    /** Builds one valid pinned RSA public JWK without any private key material. */
+    private fun rsaJwk(kid: String): String {
+        val publicKey = newRsaPublicKey()
+        return """{ kty = "RSA", kid = "$kid", n = "${base64Url(publicKey.modulus.toByteArray())}", """ +
+            """e = "${base64Url(publicKey.publicExponent.toByteArray())}" }"""
+    }
+
+    /** Builds one valid pinned RSA public JWK in the environment JSON representation. */
+    private fun rsaJwkJson(kid: String): String {
+        val publicKey = newRsaPublicKey()
+        return """{"kty":"RSA","kid":"$kid","n":"${base64Url(publicKey.modulus.toByteArray())}",""" +
+            """"e":"${base64Url(publicKey.publicExponent.toByteArray())}"}"""
+    }
+
+    /** Builds one valid raw RSA JWK fixture for direct validation cases. */
+    private fun validIdentityJwk(kid: String): IdentityJwkSettings {
+        val publicKey = newRsaPublicKey()
+        return IdentityJwkSettings(
+            kty = "RSA",
+            kid = kid,
+            n = base64Url(publicKey.modulus.toByteArray()),
+            e = base64Url(publicKey.publicExponent.toByteArray()),
+        )
+    }
+
+    /** Generates one RSA public key for trust-configuration fixtures. */
+    private fun newRsaPublicKey(): RSAPublicKey =
+        KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair().public as RSAPublicKey
+
+    /** Encodes one unsigned RSA integer as unpadded Base64url. */
+    private fun base64Url(signedBytes: ByteArray): String {
+        val unsigned = signedBytes.dropWhile { it == 0.toByte() }.toByteArray()
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(unsigned)
+    }
 
     /** Loads exact supplied identity fields while adding only the unrelated audit prerequisite. */
     private fun loadAppConfigWithoutIdentityDefaults(env: Map<String, String>): AppConfig =

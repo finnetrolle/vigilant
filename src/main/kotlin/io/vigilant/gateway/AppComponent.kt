@@ -17,11 +17,16 @@ import io.vigilant.audit.validateAuditSchemaCapacity
 import io.vigilant.gateway.config.AppConfig
 import io.vigilant.gateway.config.DEFAULT_SHUTDOWN_FORCE_TIMEOUT
 import io.vigilant.gateway.config.DEFAULT_SHUTDOWN_QUIET_PERIOD
+import io.vigilant.gateway.config.DummyIdentitySettings
+import io.vigilant.gateway.config.IdentitySettings
+import io.vigilant.gateway.config.JwtIdentitySettings
 import io.vigilant.gateway.config.loadAppConfig
 import io.vigilant.gateway.health.LivenessService
 import io.vigilant.gateway.health.ReadinessService
 import io.vigilant.gateway.health.TrafficAdmissionService
 import io.vigilant.gateway.identity.DummyIdentityExtractor
+import io.vigilant.gateway.identity.BearerIdentityExtractor
+import io.vigilant.gateway.identity.OfflineJwtIdentityExtractor
 import io.vigilant.gateway.metrics.MetricsService
 import io.vigilant.gateway.metrics.buildSdkMeterProvider
 import io.vigilant.gateway.proxy.BypassProxyService
@@ -77,6 +82,19 @@ interface AppComponent {
         @SingleIn(AppScope::class)
         fun appConfig(): AppConfig = loadAppConfig()
 
+        /** Selects the common Bearer implementation from one validated settings variant. */
+        internal fun identityExtractorBinding(settings: IdentitySettings): BearerIdentityExtractor =
+            when (settings) {
+                is DummyIdentitySettings -> DummyIdentityExtractor(settings)
+                is JwtIdentitySettings -> OfflineJwtIdentityExtractor(settings)
+            }
+
+        /** Provides exactly the Bearer implementation selected by validated startup configuration. */
+        @Provides
+        @SingleIn(AppScope::class)
+        fun identityExtractor(appConfig: AppConfig): BearerIdentityExtractor =
+            identityExtractorBinding(appConfig.identity)
+
         /** Opens, locks, and recovers the application-owned durable audit store once. */
         @Provides
         @SingleIn(AppScope::class)
@@ -127,12 +145,14 @@ interface AppComponent {
         /** Assembles typed complete-source inspection and connects it to streaming transport. */
         @Provides
         @SingleIn(AppScope::class)
+        @Suppress("LongParameterList")
         fun piiShadowProxyService(
             appConfig: AppConfig,
             bypassProxyService: BypassProxyService,
             inspectionResources: InspectionResources,
             policyEngine: PolicyEngine,
             auditStore: AuditStore,
+            identityExtractor: BearerIdentityExtractor,
         ): PiiShadowProxyService {
             val protocol = PiiShadowProtocol(appConfig.upstreamUri)
             val auditLogger = ShadowAuditLogger()
@@ -143,7 +163,7 @@ interface AppComponent {
                 protocol = protocol,
                 workflow = workflow,
                 inspectionExecutor = inspectionResources.requestExecutor,
-                identityExtractor = DummyIdentityExtractor(appConfig.identity),
+                identityExtractor = identityExtractor,
                 auditLogger = auditLogger,
                 auditStore = auditStore,
             )

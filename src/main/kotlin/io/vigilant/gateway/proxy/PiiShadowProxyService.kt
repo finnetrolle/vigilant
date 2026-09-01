@@ -12,7 +12,7 @@ import io.opentelemetry.api.trace.StatusCode
 import io.vigilant.audit.AuditReservation
 import io.vigilant.audit.AuditReservationResult
 import io.vigilant.audit.AuditStore
-import io.vigilant.gateway.identity.DummyIdentityExtractor
+import io.vigilant.gateway.identity.BearerIdentityExtractor
 import io.vigilant.gateway.identity.IdentityExtractionResult
 import io.vigilant.gateway.tracing.RequestTracing
 import io.vigilant.source.BoundedRequestSourceOwner
@@ -38,14 +38,14 @@ import java.util.concurrent.atomic.AtomicReference
  * body replay, stable upstream errors and streaming response semantics remain owned by the
  * transport proxy.
  */
-@Suppress("LongMethod", "LongParameterList", "ReturnCount", "TooGenericExceptionCaught")
+@Suppress("LongMethod", "LongParameterList", "ReturnCount", "TooGenericExceptionCaught", "TooManyFunctions")
 class PiiShadowProxyService internal constructor(
     private val bypassProxyService: BypassProxyService,
     private val requestSourceQuota: RequestSourceQuota,
     private val protocol: PiiShadowProtocol,
     private val workflow: ShadowInspectionWorkflow,
     private val inspectionExecutor: ExecutorService,
-    private val identityExtractor: DummyIdentityExtractor,
+    private val identityExtractor: BearerIdentityExtractor,
     private val auditLogger: ShadowAuditLogger,
     private val auditStore: AuditStore,
 ) : HttpService {
@@ -72,22 +72,57 @@ class PiiShadowProxyService internal constructor(
                 }
             }
 
-        val identity = when (val result = identityExtractor.extract(request.headers())) {
-            is IdentityExtractionResult.Success -> result
-            is IdentityExtractionResult.Failure -> {
-                return durableErrorResponse(
-                    ctx,
-                    auditReservation,
-                    ShadowAuditError.Identity(result.code),
-                    InspectionHttpResponses.identityError(result.code),
-                    inspectionSpan,
-                )
-            }
-        }
+        return extractIdentity(ctx, request, auditReservation, inspectionSpan)
+    }
 
+    /** Runs credential validation on the blocking-safe request executor before body demand. */
+    private fun extractIdentity(
+        ctx: ServiceRequestContext,
+        request: HttpRequest,
+        auditReservation: AuditReservation,
+        inspectionSpan: Span?,
+    ): HttpResponse {
+        val completion = CompletableFuture<HttpResponse>()
+        try {
+            inspectionExecutor.execute {
+                val response =
+                    ctx.push().use {
+                        when (val result = identityExtractor.extract(request.headers())) {
+                            is IdentityExtractionResult.Success ->
+                                openRequestSource(ctx, request, result, auditReservation, inspectionSpan)
+
+                            is IdentityExtractionResult.Failure ->
+                                durableErrorResponse(
+                                    ctx,
+                                    auditReservation,
+                                    ShadowAuditError.Identity(result.code),
+                                    InspectionHttpResponses.identityError(result.code),
+                                    inspectionSpan,
+                                )
+                        }
+                    }
+                completion.complete(response)
+            }
+        } catch (_: java.util.concurrent.RejectedExecutionException) {
+            auditReservation.close()
+            inspectionSpan?.setStatus(StatusCode.ERROR)
+            inspectionSpan?.end()
+            completion.complete(stableProxyError(HttpStatus.SERVICE_UNAVAILABLE, "audit_unavailable"))
+        }
+        return HttpResponse.of(completion)
+    }
+
+    /** Opens the bounded body source only after successful offline identity validation. */
+    private fun openRequestSource(
+        ctx: ServiceRequestContext,
+        request: HttpRequest,
+        identity: IdentityExtractionResult.Success,
+        auditReservation: AuditReservation,
+        inspectionSpan: Span?,
+    ): HttpResponse {
         val knownContentLength = request.headers().contentLength().takeIf { length -> length >= 0L }
         return when (val opened = requestSourceQuota.open(knownContentLength)) {
-            is RequestSourceOpenResult.Rejected -> {
+            is RequestSourceOpenResult.Rejected ->
                 durableErrorResponse(
                     ctx,
                     auditReservation,
@@ -95,7 +130,7 @@ class PiiShadowProxyService internal constructor(
                     InspectionHttpResponses.sourceError(opened.code),
                     inspectionSpan,
                 )
-            }
+
             is RequestSourceOpenResult.Open ->
                 inspectAndForward(ctx, request, opened.owner, identity, auditReservation, inspectionSpan)
         }

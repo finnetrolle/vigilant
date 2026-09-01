@@ -94,11 +94,12 @@ policies = [
   учёта регистра;
 - `type="*"` с точным идентификатором запрещён.
 
-Идентификация выполняется до выбора политик. Текущий Dummy Bearer extractor
-передаёт configured normalized user/groups после проверки единственного
-Bearer header; token не входит в policy context. Полный временный startup и
-HTTP contract описан в
-[контракте исполнения](runtime-contract.md#dummy-bearer-identity).
+Идентификация выполняется до выбора политик. Общий Bearer contract передаёт
+только normalized user/groups: development/test Dummy использует configured
+values, а production JWT локально проверяет pinned RS256 token и нормализует
+validated `sub`/`groups`. Raw token не входит в policy context. Полный startup
+и HTTP contract описан в
+[контракте исполнения](runtime-contract.md#bearer-identity).
 
 ## Переопределения
 

@@ -7,6 +7,8 @@ participant "TracingService" as Tracing
 participant "TrafficAdmissionService" as Admission
 participant "PiiShadowProxyService" as Proxy
 participant "LocalAuditStore" as Audit
+participant "Blocking-safe request executor" as Executor
+participant "BearerIdentityExtractor" as Identity
 participant "BoundedRequestSource" as Source
 participant "ShadowInspectionWorkflow" as Workflow
 participant "ChatCompletionsRequestParser" as Parser
@@ -27,8 +29,17 @@ else дескриптор поддерживается
     Audit --> Proxy : отказ
     Proxy --> Client : 503 audit_unavailable
   else место в аудите зарезервировано
-    Proxy -> Proxy : извлечь настроенный идентификатор
-    Proxy -> Source : принять с обратным давлением и квотами
+    Proxy -> Executor : проверить identity до body demand
+    Executor -> Identity : single Bearer header
+    Identity -> Identity : Dummy configured identity или\noffline RS256 + pinned JWK + claims
+    alt identity отклонена
+      Identity --> Executor : typed safe failure
+      Executor -> Audit : добавить безопасную ERROR запись
+      Audit --> Executor : DURABLY_RETAINED
+      Executor --> Client : 400/401 stable identity error
+    else identity нормализована
+      Identity --> Executor : normalized user/groups
+      Executor -> Source : принять с обратным давлением и квотами
     Source --> Proxy : полный источник
     Proxy -> Workflow : передать владение источником
     Workflow -> Parser : открыть представление только для чтения
@@ -48,6 +59,7 @@ else дескриптор поддерживается
       Transport -> Upstream : исходные байты и сквозные заголовки
       Upstream --> Transport : поток ответа
       Transport --> Client : потоковый ответ
+    end
     end
   end
 end

@@ -76,9 +76,12 @@ deployment encryption at rest. Для production deployment secrets должны
 передаваться через предназначенный для них secret mechanism, а не записываться
 в image или config committed в repository.
 
-Текущий `DUMMY` mode разрешает только development/test deployment. Production
-startup намеренно отклоняется до реализации real Bearer extractor; приведённые
-команды не являются production identity configuration.
+`DUMMY` mode разрешает только development/test deployment, поэтому первая
+команда остаётся local example. Production использует `identity-mode=JWT` в
+mounted HOCON: exact issuer, audience и pinned RSA public JWK set. Gateway не
+обращается к Keycloak discovery/JWKS/UserInfo/introspection endpoints; rotation
+выполняется явным configuration/deployment update с overlap старого и нового
+public key.
 
 ## External Audit Collector
 

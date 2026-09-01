@@ -54,11 +54,15 @@ context клиенту и передаёт его upstream.
 worst-case disk bytes до identity extraction и body demand. Exhausted или
 unhealthy store возвращает `503 audit_unavailable` без чтения body и upstream.
 
-Затем `DummyIdentityExtractor` требует ровно один case-insensitive Bearer
-`Authorization`, игнорирует token и возвращает configured normalized
-user/groups. Missing или другой scheme получает Bearer challenge; duplicate и
-malformed representation отклоняются до body demand и upstream call. Token не
-сохраняется, а принятый Authorization передаётся upstream без изменения.
+Затем выбранная реализация общего `BearerIdentityExtractor` выполняется на
+blocking-safe request executor. Development/test `DummyIdentityExtractor`
+проверяет только representation и возвращает configured normalized identity.
+`OfflineJwtIdentityExtractor` локально выбирает pinned RSA public key по exact
+`kid`, проверяет RS256 signature, issuer, audience и time claims, а только
+после этого нормализует `sub`/`groups`. Он не выполняет discovery, key fetch
+или identity lookup. Любой reject предшествует body demand и upstream call.
+Raw token не сохраняется, а принятый Authorization передаётся upstream без
+изменения.
 
 Для поддерживаемого запроса `RequestSourceQuota` резервирует owner. Body
 принимается с backpressure и полностью сохраняется в bounded in-memory source.

@@ -39,7 +39,14 @@ import io.vigilant.gateway.TEST_DUMMY_AUTHORIZATION
 import io.vigilant.context.PolicyContextHandoff
 import io.vigilant.context.PolicyContextHandoffResult
 import io.vigilant.gateway.config.DummyIdentitySettings
+import io.vigilant.gateway.identity.BearerIdentityExtractor
 import io.vigilant.gateway.identity.DummyIdentityExtractor
+import io.vigilant.gateway.identity.OfflineJwtIdentityExtractor
+import io.vigilant.gateway.identity.jwtIdentitySettings
+import io.vigilant.gateway.identity.jwtTestKey
+import io.vigilant.gateway.identity.invalidJwtTokens
+import io.vigilant.gateway.identity.signedJwt
+import io.vigilant.gateway.identity.validJwtClaims
 import io.vigilant.gateway.tracing.TracingService
 import io.vigilant.policy.adapter.FastPiiPolicyAdapter
 import io.vigilant.policy.decision.ReactionAggregator
@@ -73,6 +80,9 @@ import java.nio.ByteBuffer
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Duration
+import java.time.Clock
+import java.time.Instant
+import java.time.ZoneOffset
 import java.util.concurrent.CancellationException
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CopyOnWriteArrayList
@@ -596,6 +606,158 @@ class PiiShadowProxyServiceTest {
             "malformed-token-sentinel",
             "body-sentinel",
         ).forEach { sentinel -> assertFalse(renderedLogs.contains(sentinel)) }
+        assertEquals(0, upstreamRequests.get())
+    }
+
+    /** Offline JWT validation executes away from the event loop before body demand. */
+    @Test
+    fun `identity extraction uses blocking-safe request executor`() {
+        val bodyDemanded = AtomicBoolean()
+        val extractionOnEventLoop = AtomicBoolean(true)
+        val upstream = fixture.startServer { HttpResponse.of(HttpStatus.OK) }
+        val delegate = DummyIdentityExtractor(DummyIdentitySettings("test-user", emptySet()))
+        val extractor = BearerIdentityExtractor { headers ->
+            val current = ServiceRequestContext.current()
+            extractionOnEventLoop.set(current.eventLoop().inEventLoop())
+            delegate.extract(headers)
+        }
+        val gateway =
+            startShadowGateway(
+                upstreamUri = fixture.serverUri(upstream),
+                identityExtractor = extractor,
+                requestBodyDemandObserved = bodyDemanded,
+            )
+
+        val response =
+            WebClient.of(fixture.serverUri(gateway))
+                .execute(chatCompletionsRequest("blocking-safe-identity"))
+                .aggregate()
+                .join()
+
+        assertEquals(HttpStatus.OK, response.status())
+        assertFalse(extractionOnEventLoop.get())
+        assertTrue(bodyDemanded.get())
+    }
+
+    /** Valid JWT identity selects policy and preserves the original Authorization exactly. */
+    @Test
+    @Suppress("LongMethod")
+    fun `jwt identity reaches policy selection and upstream unchanged`() {
+        val key = jwtTestKey("key-runtime")
+        val claims = validJwtClaims(JWT_NOW.epochSecond).apply { remove("groups") }
+        val token = signedJwt(key, claims)
+        val authorization = "Bearer $token"
+        val upstreamAuthorizations = CopyOnWriteArrayList<String>()
+        val upstream = fixture.startServer { request ->
+            request.aggregate().thenApply { aggregated ->
+                upstreamAuthorizations += requireNotNull(aggregated.headers().get("authorization"))
+                HttpResponse.of(HttpStatus.OK)
+            }.let(HttpResponse::of)
+        }
+        val responseContexts = CopyOnWriteArrayList<PolicyContext>()
+        val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
+        val auditStore = ControllableAuditStore()
+        val gateway =
+            startShadowGateway(
+                upstreamUri = fixture.serverUri(upstream),
+                identityExtractor =
+                    OfflineJwtIdentityExtractor(
+                        jwtIdentitySettings(key),
+                        Clock.fixed(JWT_NOW, ZoneOffset.UTC),
+                    ),
+                responseContexts = responseContexts,
+                auditStore = auditStore,
+                policyProvider =
+                    DummyPolicyProvider(
+                        listOf(
+                            shadowPolicy(
+                                deadline = Duration.ofSeconds(2),
+                                subject = PolicySubject(SubjectType.USER, SubjectId("user.subject")),
+                            ),
+                        ),
+                    ),
+            )
+        val request =
+            HttpRequest.of(
+                RequestHeaders.builder(HttpMethod.POST, "/v1/chat/completions")
+                    .contentType(MediaType.JSON)
+                    .add("authorization", authorization)
+                    .build(),
+                HttpData.ofUtf8(chatCompletionsBody("jwt-runtime-body")),
+            )
+
+        val response = WebClient.of(fixture.serverUri(gateway)).execute(request).aggregate().join()
+
+        assertEquals(HttpStatus.OK, response.status())
+        assertEquals(listOf(authorization), upstreamAuthorizations)
+        assertEquals("user.subject", responseContexts.single().user)
+        assertEquals(emptySet(), responseContexts.single().groups)
+        val renderedLogs = events.joinToString("\n") { it.formattedMessage + it.keyValuePairs.orEmpty() }
+        assertFalse(renderedLogs.contains(token))
+        assertFalse(renderedLogs.contains("User.Subject"))
+        assertFalse(auditStore.records().joinToString().contains(token))
+        assertFalse(auditStore.records().joinToString().contains("User.Subject"))
+        assertTrue(fixture.awaitUntil(Duration.ofSeconds(2)) { spans.size >= 3 })
+        assertFalse(spans.joinToString().contains(token))
+        assertFalse(spans.joinToString().contains("User.Subject"))
+    }
+
+    /** Every invalid JWT matrix case is durably rejected before body demand or upstream. */
+    @Test
+    @Suppress("LongMethod")
+    fun `invalid jwt matrix precedes body demand`() {
+        val trusted = jwtTestKey("key-trusted-e2e")
+        val other = jwtTestKey("key-other-e2e")
+        val cases = invalidJwtTokens(trusted, other, JWT_NOW.epochSecond)
+        val bodyDemanded = AtomicBoolean()
+        val upstreamRequests = AtomicInteger()
+        val upstream = fixture.startServer {
+            upstreamRequests.incrementAndGet()
+            HttpResponse.of(HttpStatus.OK)
+        }
+        val auditStore = ControllableAuditStore(autoComplete = false)
+        val gateway =
+            startShadowGateway(
+                upstreamUri = fixture.serverUri(upstream),
+                identityExtractor =
+                    OfflineJwtIdentityExtractor(
+                        jwtIdentitySettings(trusted),
+                        Clock.fixed(JWT_NOW, ZoneOffset.UTC),
+                    ),
+                requestBodyDemandObserved = bodyDemanded,
+                auditStore = auditStore,
+            )
+        val client = WebClient.of(fixture.serverUri(gateway))
+
+        cases.entries.forEachIndexed { index, (name, token) ->
+            bodyDemanded.set(false)
+            val request =
+                HttpRequest.of(
+                    RequestHeaders.builder(HttpMethod.POST, "/v1/chat/completions")
+                        .contentType(MediaType.JSON)
+                        .add("authorization", "Bearer $token")
+                        .build(),
+                    HttpData.ofUtf8(chatCompletionsBody("$name-body-sentinel")),
+                )
+            val response = client.execute(request).aggregate()
+
+            assertTrue(
+                fixture.awaitUntil(Duration.ofSeconds(2)) {
+                    auditStore.submittedRecords.snapshot().size == index + 1
+                },
+                "$name did not reach durable audit ownership",
+            )
+            assertFalse(response.isDone, "$name escaped before durable acceptance")
+            assertFalse(bodyDemanded.get(), "$name demanded request body")
+            assertEquals(0, upstreamRequests.get(), "$name reached upstream")
+            auditStore.completeNext()
+
+            val completed = response.join()
+            assertEquals(HttpStatus.BAD_REQUEST, completed.status(), name)
+            assertEquals("""{"error":"invalid_identity"}""", completed.contentUtf8(), name)
+            assertEquals("INVALID_CREDENTIAL", auditStore.records()[index].record.errorCode, name)
+        }
+
         assertEquals(0, upstreamRequests.get())
     }
 
@@ -1501,6 +1663,7 @@ class PiiShadowProxyServiceTest {
      * @param serviceContexts optional request scopes used for lifecycle control and terminal-release assertions.
      * @param requestBodyDemandObserved optional observer set when inspection demands request content.
      * @param policyProvider policy snapshot source used by the real orchestration boundary.
+     * @param identityExtractor selected Bearer implementation; defaults to the established Dummy fixture.
      * @param inspectionExecutor optional deterministic executor supplied by lifecycle tests.
      * @param configureServer optional Armeria settings for lifecycle scenarios.
      */
@@ -1512,6 +1675,7 @@ class PiiShadowProxyServiceTest {
         policyDeadline: Duration = Duration.ofSeconds(2),
         identitySettings: DummyIdentitySettings =
             DummyIdentitySettings("test-user", emptySet()),
+        identityExtractor: BearerIdentityExtractor = DummyIdentityExtractor(identitySettings),
         responseContexts: MutableList<PolicyContext>? = null,
         serviceContexts: MutableList<com.linecorp.armeria.server.ServiceRequestContext>? = null,
         requestBodyDemandObserved: AtomicBoolean? = null,
@@ -1547,7 +1711,7 @@ class PiiShadowProxyServiceTest {
                 protocol = protocol,
                 workflow = ShadowInspectionWorkflow(protocol, policyEngine, auditLogger),
                 inspectionExecutor = requestExecutor,
-                identityExtractor = DummyIdentityExtractor(identitySettings),
+                identityExtractor = identityExtractor,
                 auditLogger = auditLogger,
                 auditStore = auditStore,
             )
@@ -1681,6 +1845,12 @@ class PiiShadowProxyServiceTest {
             reactions = PolicyReactions(allow, allow, allow),
             overrides = emptyList(),
         )
+    }
+
+    /** Fixed validation instant shared by real-Armeria JWT cases. */
+    private companion object {
+        /** Exact clock instant used by the production HTTP seam. */
+        val JWT_NOW: Instant = Instant.parse("2026-01-01T00:00:00Z")
     }
 
     /** Collects streamed response chunks and signals the first body observation. */

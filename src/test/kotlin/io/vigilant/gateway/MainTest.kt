@@ -11,7 +11,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class MainTest {
-    /** Verifies production cannot start while Dummy is the sole available identity mode. */
+    /** Verifies production rejects the non-authenticating Dummy mode even though JWT is available. */
     @Test
     fun `production deterministically rejects dummy identity at process startup`() {
         val result =
