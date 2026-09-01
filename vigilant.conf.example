@@ -1,5 +1,6 @@
 # Пример конфигурации Vigilant (HOCON).
 # Поиск файла: $VIGILANT_CONFIG, затем ./vigilant.conf, затем /etc/vigilant/vigilant.conf.
+# Полный справочник и правила проверки: docs/configuration.md.
 # Переменные окружения VIGILANT_UPSTREAM_URL, VIGILANT_PORT, VIGILANT_UPSTREAM_*_TIMEOUT,
 # VIGILANT_AUDIT_*, VIGILANT_SHUTDOWN_*, VIGILANT_INSPECTION_*, VIGILANT_TRACING_*,
 # VIGILANT_IDENTITY_* и VIGILANT_OTLP_ENABLED переопределяют значения файла.

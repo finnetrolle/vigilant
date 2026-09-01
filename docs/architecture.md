@@ -20,36 +20,17 @@ Response inspection, OpenAI Responses API и enforcement reactions пока не
 
 ## Путь запроса
 
-~~~text
-Client
-  -> Armeria Server
-  -> TrafficAdmissionService
-  -> MetricsService
-  -> TracingService
-  -> PiiShadowProxyService
-       -> descriptor validation
-       -> bounded audit reservation
-       -> config-driven identity extraction and trust check
-       -> bounded request ingest
-       -> ShadowInspectionWorkflow
-            -> Chat Completions parser
-            -> normalized request policy context and scoped handoff
-            -> policy selection and fast-pii inspection
-            -> immutable safe record -> local WAL -> force(true)
-            -> best-effort stdout projection
-            -> Forward | Reject
-       -> asynchronous ready segment -> external Collector -> atomic ack -> reclaim
-       -> ReplayReadyRequest one-shot transport handoff
-  -> BypassProxyService
-       -> header normalization
-       -> pooled Armeria WebClient
-  -> Upstream
+Архитектурные схемы оформлены в нотации UML 2.0:
 
-Upstream response
-  -> hop-by-hop header stripping
-  -> streaming pass-through
-  -> Client
-~~~
+- [диаграмма компонентов исполняемой системы](diagrams/runtime-components.puml)
+  показывает границу процесса, внутренние компоненты, вышестоящий сервер,
+  постоянный том аудита, Collector и внешнее хранилище;
+- [последовательность проверки запроса](diagrams/request-inspection-sequence.puml)
+  показывает ошибки дескриптора и аудита, владение ограниченным источником,
+  долговечное принятие, точное воспроизведение и потоковый ответ;
+- [диаграмма состояний жизненного цикла аудита](diagrams/audit-lifecycle-state.puml)
+  показывает переходы `DECISION_CREATED` -> `STORE_OWNED` ->
+  `DURABLY_RETAINED` -> `EXTERNALLY_DELIVERED`.
 
 ### 1. Admission, metrics и tracing
 
@@ -111,6 +92,10 @@ non-text части, например image, audio, file или opaque reasoning
 offsets относятся к конкретному logical fragment, а данные из разных protocol
 fields не образуют ложный общий контекст.
 
+Полная карта полей, непроверяемые части, структурные ограничения и категории
+fail-closed описаны в
+[контракте запросов Chat Completions](openai-chat-completions.md).
+
 ### 4. Policy context и engine
 
 Context содержит:
@@ -131,6 +116,9 @@ Armeria `ServiceRequestContext`. Public handoff создаёт response context,
 затем одновременно применяет явные overrides. `PolicyEngine` дедуплицирует
 detector execution между policies, соблюдает deadline каждой policy и строит
 детерминированное объяснение решения.
+
+Строгая структура HOCON, точное сопоставление и ограничения теневого режима при
+запуске описаны в [руководстве по политикам](policies.md).
 
 Policy domain поддерживает `ALLOW`/`BLOCK` и transformation plans, но startup
 validation текущего shadow increment разрешает только `ALLOW` без
@@ -154,6 +142,10 @@ Finding содержит тип, UTF-8 offsets, evidence strength и versioned r
 metadata, но не matched text. Фрагменты больше одновызовного лимита detector
 разбиваются на перекрывающиеся UTF-8-safe windows; результаты переводятся в
 координаты исходного fragment и дедуплицируются.
+
+Поддерживаемые типы, семантика свидетельств, возможности оконной обработки,
+свидетельства качества и явные ограничения описаны в
+[руководстве по обнаружению PII](pii-detection.md).
 
 ### 6. Audit и exact replay
 

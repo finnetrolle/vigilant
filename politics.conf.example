@@ -1,5 +1,6 @@
 # Required immutable startup policy snapshot.
 # VIGILANT_POLITICS_CONFIG selects another file; otherwise ./politics.conf is used.
+# Строгая структура, сопоставление и ограничения теневого режима: docs/policies.md.
 policies = [
   {
     id = "default-request-pii"

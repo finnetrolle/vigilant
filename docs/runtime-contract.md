@@ -12,6 +12,10 @@
 
 Другие OpenAI endpoints не проходят через silent bypass.
 
+Точная карта полей, обход JSON Schema, распознаваемые непроверяемые части и
+ограничения анализатора описаны в
+[контракте запросов Chat Completions](openai-chat-completions.md).
+
 Для поддержанного descriptor gateway сначала резервирует bounded audit token,
 затем полностью принимает request body в bounded in-memory source. Parser
 создаёт отдельное normalized view model-visible content,

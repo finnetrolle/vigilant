@@ -1,0 +1,28 @@
+@startuml
+title Жизненный цикл минимальной долговечной записи аудита
+skinparam state {
+  BackgroundColor White
+  BorderColor Black
+}
+
+[*] --> DECISION_CREATED : собрана безопасная неизменяемая запись
+DECISION_CREATED --> STORE_OWNED : назначена последовательность и зарезервирован ограниченный объём
+STORE_OWNED --> DURABLY_RETAINED : кадр и метаданные восстановления\nзафиксированы через force(true)
+DURABLY_RETAINED --> EXTERNALLY_DELIVERED : Collector долговечно сохраняет сегмент\nи публикует допустимый непрерывный ack
+EXTERNALLY_DELIVERED --> [*] : идемпотентное освобождение
+
+DECISION_CREATED --> AUDIT_UNAVAILABLE : событие слишком велико или нет места
+STORE_OWNED --> AUDIT_UNAVAILABLE : ошибка записи, фиксации или жизненного цикла
+AUDIT_UNAVAILABLE --> [*] : 503, без передачи вышестоящему серверу
+
+note right of DURABLY_RETAINED
+Только это состояние разрешает передать первый байт
+вышестоящему серверу или исходный ответ на поддержанный запрос.
+end note
+
+note right of EXTERNALLY_DELIVERED
+Внешняя доставка не входит в критический путь запроса.
+Доставка выполняется не менее одного раза;
+ключом устранения повторов служит event_id.
+end note
+@enduml

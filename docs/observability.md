@@ -8,11 +8,10 @@
 1. application logs как JSON Lines через Logback;
 2. traces и metrics как OTLP JSON Lines через OpenTelemetry stdout exporters.
 
-Application logs проходят через:
-
-~~~text
-SLF4J 2 -> Logback AsyncAppender -> JsonEncoder -> stdout
-~~~
+Производитель журналов приложения использует SLF4J 2. Компонент Logback
+`AsyncAppender` отделяет поток запроса от `JsonEncoder` и единственного места
+вывода `stdout`. Это описание ответственности компонента, а не отдельный
+гарантированный канал доставки.
 
 Async queue ограничена `queueSize=8192` и использует `neverBlock`. При
 переполнении события отбрасываются вместо блокировки Netty event loop; сначала
@@ -98,6 +97,9 @@ lock и `force(true)` до upstream handoff или original supported-request
 response. Directory и bounds перечислены в
 [configuration reference](configuration.md).
 
+Граница долговечности на диаграмме состояний UML 2.0:
+[audit-lifecycle-state.puml](diagrams/audit-lifecycle-state.puml).
+
 `CAPACITY_EXHAUSTED`, `EVENT_TOO_LARGE`, `IO_FAILURE` и `CLOSED` дают только
 `503 {"error":"audit_unavailable"}` и переводят readiness в `503`, пока store
 не восстановил admission. External Collector асинхронно читает immutable ready
@@ -179,14 +181,11 @@ CLIENT span также под тем же настроенным именем. �
 
 ### Span model
 
-Один поддержанный proxy request создаёт:
-
-~~~text
-incoming parent span (если есть)
-  -> Vigilant SERVER span
-       -> vigilant.request.inspect INTERNAL span
-       -> upstream HTTP CLIENT span
-~~~
+Один поддержанный запрос прокси создаёт SERVER span и два непосредственных
+дочерних span: INTERNAL span `vigilant.request.inspect` и HTTP CLIENT span
+вышестоящего запроса. Полное происхождение и момент передачи контекста показаны
+на диаграмме последовательности UML 2.0
+[tracing-sequence.puml](diagrams/tracing-sequence.puml).
 
 INTERNAL и CLIENT являются прямыми children SERVER span. Inspection
 завершается после принятия решения и создания upstream response exchange;

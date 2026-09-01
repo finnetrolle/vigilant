@@ -1,0 +1,26 @@
+@startuml
+title Происхождение трасс W3C для одного обмена через прокси
+autonumber
+
+actor "Клиент" as Client
+participant "SERVER span Vigilant" as Server
+participant "INTERNAL span\nvigilant.request.inspect" as Inspect
+participant "HTTP CLIENT span\nвышестоящего запроса" as UpstreamSpan
+participant "Вышестоящий сервер OpenAI" as Upstream
+
+Client -> Server : запрос с необязательными traceparent, tracestate и сеансом
+activate Server
+Server -> Inspect : создать непосредственный дочерний span
+activate Inspect
+Inspect -> Inspect : разобрать, проверить и долговечно записать аудит
+Inspect --> Server : теневое решение
+deactivate Inspect
+Server -> UpstreamSpan : создать непосредственный дочерний span
+activate UpstreamSpan
+UpstreamSpan -> Upstream : запрос с итоговым контекстом трассы
+Upstream --> UpstreamSpan : потоковый ответ или завершение
+UpstreamSpan --> Server : результат вышестоящего запроса
+deactivate UpstreamSpan
+Server --> Client : ответ с итоговым сеансом и SERVER traceparent
+deactivate Server
+@enduml

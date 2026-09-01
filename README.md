@@ -63,33 +63,32 @@ curl --fail-with-body http://127.0.0.1:8080/v1/chat/completions \
   --data "{\"model\":\"$OPENAI_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Contact alice@example.com\"}]}"
 ~~~
 
-Vigilant проверит model-visible text, запишет safe aggregate
-`policy.shadow_decision` и отправит исходный JSON upstream без
-пересериализации. В shadow mode найденный email не блокирует запрос.
+Vigilant проверит видимый модели текст, запишет безопасное агрегированное
+событие `policy.shadow_decision` и отправит исходный JSON вышестоящему серверу
+без пересериализации. В теневом режиме найденный адрес электронной почты не
+блокирует запрос.
 
 ## Как проходит запрос
 
-~~~text
-Client
-  -> durable audit reservation
-  -> configured identity extraction
-  -> bounded request source
-  -> OpenAI request parser
-  -> policy selection + fast-pii inspection
-  -> force-backed local audit record
-  -> consumed identity header stripping + byte-identical replay
-  -> upstream
-~~~
+Для поддержанного запроса сначала резервируется место в долговечном аудите,
+затем выполняются извлечение настроенного идентификатора, ограниченный приём
+данных, разбор протокола и вычисление политик. Первый байт передаётся
+вышестоящему серверу только после фиксации безопасной записи аудита вызовом
+`force(true)`. Затем исходный источник одноразово передаётся транспорту во
+владение и воспроизводится без изменения байтов.
 
-Response body не агрегируется и передаётся клиенту потоково. Подробный
-разбор startup, policy engine, threading и resource ownership приведён в
+- [Диаграмма последовательности обработки запроса UML 2.0](docs/diagrams/request-inspection-sequence.puml)
+- [Диаграмма компонентов исполняемой системы UML 2.0](docs/diagrams/runtime-components.puml)
+
+Тело ответа не агрегируется и передаётся клиенту потоком. Подробный разбор
+запуска, механизма политик, потоков и владения ресурсами приведён в
 [описании архитектуры](docs/architecture.md). Поддерживаемый HTTP-контракт,
 ошибки и модель таймаутов описаны в
-[runtime contract](docs/runtime-contract.md).
+[контракте исполнения](docs/runtime-contract.md).
 
 `fast-pii` распознаёт email, российские телефоны, платёжные карты, IPv4/IPv6,
-IBAN, ИНН, СНИЛС, внутренние паспорта РФ и полисы ОМС. Findings содержат только
-безопасные метаданные и UTF-8 offsets, но не matched text.
+IBAN, ИНН, СНИЛС, внутренние паспорта РФ и полисы ОМС. Срабатывания содержат
+только безопасные метаданные и смещения UTF-8, но не совпавший текст.
 
 ## Конфигурация
 
@@ -193,19 +192,27 @@ CI на каждый push в `main` и pull request запускает `build`. 
 
 ## Документация проекта
 
-- [Roadmap первого production increment](spec/ROADMAP.md)
-- [Реестр epics и issues](spec/WORK_ITEMS.md)
+- [Индекс документации](docs/README.md)
+- [Покрытие MVP/NFR/Stage 1 требований](docs/requirements-coverage.md)
+- [План развития первого производственного этапа](spec/ROADMAP.md)
+- [Реестр эпиков и задач](spec/WORK_ITEMS.md)
 - [Функции MVP](spec/MVP_FUNCTIONS.md)
 - [Нефункциональные требования и стек](spec/MVP_NON_FUNCTIONAL_REQUIREMENTS.md)
 - [Функции Stage 1](spec/STAGE_1_FUNCTIONS.md)
 - [Функции вне границ продукта](spec/OUT_OF_SCOPE_FUNCTIONS.md)
-- [Configuration reference](docs/configuration.md)
-- [Architecture](docs/architecture.md)
-- [Runtime contract](docs/runtime-contract.md)
-- [Observability reference](docs/observability.md)
-- [Deployment guide](docs/deployment.md)
-- [Development guide](docs/development.md)
-- [Inspection-load baseline](docs/inspection-load-result.md)
+- [Справочник по конфигурации](docs/configuration.md)
+- [Конфигурация и сопоставление политик](docs/policies.md)
+- [Контракт запросов OpenAI Chat Completions](docs/openai-chat-completions.md)
+- [Контракт обнаружения PII](docs/pii-detection.md)
+- [Архитектура](docs/architecture.md)
+- [Контракт исполнения](docs/runtime-contract.md)
+- [Справочник по наблюдаемости](docs/observability.md)
+- [Развёртывание](docs/deployment.md)
+- [Разработка](docs/development.md)
+- [Базовый профиль нагрузки проверки](docs/inspection-load-result.md)
+- [UML-диаграммы 2.0](docs/diagrams/README.md)
 
-Нормативный scope хранится в `spec/`. README предназначен для быстрого входа
-в проект и не заменяет требования, статусы issues или roadmap.
+Нормативная область хранится в `spec/`. README предназначен для быстрого входа
+в проект и не заменяет требования, статусы задач или план развития. Достигнутый
+этап теневой проверки PII не означает, что реализована вся целевая область
+`MVP-01..21`; точное покрытие приведено в карте требований выше.

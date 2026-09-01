@@ -1,0 +1,54 @@
+@startuml
+title Проверка и долговечная передача поддержанного запроса
+autonumber
+
+actor "Клиент" as Client
+participant "TracingService" as Tracing
+participant "TrafficAdmissionService" as Admission
+participant "PiiShadowProxyService" as Proxy
+participant "LocalAuditStore" as Audit
+participant "BoundedRequestSource" as Source
+participant "ShadowInspectionWorkflow" as Workflow
+participant "ChatCompletionsRequestParser" as Parser
+participant "PolicyEngine" as Engine
+participant "BypassProxyService" as Transport
+participant "Вышестоящий сервер OpenAI" as Upstream
+
+Client -> Tracing : HTTP-запрос
+Tracing -> Admission : итоговый контекст сеанса и трассы
+Admission -> Proxy : допущенный запрос
+Proxy -> Proxy : проверить метод, путь и медиатип
+
+alt дескриптор не поддерживается
+  Proxy --> Client : 400 unsupported_schema
+else дескриптор поддерживается
+  Proxy -> Audit : зарезервировать максимальный размер записи
+  alt аудит недоступен
+    Audit --> Proxy : отказ
+    Proxy --> Client : 503 audit_unavailable
+  else место в аудите зарезервировано
+    Proxy -> Proxy : извлечь настроенный идентификатор
+    Proxy -> Source : принять с обратным давлением и квотами
+    Source --> Proxy : полный источник
+    Proxy -> Workflow : передать владение источником
+    Workflow -> Parser : открыть представление только для чтения
+    Parser --> Workflow : атрибуты, фрагменты, непроверяемые части или типизированная ошибка
+    Workflow -> Engine : проверить каждый независимый текстовый фрагмент
+    Engine --> Workflow : детерминированное теневое решение
+    Workflow -> Audit : добавить неизменяемую безопасную запись
+    Audit -> Audit : сформировать кадр, записать, вызвать force(true)
+    Audit --> Workflow : DURABLY_RETAINED
+
+    alt типизированное локальное отклонение
+      Workflow --> Proxy : Reject
+      Proxy --> Client : стабильная безопасная ошибка
+    else Forward
+      Workflow --> Proxy : ReplayReadyRequest
+      Proxy -> Transport : одноразовая передача точного воспроизведения
+      Transport -> Upstream : исходные байты и сквозные заголовки
+      Upstream --> Transport : поток ответа
+      Transport --> Client : потоковый ответ
+    end
+  end
+end
+@enduml

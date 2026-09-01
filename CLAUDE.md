@@ -12,6 +12,10 @@ Vigilant is a guardrails system for AI agent platforms. The product specs live i
 - `spec/epics/*` - large outcomes decomposed into linked issues
 - `spec/issues/**` - standalone and epic-scoped issues I can ask you to implement
 
+Current product documentation starts at `docs/README.md`.
+`docs/requirements-coverage.md` maps every MVP, non-functional, Stage 1 and
+out-of-scope requirement to the actual runtime status and owning documents.
+
 The project has moved beyond bypass-only v0 and completed its first production
 guardrail increment: bounded request-side PII inspection for OpenAI Chat
 Completions in shadow mode. The v0 proxy remains the transport foundation, but
@@ -118,24 +122,36 @@ The maintained architectural overview is `docs/architecture.md`; use it with
 
 Key gateway and policy files under `src/main/kotlin/io/vigilant/`:
 
-- `proxy/PiiShadowProxyService.kt` - thin production HTTP inspection boundary. It validates the supported Chat Completions descriptor, reserves durable audit admission before identity/body demand, ingests into a quota-controlled source, schedules complete-source workflow execution, maps typed rejects to stable responses, and performs the one-shot handoff to `BypassProxyService` only after durable acknowledgement.
-- `proxy/ShadowInspectionWorkflow.kt` / `proxy/ReplayReadyRequest.kt` - gateway-specific complete-source application workflow and one-shot transport ownership boundary. The workflow parses one normalized view, assembles context, evaluates fragments, creates one immutable safe record, waits for force-backed acceptance, and returns typed `Forward` or `Reject`. `ReplayReadyRequest` retains owner responsibility until transport accepts exact replay, then terminal replay owns cleanup.
+- `gateway/proxy/PiiShadowProxyService.kt` - thin production HTTP inspection boundary. It validates the supported Chat Completions descriptor, reserves durable audit admission before identity/body demand, ingests into a quota-controlled source, schedules complete-source workflow execution, maps typed rejects to stable responses, and performs the one-shot handoff to `BypassProxyService` only after durable acknowledgement.
+- `gateway/proxy/ShadowInspectionWorkflow.kt` / `gateway/proxy/ReplayReadyRequest.kt` - gateway-specific complete-source application workflow and one-shot transport ownership boundary. The workflow parses one normalized view, assembles context, evaluates fragments, creates one immutable safe record, waits for force-backed acceptance, and returns typed `Forward` or `Reject`. `ReplayReadyRequest` retains owner responsibility until transport accepts exact replay, then terminal replay owns cleanup.
 - `audit/*` - application-owned segmented WAL, immutable safe record schema, one-shot reservation API, checksum framing, exclusive lock, persistent sequence, force-backed local acknowledgement/recovery, atomic ready manifests and contiguous external Collector ack/reclaim. File I/O belongs only to its blocking-safe worker; the public adapter is `docs/audit-collector-file-handoff.md`.
-- `identity/IdentityExtractor.kt` / `context/PolicyContextHandoff.kt` - mutually exclusive anonymous, trusted-header and Basic identity extraction plus the typed Armeria request-scoped bridge used to derive a response context by changing only the phase. Trusted headers use only the immediate socket peer CIDR; credentials and raw identity values are never retained in policy context or logs.
+- `gateway/identity/IdentityExtractor.kt` / `context/PolicyContextHandoff.kt` - mutually exclusive anonymous, trusted-header and Basic identity extraction plus the typed Armeria request-scoped bridge used to derive a response context by changing only the phase. Trusted headers use only the immediate socket peer CIDR; credentials and raw identity values are never retained in policy context or logs.
 - `source/BoundedRequestSource.kt` - process-wide owner/byte/segment quota plus one-request lifecycle. It receives the request with backpressure, exposes one sequential parser view and one demand-driven exact replay lease, and releases every reservation on completion or cancellation.
 - `protocol/openai/ChatCompletionsRequestParser.kt` - schema-tolerant parser for model-visible Chat Completions content. It preserves unknown fields by never rebuilding the original body, records recognized non-text inspection gaps, and fails closed for malformed or ambiguous content-bearing shapes.
 - `policy/engine/PolicyEngine.kt` / `policy/selection/PolicySelector.kt` / `policy/execution/DetectorExecutionCoordinator.kt` - deterministic policy matching, simultaneous overrides, deduplicated detector execution, per-policy deadlines, fail-fast blocking semantics in the domain layer, and complete decision explanations. Runtime startup currently restricts all configured reactions to shadow-only `ALLOW`.
 - `detectors/pii/fast/FastPiiDetector.kt` / `windowing/WindowedFastPiiExecutor.kt` - built-in deterministic detector and UTF-8-safe window execution for large logical fragments. CPU work runs on the bounded pool owned by `InspectionResources`.
-- `proxy/BypassProxyService.kt` - transport stage after inspection. Rewrites request headers (upstream scheme/authority/path and hop-by-hop stripping), strips hop-by-hop response headers, preserves exact request replay and streaming responses, and maps upstream failures to stable proxy errors.
-- `config/AppConfig.kt` - config loading via Hoplite: optional HOCON file (`VIGILANT_CONFIG`, else `./vigilant.conf`, else `/etc/vigilant/vigilant.conf`) with `VIGILANT_*` env overrides on top (env > file > defaults), then post-decode validation including mandatory audit directory and exact WAL bounds. Unit-tested directly without a running server.
+- `gateway/proxy/BypassProxyService.kt` - transport stage after inspection. Rewrites request headers (upstream scheme/authority/path and hop-by-hop stripping), strips hop-by-hop response headers, preserves exact request replay and streaming responses, and maps upstream failures to stable proxy errors.
+- `gateway/config/AppConfig.kt` - config loading via Hoplite: optional HOCON file (`VIGILANT_CONFIG`, else `./vigilant.conf`, else `/etc/vigilant/vigilant.conf`) with `VIGILANT_*` env overrides on top (env > file > defaults), then post-decode validation including mandatory audit directory and exact WAL bounds. Unit-tested directly without a running server.
 - `policy/config/PolicyConfiguration.kt` - resolves mandatory `politics.conf` (`VIGILANT_POLITICS_CONFIG`, else `./politics.conf`), reads it once, and composes the strict parser with semantic validation into an immutable startup snapshot.
 - `policy/provider/PolicyProvider.kt` - suspend provider contract and `DummyPolicyProvider`, which retains one complete immutable startup snapshot without I/O, filtering, or hot reload.
 - `policy/selection/PolicySelector.kt` - pure context matcher and simultaneous override resolver; returns immutable policy lists sorted by policy ID without provider I/O or detector execution.
-- `AppComponent.kt` - Metro `@DependencyGraph(AppScope::class)`. Providers live in the companion object; the graph also assembles the Armeria `Server`. New injectable classes use `dev.zacsweers.metro.Inject` / `@SingleIn(AppScope::class)` (not `javax.inject` - Metro does not ship it, and `dev.zacsweers.metro.Singleton` does not exist).
-- `health/LivenessService.kt` / `health/ReadinessService.kt` - gateway-owned probes never proxied upstream: `/healthz` answers `200` while the server accepts connections; `/readyz` also requires current audit admission capacity/health and becomes `503` during shutdown.
-- `Main.kt` - builds the graph, eagerly opens the audit store, and shuts down in order: not-ready/stop audit admissions, server drain, audit force/seal/close, inspection, upstream, telemetry.
+- `gateway/AppComponent.kt` - Metro `@DependencyGraph(AppScope::class)`. Providers live in the companion object; the graph also assembles the Armeria `Server`. New injectable classes use `dev.zacsweers.metro.Inject` / `@SingleIn(AppScope::class)` (not `javax.inject` - Metro does not ship it, and `dev.zacsweers.metro.Singleton` does not exist).
+- `gateway/health/LivenessService.kt` / `gateway/health/ReadinessService.kt` - gateway-owned probes never proxied upstream: `/healthz` answers `200` while the server accepts connections; `/readyz` also requires current audit admission capacity/health and becomes `503` during shutdown.
+- `gateway/Main.kt` - builds the graph, eagerly opens the audit store, and shuts down in order: not-ready/stop audit admissions, server drain, audit force/seal/close, inspection, upstream, telemetry.
 
 Tests spin up real Armeria servers on ephemeral ports (`http(0)`) and proxy through them - keep this E2E style for proxy behavior changes.
+
+## Documentation maintenance
+
+- Keep current behavior in `docs/` and normative scope/status in `spec/`; never
+  describe future behavior as available runtime functionality.
+- Update `docs/requirements-coverage.md` whenever implementation changes the
+  status or documented surface of an existing requirement.
+- Create architecture schemes only in UML 2.0 notation. Store reviewable
+  PlantUML sources in `docs/diagrams/` and update the owning text document in
+  the same change.
+- When component ownership, request sequence, audit state or tracing lineage
+  changes, update the corresponding UML diagram as contract evidence.
 
 ## Mandatory test-driven development
 

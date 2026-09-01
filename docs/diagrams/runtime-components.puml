@@ -1,0 +1,57 @@
+@startuml
+title Компоненты исполняемой системы Vigilant
+skinparam componentStyle uml2
+left to right direction
+
+actor "Клиент" as Client
+cloud "Вышестоящий сервер OpenAI" as Upstream
+component "Внешний Audit Collector" as Collector
+database "Постоянный том аудита" as AuditVolume
+database "Внешнее хранилище аудита" as AuditDestination
+
+node "Процесс Vigilant" as Vigilant {
+  component "TrafficAdmissionService" as Admission
+  component "MetricsService" as Metrics
+  component "TracingService" as Tracing
+  component "PiiShadowProxyService" as ShadowProxy
+  component "ShadowInspectionWorkflow" as Workflow
+  component "ChatCompletionsRequestParser" as Parser
+  component "Сборщик PolicyContext" as Context
+  component "PolicyEngine" as PolicyEngine
+  component "fast-pii и оконная обработка" as FastPii
+  component "LocalAuditStore" as AuditStore
+  component "ReplayReadyRequest" as Replay
+  component "BypassProxyService" as Transport
+}
+
+Client --> Admission : HTTP-запрос
+Admission --> Metrics
+Metrics --> Tracing
+Tracing --> ShadowProxy
+ShadowProxy --> Workflow : полный ограниченный источник
+Workflow --> Parser : представление только для чтения
+Parser --> Context : модель и фрагменты
+Context --> PolicyEngine : PolicyContext
+PolicyEngine --> FastPii : независимые фрагменты
+Workflow --> AuditStore : неизменяемая безопасная запись
+AuditStore --> AuditVolume : запись WAL и force(true)
+Workflow --> Replay : решение Forward
+Replay --> Transport : одноразовая передача владения
+Transport --> Upstream : точное воспроизведение запроса
+Upstream --> Transport : потоковый ответ
+Transport --> Client : сквозной ответ
+
+Collector --> AuditVolume : чтение манифеста ready и WAL\nзапись долговечного ack
+Collector --> AuditDestination : доставка не менее одного раза
+AuditStore --> AuditVolume : непрерывный ack и освобождение
+
+note bottom of ShadowProxy
+Проверяются только запросы POST /v1/chat/completions
+с медиатипом application/json.
+end note
+
+note bottom of Transport
+Содержимое ответа не проверяется.
+Тело передаётся сквозным потоком.
+end note
+@enduml

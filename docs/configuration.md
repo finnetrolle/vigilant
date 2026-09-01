@@ -139,27 +139,30 @@ External audit delivery использует только общий filesystem 
 [Collector handoff contract](audit-collector-file-handoff.md); credentials и
 destination configuration принадлежат внешнему Collector.
 
-## Policy snapshot
+## Снимок политик
 
-Путь к обязательному policy file задаёт
+Путь к обязательному файлу политик задаёт
 `VIGILANT_POLITICS_CONFIG`. Без него используется `./politics.conf`. Файл
-читается и валидируется один раз при startup; hot reload отсутствует.
+читается и проверяется один раз при запуске; горячая перезагрузка отсутствует.
 
-Минимальный snapshot приведён в
-[politics.conf.example](../politics.conf.example). Для текущего shadow
-increment он обязан содержать хотя бы одну effective enabled global
-`REQUEST` policy:
+Минимальный снимок приведён в
+[politics.conf.example](../politics.conf.example). Полная строгая структура
+HOCON, сопоставление, одновременные переопределения и правила проверки описаны
+в [руководстве по политикам](policies.md). Для текущего этапа теневого режима
+он обязан содержать хотя бы одну действующую включённую глобальную политику
+`REQUEST`:
 
 - `url=*`;
 - `model=*`;
-- anonymous subject `*`;
-- detector `fast-pii`;
-- disposition `ALLOW` без transformations для всех reactions.
+- анонимный субъект `*`;
+- детектор `fast-pii`;
+- значение `ALLOW` без преобразований для всех реакций.
 
-Пустой, disabled, полностью overridden или enforcement snapshot отклоняется до
-старта server. Его policy ID/version population также должна помещаться в
-worst-case safe audit record при configured event bound; проверка выполняется
-до открытия traffic.
+Пустой, отключённый, полностью переопределённый снимок или снимок с
+принудительными реакциями отклоняется до запуска сервера. Набор идентификаторов
+и версий политик также должен помещаться в безопасную запись аудита наихудшего
+размера при настроенном ограничении события; проверка выполняется до начала
+приёма запросов.
 
 ## Ошибки startup
 
