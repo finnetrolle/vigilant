@@ -99,22 +99,24 @@ private val DEFAULT_CONFIG_PATHS: List<Path> = listOf(
  * @param upstreamUri validated absolute HTTP(S) URL of the upstream service.
  * @param port HTTP port the gateway listens on.
  * @param upstream validated timeouts and pooling settings of the upstream client.
+ * @param environment validated deployment safety profile.
  * @param shutdown validated graceful shutdown quiet and force bounds.
  * @param audit required persistent audit directory and bounded WAL settings.
  * @param inspection bounded in-memory request inspection settings.
  * @param tracing validated tracing header names.
- * @param identity validated request identity extraction settings.
+ * @param identity validated Dummy identity returned after Bearer header acceptance.
  * @param otlp stdout OTLP JSON export settings for traces and metrics.
  */
 data class AppConfig(
     val upstreamUri: URI,
     val port: Int,
     val upstream: UpstreamClientSettings,
+    val environment: RuntimeEnvironment,
     val shutdown: ShutdownSettings,
     val audit: AuditStoreSettings,
     val inspection: InspectionSettings,
     val tracing: TracingSettings,
-    val identity: IdentitySettings,
+    val identity: DummyIdentitySettings,
     val otlp: OtlpSettings,
 )
 
@@ -182,10 +184,10 @@ data class UpstreamClientSettings(
  * error naming internal classes. `port` defaults to [DEFAULT_PORT] when absent from
  * both the environment and the file.
  *
- * @param identityMode single configured identity source name.
- * @param identityUserHeader optional trusted user header name.
- * @param identityGroupsHeader optional trusted groups header name.
- * @param identityTrustedCidrs literal immediate-peer CIDRs trusted to supply identity.
+ * @param environment required deployment safety profile.
+ * @param identityMode required sole identity source name.
+ * @param identityDummyUser required Dummy user identity.
+ * @param identityDummyGroups optional Dummy group identities.
  * @param auditDirectory required persistent directory owned exclusively by the local audit store.
  * @param auditMaxEventBytes maximum encoded audit frame size.
  * @param auditMaxPendingEvents maximum concurrently reserved audit events.
@@ -194,6 +196,7 @@ data class UpstreamClientSettings(
  * @param auditMaxSegmentAge maximum age of one active audit segment before sealing.
  */
 internal data class VigilantSettings(
+    val environment: String? = null,
     val upstreamUrl: String? = null,
     val port: Int = DEFAULT_PORT,
     val upstreamConnectTimeout: Duration = DEFAULT_UPSTREAM_CONNECT_TIMEOUT,
@@ -215,10 +218,9 @@ internal data class VigilantSettings(
     val auditMaxSegmentAge: Duration = AuditStoreSettings.DEFAULT_MAX_SEGMENT_AGE,
     val tracingSessionHeader: String = DEFAULT_SESSION_HEADER,
     val tracingTraceparentHeader: String = DEFAULT_TRACEPARENT_HEADER,
-    val identityMode: String = IdentityMode.ANONYMOUS.name,
-    val identityUserHeader: String? = null,
-    val identityGroupsHeader: String? = null,
-    val identityTrustedCidrs: List<String> = emptyList(),
+    val identityMode: String? = null,
+    val identityDummyUser: String? = null,
+    val identityDummyGroups: List<String> = emptyList(),
     val otlpEnabled: Boolean = true,
 )
 
@@ -267,6 +269,7 @@ internal fun loadAppConfig(
         is Validated.Invalid -> throw IllegalArgumentException(result.error.description())
     }
 
+    val (runtimeEnvironment, identity) = root.vigilant.validatedRuntimeIdentity()
     return AppConfig(
         upstreamUri = validatedUpstreamUri(root.vigilant.upstreamUrl.orEmpty()),
         port = validatedPort(root.vigilant.port),
@@ -288,6 +291,7 @@ internal fun loadAppConfig(
                 root.vigilant.upstreamResponseTimeout,
             ),
         ),
+        environment = runtimeEnvironment,
         shutdown = validatedShutdownSettings(
             quietPeriod = root.vigilant.shutdownQuietPeriod,
             forceTimeout = root.vigilant.shutdownForceTimeout,
@@ -306,7 +310,7 @@ internal fun loadAppConfig(
             sessionHeader = root.vigilant.tracingSessionHeader,
             traceparentHeader = root.vigilant.tracingTraceparentHeader,
         ),
-        identity = root.vigilant.validatedIdentitySettings(),
+        identity = identity,
         otlp = OtlpSettings(root.vigilant.otlpEnabled),
     )
 }

@@ -22,10 +22,8 @@
 а исходные bytes остаются неизменными. После shadow inspection upstream
 получает исходные method, path/query, end-to-end headers и byte-identical body.
 Hop-by-hop headers, authority, `Host` и `Content-Length` обрабатывает gateway.
-Исключение составляют только headers, consumed настроенным identity mode:
-configured user/groups headers в `TRUSTED_HEADERS` или `Authorization` после
-успешного Basic extraction. Unconfigured identity-like headers остаются
-обычными end-to-end headers.
+Принятый `Authorization` остаётся обычным end-to-end header и передаётся
+upstream с исходным значением без изменений.
 
 Response body, включая SSE, не агрегируется и остаётся streaming pass-through.
 Response inspection пока отсутствует, но request URL, model и normalized
@@ -33,20 +31,18 @@ identity сохраняются в request-scoped handoff. Response context ис
 же snapshot и отличается только phase `RESPONSE`; модель из upstream response
 его не переопределяет.
 
-## Identity modes
+## Dummy Bearer identity
 
-Startup выбирает ровно один mode:
+Startup требует `identity-mode=DUMMY`, configured normalized user и optional
+groups. Mode разрешён только в `development` и `test`; `production` всегда
+отклоняется, пока отдельный work item не добавит real Bearer extractor.
 
-- `ANONYMOUS` не читает и не удаляет identity-like headers;
-- `TRUSTED_HEADERS` читает configured user/groups headers только от immediate
-  socket peer внутри configured CIDR. `Forwarded` и `X-Forwarded-For` не
-  расширяют boundary;
-- `BASIC` потребляет один корректный Basic `Authorization`, использует только
-  normalized ASCII username и удаляет header перед upstream forwarding.
-
-Отсутствующее identity value даёт `user=null`, empty groups. Duplicate и
-malformed values отклоняются безопасно. Password, raw Authorization и исходные
-identity values не попадают в policy context, errors или logs.
+Каждый поддержанный request обязан содержать ровно один `Authorization` с
+case-insensitive scheme `Bearer`. Token может быть пустым и не проверяется,
+не сохраняется и не попадает в context, audit, logs, metrics, traces или
+errors. Принятый header передаётся upstream без изменения. Missing или другой
+scheme получает `401` с `WWW-Authenticate: Bearer realm="vigilant"`; duplicate
+или malformed representation получает safe `400`.
 
 ## Shadow PII decision
 
@@ -74,7 +70,7 @@ content-bearing structure обрабатываются fail-closed и не до�
 | Ambiguous content | `400` | `{"error":"ambiguous_content"}` |
 | External или unresolved context | `400` | `{"error":"unresolved_context"}` |
 | Duplicate или malformed identity | `400` | `{"error":"invalid_identity"}` |
-| Configured identity header от untrusted peer | `403` | `{"error":"untrusted_identity"}` |
+| Missing или non-Bearer Authorization | `401` | `{"error":"authentication_required"}` + Bearer challenge |
 | Некорректный request source, включая несовпадение `Content-Length` | `400` | `{"error":"invalid_request_source"}` |
 | Per-request byte limit | `413` | `{"error":"request_too_large"}` |
 | Owner/global retained capacity | `503` | `{"error":"inspection_capacity_exhausted"}` |

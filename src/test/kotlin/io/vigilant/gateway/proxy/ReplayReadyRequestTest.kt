@@ -24,11 +24,10 @@ class ReplayReadyRequestTest {
         val bytes = "request-body-😃".toByteArray()
         val quota = RequestSourceQuota()
         val owner = completeOwner(quota, bytes)
-        val replay = ReplayReadyRequest.create(owner, setOf("authorization"))
+        val replay = ReplayReadyRequest.create(owner)
         val subscriber = HoldingReplaySubscriber()
 
-        val returned = replay.transferTo { publisher, headersToStrip ->
-            assertEquals(setOf("authorization"), headersToStrip)
+        val returned = replay.transferTo { publisher ->
             publisher.subscribe(subscriber)
             "accepted"
         }
@@ -52,18 +51,18 @@ class ReplayReadyRequestTest {
     fun `repeated transfer fails deterministically without second callback`() {
         val quota = RequestSourceQuota()
         val owner = completeOwner(quota, byteArrayOf(1, 2, 3))
-        val replay = ReplayReadyRequest.create(owner, emptySet())
+        val replay = ReplayReadyRequest.create(owner)
         val subscriber = HoldingReplaySubscriber()
         val callbacks = AtomicInteger()
 
-        replay.transferTo { publisher, _ ->
+        replay.transferTo { publisher ->
             callbacks.incrementAndGet()
             publisher.subscribe(subscriber)
         }
 
         val failure =
             assertFailsWith<IllegalStateException> {
-                replay.transferTo { _, _ -> callbacks.incrementAndGet() }
+                replay.transferTo { callbacks.incrementAndGet() }
             }
 
         assertEquals("Request replay transfer is no longer ready", failure.message)
@@ -80,7 +79,7 @@ class ReplayReadyRequestTest {
     fun `close before transfer releases source and forbids transfer`() {
         val quota = RequestSourceQuota()
         val owner = completeOwner(quota, byteArrayOf(4, 5, 6))
-        val replay = ReplayReadyRequest.create(owner, emptySet())
+        val replay = ReplayReadyRequest.create(owner)
         val callbacks = AtomicInteger()
 
         replay.close()
@@ -88,7 +87,7 @@ class ReplayReadyRequestTest {
 
         val failure =
             assertFailsWith<IllegalStateException> {
-                replay.transferTo { _, _ -> callbacks.incrementAndGet() }
+                replay.transferTo { callbacks.incrementAndGet() }
             }
         assertEquals("Request replay transfer is no longer ready", failure.message)
         assertEquals(0, callbacks.get())
@@ -102,42 +101,19 @@ class ReplayReadyRequestTest {
     fun `callback failure closes source and propagates original exception`() {
         val quota = RequestSourceQuota()
         val owner = completeOwner(quota, byteArrayOf(7, 8, 9))
-        val replay = ReplayReadyRequest.create(owner, emptySet())
+        val replay = ReplayReadyRequest.create(owner)
         val sentinel = IllegalArgumentException("transport callback sentinel")
 
         val failure =
             assertFailsWith<IllegalArgumentException> {
-                replay.transferTo<Unit> { _, _ -> throw sentinel }
+                replay.transferTo<Unit> { throw sentinel }
             }
 
         assertTrue(failure === sentinel)
         assertEquals(RequestSourceState.CLOSED, owner.state)
         assertEquals(0, quota.activeOwners)
         assertEquals(0L, quota.retainedBytes)
-        assertFailsWith<IllegalStateException> { replay.transferTo { _, _ -> Unit } }
-    }
-
-    /** The transfer exposes an immutable snapshot of the exact consumed-header set. */
-    @Test
-    fun `headers to strip are snapshotted before transfer`() {
-        val quota = RequestSourceQuota()
-        val owner = completeOwner(quota, byteArrayOf(15))
-        val mutableHeaders = linkedSetOf("authorization", "x-gateway-user")
-        val replay = ReplayReadyRequest.create(owner, mutableHeaders)
-        mutableHeaders.clear()
-        val subscriber = HoldingReplaySubscriber()
-
-        replay.transferTo { publisher, headersToStrip ->
-            assertEquals(setOf("authorization", "x-gateway-user"), headersToStrip)
-            @Suppress("UNCHECKED_CAST")
-            assertFailsWith<UnsupportedOperationException> {
-                (headersToStrip as MutableSet<String>).add("x-mutation")
-            }
-            publisher.subscribe(subscriber)
-        }
-
-        subscriber.cancel()
-        assertEquals(0, quota.activeOwners)
+        assertFailsWith<IllegalStateException> { replay.transferTo { Unit } }
     }
 
     /** Close after accepted transfer defers cleanup through a terminal replay failure. */
@@ -145,10 +121,10 @@ class ReplayReadyRequestTest {
     fun `close after transfer waits for replay failure`() {
         val quota = RequestSourceQuota()
         val owner = completeOwner(quota, byteArrayOf(10, 11, 12))
-        val replay = ReplayReadyRequest.create(owner, emptySet())
+        val replay = ReplayReadyRequest.create(owner)
         val subscriber = HoldingReplaySubscriber()
 
-        replay.transferTo { publisher, _ -> publisher.subscribe(subscriber) }
+        replay.transferTo { publisher -> publisher.subscribe(subscriber) }
         replay.close()
 
         assertEquals(RequestSourceState.COMPLETE, owner.state)
@@ -165,14 +141,14 @@ class ReplayReadyRequestTest {
     fun `concurrent close and transfer have one deterministic terminal owner`() {
         val closeFirstQuota = RequestSourceQuota()
         val closeFirstOwner = completeOwner(closeFirstQuota, byteArrayOf(13))
-        val closeFirstReplay = ReplayReadyRequest.create(closeFirstOwner, emptySet())
+        val closeFirstReplay = ReplayReadyRequest.create(closeFirstOwner)
         closeFirstReplay.close()
-        assertFailsWith<IllegalStateException> { closeFirstReplay.transferTo { _, _ -> Unit } }
+        assertFailsWith<IllegalStateException> { closeFirstReplay.transferTo { Unit } }
         assertEquals(0, closeFirstQuota.activeOwners)
 
         val transferFirstQuota = RequestSourceQuota()
         val transferFirstOwner = completeOwner(transferFirstQuota, byteArrayOf(14))
-        val transferFirstReplay = ReplayReadyRequest.create(transferFirstOwner, emptySet())
+        val transferFirstReplay = ReplayReadyRequest.create(transferFirstOwner)
         val callbackEntered = CountDownLatch(1)
         val releaseCallback = CountDownLatch(1)
         val subscriber = HoldingReplaySubscriber()
@@ -180,7 +156,7 @@ class ReplayReadyRequestTest {
         try {
             val transfer =
                 executor.submit<String> {
-                    transferFirstReplay.transferTo { publisher, _ ->
+                    transferFirstReplay.transferTo { publisher ->
                         publisher.subscribe(subscriber)
                         callbackEntered.countDown()
                         check(releaseCallback.await(5, TimeUnit.SECONDS))

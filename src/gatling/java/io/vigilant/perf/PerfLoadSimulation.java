@@ -196,6 +196,7 @@ public final class PerfLoadSimulation extends Simulation {
     ) {
         HttpRequestActionBuilder request = http(requestName)
             .post("/v1/chat/completions")
+            .header("Authorization", "Bearer perf-token")
             .header("Content-Type", "application/json")
             .header(InspectionPayload.SHA256_HEADER, requestDigest)
             .header(

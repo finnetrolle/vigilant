@@ -12,7 +12,7 @@ import io.opentelemetry.api.trace.StatusCode
 import io.vigilant.audit.AuditReservation
 import io.vigilant.audit.AuditReservationResult
 import io.vigilant.audit.AuditStore
-import io.vigilant.gateway.identity.IdentityExtractor
+import io.vigilant.gateway.identity.DummyIdentityExtractor
 import io.vigilant.gateway.identity.IdentityExtractionResult
 import io.vigilant.gateway.tracing.RequestTracing
 import io.vigilant.source.BoundedRequestSourceOwner
@@ -34,7 +34,7 @@ import java.util.concurrent.atomic.AtomicReference
  * The complete request body is retained by [requestSourceQuota] before this adapter
  * delegates typed orchestration to [workflow]. Identity is extracted before body demand;
  * expected rejects are mapped to stable HTTP responses, while a successful one-shot replay
- * transfer invokes [bypassProxyService] after consumed identity headers are removed. Exact
+ * transfer invokes [bypassProxyService] with the accepted Authorization unchanged. Exact
  * body replay, stable upstream errors and streaming response semantics remain owned by the
  * transport proxy.
  */
@@ -45,7 +45,7 @@ class PiiShadowProxyService internal constructor(
     private val protocol: PiiShadowProtocol,
     private val workflow: ShadowInspectionWorkflow,
     private val inspectionExecutor: ExecutorService,
-    private val identityExtractor: IdentityExtractor,
+    private val identityExtractor: DummyIdentityExtractor,
     private val auditLogger: ShadowAuditLogger,
     private val auditStore: AuditStore,
 ) : HttpService {
@@ -72,7 +72,7 @@ class PiiShadowProxyService internal constructor(
                 }
             }
 
-        val identity = when (val result = identityExtractor.extract(request.headers(), ctx.remoteAddress())) {
+        val identity = when (val result = identityExtractor.extract(request.headers())) {
             is IdentityExtractionResult.Success -> result
             is IdentityExtractionResult.Failure -> {
                 return durableErrorResponse(
@@ -312,8 +312,8 @@ class PiiShadowProxyService internal constructor(
         replay: ReplayReadyRequest,
     ): HttpResponse =
         replay.use { ready ->
-            ready.transferTo { publisher, headersToStrip ->
-                bypassProxyService.serve(ctx, replayRequest(request, publisher, headersToStrip))
+            ready.transferTo { publisher ->
+                bypassProxyService.serve(ctx, replayRequest(request, publisher))
             }
         }
 

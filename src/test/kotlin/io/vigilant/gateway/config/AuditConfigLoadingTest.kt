@@ -16,7 +16,7 @@ class AuditConfigLoadingTest {
         val config =
             loadAppConfig(
                 env =
-                    mapOf(
+                    VALID_DUMMY_ENV + mapOf(
                         "VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081",
                         "VIGILANT_AUDIT_DIRECTORY" to directory.toString(),
                     ),
@@ -37,7 +37,7 @@ class AuditConfigLoadingTest {
         val failure =
             assertFailsWith<IllegalArgumentException> {
                 loadAppConfig(
-                    env = mapOf("VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081"),
+                    env = VALID_DUMMY_ENV + ("VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081"),
                     defaultConfigPaths = emptyList(),
                 )
             }
@@ -52,7 +52,7 @@ class AuditConfigLoadingTest {
         val config =
             loadAppConfig(
                 env =
-                    mapOf(
+                    VALID_DUMMY_ENV + mapOf(
                         "VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081",
                         "VIGILANT_AUDIT_DIRECTORY" to directory.toString(),
                         "VIGILANT_AUDIT_MAX_EVENT_BYTES" to "1024",
@@ -69,5 +69,15 @@ class AuditConfigLoadingTest {
         assertEquals(4_096, config.audit.maxRetainedBytes)
         assertEquals(2_048, config.audit.maxSegmentBytes)
         assertEquals(Duration.ofSeconds(1), config.audit.maxSegmentAge)
+    }
+
+    private companion object {
+        /** Complete unrelated identity prerequisite for audit-only configuration cases. */
+        val VALID_DUMMY_ENV =
+            mapOf(
+                "VIGILANT_ENVIRONMENT" to "test",
+                "VIGILANT_IDENTITY_MODE" to "DUMMY",
+                "VIGILANT_IDENTITY_DUMMY_USER" to "test-user",
+            )
     }
 }

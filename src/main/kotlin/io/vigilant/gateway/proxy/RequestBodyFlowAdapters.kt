@@ -20,26 +20,21 @@ internal fun requestBodyFlowPublisher(request: HttpRequest): Flow.Publisher<Byte
     )
 
 /**
- * Rebuilds a request whose body is demand-driven exact source replay and whose
- * configured consumed identity headers are removed before upstream forwarding.
+ * Rebuilds a request whose body is demand-driven exact source replay while preserving
+ * the original end-to-end headers, including accepted Authorization.
  *
  * @param original inbound request providing the end-to-end headers to preserve.
  * @param body quota-owned exact replay publisher.
- * @param headersToStrip canonical identity header names consumed by Vigilant.
  */
 internal fun replayRequest(
     original: HttpRequest,
     body: Flow.Publisher<ByteBuffer>,
-    headersToStrip: Set<String>,
 ): HttpRequest {
     val dataPublisher: Publisher<HttpData> =
         Publisher { downstream ->
             FlowAdapters.toPublisher(body).subscribe(replayBufferSubscriber(downstream))
         }
-    val replayHeaders = original.headers().toBuilder().also { builder ->
-        headersToStrip.forEach(builder::remove)
-    }.build()
-    return HttpRequest.of(replayHeaders, dataPublisher)
+    return HttpRequest.of(original.headers(), dataPublisher)
 }
 
 /** Maps Armeria body objects to read-only buffers copied synchronously by the source. */

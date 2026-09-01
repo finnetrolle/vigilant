@@ -44,7 +44,7 @@ final class RoadmapFrontierContractTest {
                 () -> assertTrue(frontier.contains("VIG-18 подтверждает только `64 KiB` single-fragment profile")));
     }
 
-    /** Separates the historical anonymous milestone scope from current identity support. */
+    /** Separates historical milestone scope from the current temporary Dummy migration state. */
     @Test
     void separatesHistoricalIdentityScopeFromCurrentRuntime() throws IOException {
         String roadmap = Files.readString(ROADMAP);
@@ -52,10 +52,11 @@ final class RoadmapFrontierContractTest {
         String exclusions = section(roadmap, "## Не входит в первый production increment");
 
         assertAll(
-                () -> assertTrue(frontier.contains("`ANONYMOUS`, `TRUSTED_HEADERS`, `BASIC`")),
+                () -> assertTrue(frontier.contains("development/test-only mode `DUMMY`")),
+                () -> assertTrue(frontier.contains("production startup намеренно невозможен")),
                 () -> assertFalse(exclusions.contains("- User/group identity extraction")),
                 () -> assertTrue(exclusions.contains("historical scope")),
-                () -> assertTrue(exclusions.contains("current runtime")));
+                () -> assertTrue(exclusions.contains("current development/test runtime")));
     }
 
     /** Separates best-effort stdout projection from the implemented local durability guarantee. */

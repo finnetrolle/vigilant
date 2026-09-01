@@ -87,7 +87,7 @@ internal class ShadowInspectionWorkflow(
      *
      * @param owner sole complete retained-source owner.
      * @param request original request supplying path and headers only.
-     * @param identity already validated normalized identity and exact strip set.
+     * @param identity already validated normalized identity.
      * @param serviceContext owning Armeria request scope for handoff and audit correlation.
      * @param inspectionSpan current INTERNAL inspection span, which remains caller-owned.
      * @param auditReservation pre-body one-shot durable audit reservation.
@@ -114,7 +114,7 @@ internal class ShadowInspectionWorkflow(
             val startedAt = System.nanoTime()
             val decisions = evaluateFragments(context, normalizedRequest)
             val evaluationDuration = Duration.ofNanos(System.nanoTime() - startedAt)
-            replayReady = ReplayReadyRequest.create(owner, identity.headersToStrip)
+            replayReady = ReplayReadyRequest.create(owner)
             val record = auditLogger.decisionRecord(serviceContext, normalizedRequest, decisions, evaluationDuration)
             acceptShadowAudit(
                 serviceContext = serviceContext,

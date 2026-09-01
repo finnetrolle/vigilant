@@ -47,6 +47,9 @@ docker run --rm --name vigilant \
   --publish 8080:8080 \
   --stop-timeout 35 \
   --env VIGILANT_UPSTREAM_URL=https://api.openai.com \
+  --env VIGILANT_ENVIRONMENT=development \
+  --env VIGILANT_IDENTITY_MODE=DUMMY \
+  --env VIGILANT_IDENTITY_DUMMY_USER=local-user \
   --env VIGILANT_POLITICS_CONFIG=/etc/vigilant/politics.conf \
   --mount type=bind,src="$PWD/politics.conf",dst=/etc/vigilant/politics.conf,readonly \
   --mount type=volume,src=vigilant-audit,dst=/var/lib/vigilant/audit \
@@ -72,6 +75,10 @@ container restart, быть доступен только gateway UID/GID `10001
 deployment encryption at rest. Для production deployment secrets должны
 передаваться через предназначенный для них secret mechanism, а не записываться
 в image или config committed в repository.
+
+Текущий `DUMMY` mode разрешает только development/test deployment. Production
+startup намеренно отклоняется до реализации real Bearer extractor; приведённые
+команды не являются production identity configuration.
 
 ## External Audit Collector
 

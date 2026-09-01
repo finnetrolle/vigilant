@@ -8,6 +8,7 @@ import com.linecorp.armeria.common.HttpMethod;
 import com.linecorp.armeria.common.HttpRequest;
 import com.linecorp.armeria.common.MediaType;
 import com.linecorp.armeria.common.RequestHeaders;
+import com.linecorp.armeria.common.RequestHeadersBuilder;
 import io.vigilant.perf.PerformanceProcessSupport;
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
@@ -43,6 +44,7 @@ public final class DurabilityQualificationMain {
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final String BODY_SENTINEL = "qualification-body-sentinel@example.com";
     private static final String IDENTITY_SENTINEL = "qualification-identity-sentinel";
+    private static final String DUMMY_AUTHORIZATION = "Bearer qualification-dummy-token";
     private static final String LOCATOR_SENTINEL = "https://qualification-locator-sentinel.invalid/object";
     private static final List<String> FORBIDDEN_VALUES = List.of(
         BODY_SENTINEL,
@@ -202,7 +204,7 @@ public final class DurabilityQualificationMain {
             client(profile.gatewayBaseUrl(identity.port())),
             "identity-failure",
             body("synthetic identity failure body"),
-            Map.of("x-qualification-identity", IDENTITY_SENTINEL)
+            Map.of("Authorization", "Basic " + IDENTITY_SENTINEL)
         ));
 
         results.add(new DurabilityQualificationSnapshot.OutcomeResult(
@@ -236,7 +238,7 @@ public final class DurabilityQualificationMain {
             .contentType(MediaType.JSON)
             .contentLength(requestBody.length)
             .add(DurabilityQualificationUpstreamMain.CASE_HEADER, caseId);
-        extraHeaders.forEach(headers::add);
+        addAuthenticatedHeaders(headers, extraHeaders);
         AggregatedHttpResponse response = client.execute(
             HttpRequest.of(headers.build(), HttpData.wrap(requestBody))
         ).aggregate().join();
@@ -805,8 +807,21 @@ public final class DurabilityQualificationMain {
             .contentType(MediaType.JSON)
             .contentLength(body.length)
             .add(DurabilityQualificationUpstreamMain.CASE_HEADER, caseId);
-        extraHeaders.forEach(headers::add);
+        addAuthenticatedHeaders(headers, extraHeaders);
         return HttpRequest.of(headers.build(), HttpData.wrap(body));
+    }
+
+    /** Adds the default valid Dummy Bearer header unless a case supplies its own Authorization. */
+    private static void addAuthenticatedHeaders(
+        RequestHeadersBuilder headers,
+        Map<String, String> extraHeaders
+    ) {
+        boolean hasAuthorization = extraHeaders.keySet().stream()
+            .anyMatch(name -> name.equalsIgnoreCase("authorization"));
+        if (!hasAuthorization) {
+            headers.add("authorization", DUMMY_AUTHORIZATION);
+        }
+        extraHeaders.forEach(headers::add);
     }
 
     /** Returns one bounded Armeria client for the selected local process. */

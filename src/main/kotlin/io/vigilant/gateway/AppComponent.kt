@@ -21,7 +21,7 @@ import io.vigilant.gateway.config.loadAppConfig
 import io.vigilant.gateway.health.LivenessService
 import io.vigilant.gateway.health.ReadinessService
 import io.vigilant.gateway.health.TrafficAdmissionService
-import io.vigilant.gateway.identity.IdentityExtractor
+import io.vigilant.gateway.identity.DummyIdentityExtractor
 import io.vigilant.gateway.metrics.MetricsService
 import io.vigilant.gateway.metrics.buildSdkMeterProvider
 import io.vigilant.gateway.proxy.BypassProxyService
@@ -143,7 +143,7 @@ interface AppComponent {
                 protocol = protocol,
                 workflow = workflow,
                 inspectionExecutor = inspectionResources.requestExecutor,
-                identityExtractor = IdentityExtractor(appConfig.identity),
+                identityExtractor = DummyIdentityExtractor(appConfig.identity),
                 auditLogger = auditLogger,
                 auditStore = auditStore,
             )

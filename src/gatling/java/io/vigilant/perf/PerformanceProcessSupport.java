@@ -45,13 +45,16 @@ public final class PerformanceProcessSupport {
             .redirectOutput(logFile.toFile());
     }
 
-    /** Adds one process-exclusive mandatory durable-audit directory under the fixture output tree. */
+    /** Adds process-exclusive audit storage and the complete permitted test identity configuration. */
     public static void configureAuditDirectory(ProcessBuilder builder, Path projectDirectory, String runName)
         throws IOException {
         Path parent = projectDirectory.resolve("build/perf-audit");
         Files.createDirectories(parent);
         Path directory = Files.createTempDirectory(parent, runName + "-");
         builder.environment().put("VIGILANT_AUDIT_DIRECTORY", directory.toString());
+        builder.environment().put("VIGILANT_ENVIRONMENT", "test");
+        builder.environment().put("VIGILANT_IDENTITY_MODE", "DUMMY");
+        builder.environment().put("VIGILANT_IDENTITY_DUMMY_USER", "performance-user");
     }
 
     /** Runs one local command with complete output and fail-closed bounded child cleanup. */

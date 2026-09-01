@@ -82,7 +82,6 @@ class ShadowInspectionWorkflowTest {
         val identity =
             IdentityExtractionResult.Success(
                 identity = NormalizedIdentity("alice", setOf("operators")),
-                headersToStrip = setOf("authorization"),
             )
 
         val outcome = workflow.execute(owner, request, identity, serviceContext, inspectionSpan = null)
@@ -605,7 +604,6 @@ class ShadowInspectionWorkflowTest {
     private fun anonymousIdentity(): IdentityExtractionResult.Success =
         IdentityExtractionResult.Success(
             identity = NormalizedIdentity(user = null, groups = emptySet()),
-            headersToStrip = emptySet(),
         )
 
     /** Returns one valid complete request body shared by workflow failure scenarios. */

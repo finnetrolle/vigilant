@@ -413,6 +413,7 @@ class BypassProxyServiceTest {
                             "/v1/chat/completions?token=query-secret-1C6A",
                         )
                             .contentType(MediaType.JSON)
+                            .add(HttpHeaderNames.AUTHORIZATION, "Bearer auth-secret-5F1C")
                             .add("x-test-outcome", "fail")
                             .build(),
                         HttpData.ofUtf8(

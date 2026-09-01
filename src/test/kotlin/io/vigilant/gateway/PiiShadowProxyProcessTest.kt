@@ -9,9 +9,7 @@ import com.linecorp.armeria.common.HttpResponse
 import com.linecorp.armeria.common.HttpStatus
 import com.linecorp.armeria.common.MediaType
 import com.linecorp.armeria.common.RequestHeaders
-import java.nio.charset.StandardCharsets
 import java.time.Duration
-import java.util.Base64
 import java.util.concurrent.CompletableFuture
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -50,9 +48,7 @@ class PiiShadowProxyProcessTest {
             """{ "model":"gpt-test", "messages":[{"role":"user","content":"contact $secretEmail"}], "unknown":true }"""
 
         val response =
-            client.execute(
-                HttpRequest.of(HttpMethod.POST, "/v1/chat/completions", MediaType.JSON, HttpData.ofUtf8(body)),
-            ).aggregate().join()
+            client.execute(chatCompletionsRequestWithBody(body)).aggregate().join()
 
         assertEquals(HttpStatus.OK, response.status())
         assertTrue(body.toByteArray().contentEquals(upstreamBody.join()))
@@ -89,6 +85,7 @@ class PiiShadowProxyProcessTest {
             HttpRequest.of(
                 RequestHeaders.builder(HttpMethod.POST, "/v1/chat/completions")
                     .contentType(MediaType.JSON)
+                    .add("authorization", TEST_DUMMY_AUTHORIZATION)
                     .add(sessionHeader, "task-42")
                     .add(traceparentHeader, "00-$traceId-00f067aa0ba902b7-01")
                     .build(),
@@ -109,9 +106,9 @@ class PiiShadowProxyProcessTest {
         )
     }
 
-    /** Verifies packaged Basic identity consumes credentials without stdout or stderr disclosure. */
+    /** Verifies packaged Dummy identity preserves Bearer authorization without process disclosure. */
     @Test
-    fun `MainKt strips Basic credentials and keeps them out of process output`() {
+    fun `MainKt forwards Bearer authorization and keeps it out of process output`() {
         val upstreamAuthorization = CompletableFuture<String?>()
         val upstreamBody = CompletableFuture<ByteArray>()
         val upstream = fixture.startServer { request ->
@@ -125,18 +122,11 @@ class PiiShadowProxyProcessTest {
         }
         val process = GatewayProcessFixture.launch(
             fixture.serverUri(upstream),
-            environment = mapOf(
-                "VIGILANT_IDENTITY_MODE" to "BASIC",
-                "VIGILANT_OTLP_ENABLED" to "false",
-            ),
+            environment = mapOf("VIGILANT_OTLP_ENABLED" to "false"),
         ).also { gateway = it }
         val client = process.awaitServing()
-        val username = "Process.Basic-User-Sentinel"
-        val password = "process-basic-password-sentinel"
-        val authorization = "Basic " + Base64.getEncoder().encodeToString(
-            "$username:$password".toByteArray(StandardCharsets.US_ASCII),
-        )
-        val body = chatCompletionsBody("process-basic-body-sentinel")
+        val authorization = "bEaReR process-token-sentinel"
+        val body = chatCompletionsBody("process-dummy-body-sentinel")
 
         val response = client.execute(
             HttpRequest.of(
@@ -149,11 +139,11 @@ class PiiShadowProxyProcessTest {
         ).aggregate().join()
 
         assertEquals(HttpStatus.OK, response.status())
-        assertEquals(null, upstreamAuthorization.join())
+        assertEquals(authorization, upstreamAuthorization.join())
         assertTrue(body.toByteArray().contentEquals(upstreamBody.join()))
         awaitShadowDecision(process)
         val output = process.output()
-        listOf(username, password, authorization, "process-basic-body-sentinel").forEach { sentinel ->
+        listOf(authorization, "process-token-sentinel", "process-dummy-body-sentinel").forEach { sentinel ->
             assertFalse(output.contains(sentinel), "credential or body sentinel leaked into process output")
         }
     }
@@ -177,6 +167,7 @@ class PiiShadowProxyProcessTest {
                 HttpRequest.of(
                     RequestHeaders.builder(HttpMethod.POST, "/v1/chat/completions")
                         .contentType(MediaType.JSON)
+                        .add("authorization", TEST_DUMMY_AUTHORIZATION)
                         .add("x-session-id", "direct-memory-regression")
                         .build(),
                     HttpData.wrap(body),

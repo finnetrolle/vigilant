@@ -34,12 +34,12 @@ import io.vigilant.gateway.GatewayTestFixture
 import io.vigilant.gateway.DemandObservingPublisher
 import io.vigilant.gateway.chatCompletionsBody
 import io.vigilant.gateway.chatCompletionsRequest
+import io.vigilant.gateway.chatCompletionsRequestWithBody
+import io.vigilant.gateway.TEST_DUMMY_AUTHORIZATION
 import io.vigilant.context.PolicyContextHandoff
 import io.vigilant.context.PolicyContextHandoffResult
-import io.vigilant.gateway.config.IdentityMode
-import io.vigilant.gateway.config.IdentitySettings
-import io.vigilant.gateway.identity.IdentityExtractor
-import io.vigilant.gateway.identity.TrustedNetwork
+import io.vigilant.gateway.config.DummyIdentitySettings
+import io.vigilant.gateway.identity.DummyIdentityExtractor
 import io.vigilant.gateway.tracing.TracingService
 import io.vigilant.policy.adapter.FastPiiPolicyAdapter
 import io.vigilant.policy.decision.ReactionAggregator
@@ -70,11 +70,9 @@ import io.vigilant.source.RequestSourceQuota
 import io.vigilant.windowing.WindowedFastPiiExecutor
 import java.net.URI
 import java.nio.ByteBuffer
-import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Duration
-import java.util.Base64
 import java.util.concurrent.CancellationException
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CopyOnWriteArrayList
@@ -351,6 +349,7 @@ class PiiShadowProxyServiceTest {
                 HttpRequest.of(
                     RequestHeaders.builder(HttpMethod.POST, "/v1/chat/completions?client=kept")
                         .contentType(MediaType.JSON)
+                        .add("authorization", TEST_DUMMY_AUTHORIZATION)
                         .add("x-request-id", "request-1")
                         .add("x-session-id", "task-42")
                         .add(
@@ -418,308 +417,170 @@ class PiiShadowProxyServiceTest {
         assertEquals(io.vigilant.audit.AuditDecision.DETECTED, auditStore.records().single().record.decision)
     }
 
-    /** Basic identity reaches both phases while credentials are stripped and never logged. */
+    /** Every accepted Bearer representation selects configured identity and is forwarded unchanged. */
     @Test
     @Suppress("LongMethod")
-    fun `basic identity is handed off but credentials are not forwarded`() {
-        val upstreamAuthorization = CompletableFuture<String?>()
-        val upstreamEndToEndHeader = CompletableFuture<String?>()
-        val upstreamUnconfiguredIdentity = CompletableFuture<String?>()
-        val upstreamBody = CompletableFuture<ByteArray>()
+    fun `dummy Bearer identity reaches policy selection and upstream unchanged`() {
+        val upstreamAuthorizations = CopyOnWriteArrayList<String>()
+        val upstreamBodies = CopyOnWriteArrayList<ByteArray>()
         val upstream = fixture.startServer { request ->
             HttpResponse.of(
                 request.aggregate().thenApply { aggregated ->
-                    upstreamAuthorization.complete(aggregated.headers().get("authorization"))
-                    upstreamEndToEndHeader.complete(aggregated.headers().get("x-end-to-end"))
-                    upstreamUnconfiguredIdentity.complete(aggregated.headers().get("x-gateway-user"))
-                    upstreamBody.complete(aggregated.content().array())
-                    HttpResponse.of(
-                        HttpStatus.OK,
-                        MediaType.JSON,
-                        """{"model":"reported-response-model-sentinel","ok":true}""",
-                    )
-                },
-            )
-        }
-        val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
-        val responseContexts = CopyOnWriteArrayList<PolicyContext>()
-        val gateway = startShadowGateway(
-            upstreamUri = fixture.serverUri(upstream),
-            identitySettings = IdentitySettings(IdentityMode.BASIC, null, null, emptyList()),
-            responseContexts = responseContexts,
-        )
-        val client = WebClient.of(fixture.serverUri(gateway).toString())
-        val password = "basic-password-e2e-sentinel"
-        val credentials = "BasicUser:$password".toByteArray(StandardCharsets.US_ASCII)
-        val authorization = "Basic ${Base64.getEncoder().encodeToString(credentials)}"
-        val originalBody =
-            """{"model":"request-model-sentinel","messages":[{"role":"user","content":"hello"}]}"""
-
-        val response = client.execute(
-            HttpRequest.of(
-                RequestHeaders.builder(HttpMethod.POST, "/v1/chat/completions")
-                    .contentType(MediaType.JSON)
-                    .add("authorization", authorization)
-                    .add("x-end-to-end", "preserved-header-sentinel")
-                    .add("x-gateway-user", "basic-unconfigured-user-sentinel")
-                    .build(),
-                HttpData.ofUtf8(originalBody),
-            ),
-        ).aggregate().join()
-
-        assertEquals(HttpStatus.OK, response.status())
-        assertEquals(null, upstreamAuthorization.join())
-        assertEquals("preserved-header-sentinel", upstreamEndToEndHeader.join())
-        assertEquals("basic-unconfigured-user-sentinel", upstreamUnconfiguredIdentity.join())
-        assertTrue(originalBody.toByteArray().contentEquals(upstreamBody.join()))
-        val responseContext = responseContexts.single()
-        assertEquals(PolicyPhase.RESPONSE, responseContext.phase)
-        assertEquals("request-model-sentinel", responseContext.model)
-        assertEquals("basicuser", responseContext.user)
-        assertEquals(emptySet(), responseContext.groups)
-
-        val renderedLogs = events.joinToString("\n") { event ->
-            event.formattedMessage + event.keyValuePairs.orEmpty().joinToString()
-        }
-        listOf(
-            password,
-            authorization,
-            "BasicUser",
-            "preserved-header-sentinel",
-            "basic-unconfigured-user-sentinel",
-        ).forEach { sentinel ->
-            assertFalse(renderedLogs.contains(sentinel), "credential sentinel leaked into logs")
-        }
-    }
-
-    /** Configured trusted headers are stripped while unrelated authorization remains end-to-end. */
-    @Test
-    fun `trusted header identity strips only configured identity headers`() {
-        val upstreamUser = CompletableFuture<String?>()
-        val upstreamGroups = CompletableFuture<String?>()
-        val upstreamAuthorization = CompletableFuture<String?>()
-        val upstreamBody = CompletableFuture<ByteArray>()
-        val upstream = fixture.startServer { request ->
-            HttpResponse.of(
-                request.aggregate().thenApply { aggregated ->
-                    upstreamUser.complete(aggregated.headers().get("x-gateway-user"))
-                    upstreamGroups.complete(aggregated.headers().get("x-gateway-groups"))
-                    upstreamAuthorization.complete(aggregated.headers().get("authorization"))
-                    upstreamBody.complete(aggregated.content().array())
+                    upstreamAuthorizations += requireNotNull(aggregated.headers().get("authorization"))
+                    upstreamBodies += aggregated.content().array()
                     HttpResponse.of(HttpStatus.OK, MediaType.JSON, """{"ok":true}""")
                 },
             )
         }
         val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
         val responseContexts = CopyOnWriteArrayList<PolicyContext>()
+        val auditStore = ControllableAuditStore()
         val gateway = startShadowGateway(
             upstreamUri = fixture.serverUri(upstream),
-            identitySettings =
-                IdentitySettings(
-                    mode = IdentityMode.TRUSTED_HEADERS,
-                    userHeader = "x-gateway-user",
-                    groupsHeader = "x-gateway-groups",
-                    trustedNetworks = listOf(requireNotNull(TrustedNetwork.parseOrNull("127.0.0.0/8"))),
-                ),
+            identitySettings = DummyIdentitySettings("local-user", setOf("operators", "security")),
             responseContexts = responseContexts,
-        )
-        val client = WebClient.of(fixture.serverUri(gateway).toString())
-        val originalBody = chatCompletionsBody("trusted-header-content-sentinel")
-
-        val response = client.execute(
-            HttpRequest.of(
-                RequestHeaders.builder(HttpMethod.POST, "/v1/chat/completions")
-                    .contentType(MediaType.JSON)
-                    .add("x-gateway-user", "Trusted.User-Sentinel")
-                    .add("x-gateway-groups", "Operators-Sentinel,Security-Sentinel")
-                    .add("authorization", "Bearer upstream-token-sentinel")
-                    .build(),
-                HttpData.ofUtf8(originalBody),
-            ),
-        ).aggregate().join()
-
-        assertEquals(HttpStatus.OK, response.status())
-        assertEquals(null, upstreamUser.join())
-        assertEquals(null, upstreamGroups.join())
-        assertEquals("Bearer upstream-token-sentinel", upstreamAuthorization.join())
-        assertTrue(originalBody.toByteArray().contentEquals(upstreamBody.join()))
-        val responseContext = responseContexts.single()
-        assertEquals("trusted.user-sentinel", responseContext.user)
-        assertEquals(setOf("operators-sentinel", "security-sentinel"), responseContext.groups)
-        val renderedLogs = events.joinToString("\n") { it.formattedMessage + it.keyValuePairs.orEmpty() }
-        listOf("Trusted.User-Sentinel", "Operators-Sentinel", "Security-Sentinel").forEach { sentinel ->
-            assertFalse(renderedLogs.contains(sentinel), "identity sentinel leaked into logs")
-        }
-    }
-
-    /** Anonymous mode consumes neither Basic nor unconfigured header identity candidates. */
-    @Test
-    fun `anonymous mode preserves identity-like end-to-end headers without using them`() {
-        val upstreamAuthorization = CompletableFuture<String?>()
-        val upstreamUser = CompletableFuture<String?>()
-        val upstream = fixture.startServer { request ->
-            upstreamAuthorization.complete(request.headers().get("authorization"))
-            upstreamUser.complete(request.headers().get("x-gateway-user"))
-            HttpResponse.of(HttpStatus.OK, MediaType.JSON, """{"ok":true}""")
-        }
-        val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
-        val responseContexts = CopyOnWriteArrayList<PolicyContext>()
-        val gateway = startShadowGateway(
-            upstreamUri = fixture.serverUri(upstream),
-            identitySettings = IdentitySettings(IdentityMode.ANONYMOUS, null, null, emptyList()),
-            responseContexts = responseContexts,
-        )
-        val client = WebClient.of(fixture.serverUri(gateway).toString())
-
-        val response = client.execute(
-            HttpRequest.of(
-                RequestHeaders.builder(HttpMethod.POST, "/v1/chat/completions")
-                    .contentType(MediaType.JSON)
-                    .add("authorization", "Basic anonymous-auth-sentinel")
-                    .add("x-gateway-user", "anonymous-user-sentinel")
-                    .build(),
-                HttpData.ofUtf8(chatCompletionsBody("hello")),
-            ),
-        ).aggregate().join()
-
-        assertEquals(HttpStatus.OK, response.status())
-        assertEquals("Basic anonymous-auth-sentinel", upstreamAuthorization.join())
-        assertEquals("anonymous-user-sentinel", upstreamUser.join())
-        val responseContext = responseContexts.single()
-        assertEquals(null, responseContext.user)
-        assertEquals(emptySet(), responseContext.groups)
-        val renderedLogs = events.joinToString("\n") { it.formattedMessage + it.keyValuePairs.orEmpty() }
-        assertFalse(renderedLogs.contains("anonymous-auth-sentinel"))
-        assertFalse(renderedLogs.contains("anonymous-user-sentinel"))
-    }
-
-    /** An untrusted immediate peer cannot inject a configured identity header. */
-    @Test
-    fun `untrusted configured identity is rejected before body demand and upstream`() {
-        val upstreamRequests = AtomicInteger()
-        val requestBodyDemandObserved = AtomicBoolean()
-        val upstream = fixture.startServer {
-            upstreamRequests.incrementAndGet()
-            HttpResponse.of(HttpStatus.OK)
-        }
-        val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
-        val auditStore = ControllableAuditStore(autoComplete = false)
-        val gateway = startShadowGateway(
-            upstreamUri = fixture.serverUri(upstream),
-            identitySettings =
-                IdentitySettings(
-                    mode = IdentityMode.TRUSTED_HEADERS,
-                    userHeader = "x-gateway-user",
-                    groupsHeader = null,
-                    trustedNetworks = listOf(requireNotNull(TrustedNetwork.parseOrNull("10.0.0.0/8"))),
+            policyProvider =
+                DummyPolicyProvider(
+                    listOf(
+                        shadowPolicy(
+                            deadline = Duration.ofSeconds(2),
+                            subject = PolicySubject(SubjectType.USER, SubjectId("local-user")),
+                        ),
+                    ),
                 ),
-            requestBodyDemandObserved = requestBodyDemandObserved,
             auditStore = auditStore,
         )
         val client = WebClient.of(fixture.serverUri(gateway).toString())
+        val cases = listOf("Bearer", "bEaReR upstream-token-sentinel")
 
-        val responseFuture = client.execute(
-            HttpRequest.of(
-                RequestHeaders.builder(HttpMethod.POST, "/v1/chat/completions")
-                    .contentType(MediaType.JSON)
-                    .add("x-gateway-user", "untrusted-e2e-user-sentinel")
-                    .add("x-forwarded-for", "10.2.3.4")
-                    .build(),
-                HttpData.ofUtf8(chatCompletionsBody("untrusted-body-sentinel")),
-            ),
-        ).aggregate()
+        cases.forEachIndexed { index, authorization ->
+            val originalBody = chatCompletionsBody("dummy-identity-body-$index")
+            val response = client.execute(
+                HttpRequest.of(
+                    RequestHeaders.builder(HttpMethod.POST, "/v1/chat/completions")
+                        .contentType(MediaType.JSON)
+                        .add("authorization", authorization)
+                        .build(),
+                    HttpData.ofUtf8(originalBody),
+                ),
+            ).aggregate().join()
 
-        assertTrue(auditStore.awaitStoreOwned(), "identity error did not reach STORE_OWNED")
-        assertFalse(responseFuture.isDone, "identity error escaped before durable acceptance")
-        auditStore.completeNext()
-        val response = responseFuture.join()
+            assertEquals(HttpStatus.OK, response.status())
+            assertEquals(authorization, upstreamAuthorizations[index])
+            assertTrue(originalBody.toByteArray().contentEquals(upstreamBodies[index]))
+        }
 
-        assertEquals(HttpStatus.FORBIDDEN, response.status())
-        assertEquals("""{"error":"untrusted_identity"}""", response.contentUtf8())
-        assertFalse(requestBodyDemandObserved.get(), "identity rejection demanded the request body")
-        assertEquals(0, upstreamRequests.get())
-        assertTrue(
-            fixture.awaitUntil(Duration.ofSeconds(2)) {
-                events.any { it.keyValue("error.code") == "UNTRUSTED_IDENTITY" }
-            },
-            "safe untrusted identity audit was not observed",
-        )
+        responseContexts.forEach { context ->
+            assertEquals(PolicyPhase.RESPONSE, context.phase)
+            assertEquals("local-user", context.user)
+            assertEquals(setOf("operators", "security"), context.groups)
+        }
+        assertEquals(2, responseContexts.size)
+        assertTrue(auditStore.records().all { accepted -> accepted.record.policies.single().id == "shadow" })
         val renderedLogs = events.joinToString("\n") { it.formattedMessage + it.keyValuePairs.orEmpty() }
-        assertFalse(renderedLogs.contains("untrusted-e2e-user-sentinel"))
-        assertFalse(renderedLogs.contains("untrusted-body-sentinel"))
+        assertFalse(renderedLogs.contains("upstream-token-sentinel"))
     }
 
-    /** Every remaining identity failure waits for a safe durable ERROR without body demand. */
+    /** Full invalid Bearer matrix is durably rejected before body demand or upstream handoff. */
     @Test
     @Suppress("LongMethod")
-    fun `duplicate and malformed identity errors wait for durable audit`() {
+    fun `dummy Bearer rejection matrix precedes body demand`() {
         val upstreamRequests = AtomicInteger()
         val upstream = fixture.startServer {
             upstreamRequests.incrementAndGet()
             HttpResponse.of(HttpStatus.OK)
         }
         val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
-        val trustedSettings =
-            IdentitySettings(
-                mode = IdentityMode.TRUSTED_HEADERS,
-                userHeader = "x-gateway-user",
-                groupsHeader = null,
-                trustedNetworks = listOf(requireNotNull(TrustedNetwork.parseOrNull("127.0.0.0/8"))),
-            )
-        val basicSettings = IdentitySettings(IdentityMode.BASIC, null, null, emptyList())
         val cases =
             listOf(
-                Triple(
-                    trustedSettings,
-                    listOf("x-gateway-user" to "first-user-sentinel", "x-gateway-user" to "second-user-sentinel"),
-                    "DUPLICATE_IDENTITY",
+                IdentityRejectCase(
+                    name = "missing",
+                    headers = emptyList(),
+                    status = HttpStatus.UNAUTHORIZED,
+                    error = "authentication_required",
+                    auditCode = "AUTHENTICATION_REQUIRED",
+                    challenge = true,
                 ),
-                Triple(
-                    basicSettings,
-                    listOf("authorization" to "Basic invalid-auth-sentinel!"),
-                    "MALFORMED_IDENTITY",
+                IdentityRejectCase(
+                    name = "basic",
+                    headers = listOf("authorization" to "Basic basic-token-sentinel"),
+                    status = HttpStatus.UNAUTHORIZED,
+                    error = "authentication_required",
+                    auditCode = "AUTHENTICATION_REQUIRED",
+                    challenge = true,
+                ),
+                IdentityRejectCase(
+                    name = "other-scheme",
+                    headers = listOf("authorization" to "Digest digest-token-sentinel"),
+                    status = HttpStatus.UNAUTHORIZED,
+                    error = "authentication_required",
+                    auditCode = "AUTHENTICATION_REQUIRED",
+                    challenge = true,
+                ),
+                IdentityRejectCase(
+                    name = "duplicate",
+                    headers =
+                        listOf(
+                            "authorization" to "Bearer first-token-sentinel",
+                            "authorization" to "Bearer second-token-sentinel",
+                        ),
+                    status = HttpStatus.BAD_REQUEST,
+                    error = "invalid_identity",
+                    auditCode = "DUPLICATE_IDENTITY",
+                    challenge = false,
+                ),
+                IdentityRejectCase(
+                    name = "malformed",
+                    headers = listOf("authorization" to "Bearer\tmalformed-token-sentinel"),
+                    status = HttpStatus.BAD_REQUEST,
+                    error = "invalid_identity",
+                    auditCode = "MALFORMED_IDENTITY",
+                    challenge = false,
                 ),
             )
 
-        cases.forEachIndexed { index, (identitySettings, headers, expectedAuditCode) ->
+        cases.forEachIndexed { index, case ->
             val bodyDemanded = AtomicBoolean()
             val auditStore = ControllableAuditStore(autoComplete = false)
             val gateway =
                 startShadowGateway(
                     upstreamUri = fixture.serverUri(upstream),
-                    identitySettings = identitySettings,
                     requestBodyDemandObserved = bodyDemanded,
                     auditStore = auditStore,
                 )
             val requestHeaders =
                 RequestHeaders.builder(HttpMethod.POST, "/v1/chat/completions")
                     .contentType(MediaType.JSON)
-                    .also { builder -> headers.forEach { (name, value) -> builder.add(name, value) } }
+                    .also { builder -> case.headers.forEach { (name, value) -> builder.add(name, value) } }
                     .build()
             val response =
                 WebClient.of(fixture.serverUri(gateway))
                     .execute(
                         HttpRequest.of(
                             requestHeaders,
-                            HttpData.ofUtf8(chatCompletionsBody("identity-body-sentinel")),
+                            HttpData.ofUtf8(chatCompletionsBody("${case.name}-body-sentinel")),
                         ),
                     ).aggregate()
 
-            assertTrue(auditStore.awaitStoreOwned(), "$expectedAuditCode did not reach STORE_OWNED")
-            assertFalse(response.isDone, "$expectedAuditCode escaped before durable acceptance")
-            assertFalse(bodyDemanded.get(), "$expectedAuditCode demanded the request body")
+            assertTrue(auditStore.awaitStoreOwned(), "${case.auditCode} did not reach STORE_OWNED")
+            assertFalse(response.isDone, "${case.auditCode} escaped before durable acceptance")
+            assertFalse(bodyDemanded.get(), "${case.auditCode} demanded the request body")
             assertEquals(0, upstreamRequests.get())
             auditStore.completeNext()
 
             val completed = response.join()
-            assertEquals(HttpStatus.BAD_REQUEST, completed.status())
-            assertEquals("""{"error":"invalid_identity"}""", completed.contentUtf8())
-            assertEquals(expectedAuditCode, auditStore.records().single().record.errorCode)
+            assertEquals(case.status, completed.status())
+            assertEquals("""{"error":"${case.error}"}""", completed.contentUtf8())
+            assertEquals(
+                if (case.challenge) "Bearer realm=\"vigilant\"" else null,
+                completed.headers().get("www-authenticate"),
+            )
+            assertEquals(case.auditCode, auditStore.records().single().record.errorCode)
             assertTrue(
                 fixture.awaitUntil(Duration.ofSeconds(2)) {
                     events.count { event -> event.keyValue("event.name") == "policy.shadow_decision" } == index + 1
                 },
-                "$expectedAuditCode projection was not observed",
+                "${case.auditCode} projection was not observed",
             )
         }
 
@@ -727,10 +588,14 @@ class PiiShadowProxyServiceTest {
             events.joinToString("\n") { event ->
                 event.formattedMessage + event.keyValuePairs.orEmpty() + event.mdcPropertyMap
             }
-        assertFalse(renderedLogs.contains("first-user-sentinel"))
-        assertFalse(renderedLogs.contains("second-user-sentinel"))
-        assertFalse(renderedLogs.contains("invalid-auth-sentinel"))
-        assertFalse(renderedLogs.contains("identity-body-sentinel"))
+        listOf(
+            "basic-token-sentinel",
+            "digest-token-sentinel",
+            "first-token-sentinel",
+            "second-token-sentinel",
+            "malformed-token-sentinel",
+            "body-sentinel",
+        ).forEach { sentinel -> assertFalse(renderedLogs.contains(sentinel)) }
         assertEquals(0, upstreamRequests.get())
     }
 
@@ -745,6 +610,7 @@ class PiiShadowProxyServiceTest {
             HttpRequest.of(
                 RequestHeaders.builder(HttpMethod.POST, "/v1/chat/completions")
                     .contentType(MediaType.JSON)
+                    .add("authorization", TEST_DUMMY_AUTHORIZATION)
                     .add("x-session-id", "task-42")
                     .build(),
                 HttpData.ofUtf8(chatCompletionsBody("hello")),
@@ -852,12 +718,7 @@ class PiiShadowProxyServiceTest {
 
         val responseFuture =
             client.execute(
-                HttpRequest.of(
-                    HttpMethod.POST,
-                    "/v1/chat/completions",
-                    MediaType.JSON,
-                    secretMalformedBody,
-                ),
+                chatCompletionsRequestWithBody(secretMalformedBody),
             ).aggregate()
 
         assertTrue(auditStore.awaitStoreOwned(), "parser error did not reach STORE_OWNED")
@@ -908,7 +769,7 @@ class PiiShadowProxyServiceTest {
         cases.forEachIndexed { index, (body, expectedCode) ->
             val response =
                 client.execute(
-                    HttpRequest.of(HttpMethod.POST, "/v1/chat/completions", MediaType.JSON, body),
+                    chatCompletionsRequestWithBody(body),
                 ).aggregate().join()
 
             assertEquals(HttpStatus.BAD_REQUEST, response.status())
@@ -950,7 +811,7 @@ class PiiShadowProxyServiceTest {
 
         val responseFuture =
             client.execute(
-                HttpRequest.of(HttpMethod.POST, "/v1/chat/completions", MediaType.JSON, body),
+                chatCompletionsRequestWithBody(body),
             ).aggregate()
 
         assertTrue(auditStore.awaitStoreOwned(), "inspection-gap decision did not reach STORE_OWNED")
@@ -1005,7 +866,7 @@ class PiiShadowProxyServiceTest {
 
         val response =
             client.execute(
-                HttpRequest.of(HttpMethod.POST, "/v1/chat/completions", MediaType.JSON, body),
+                chatCompletionsRequestWithBody(body),
             ).aggregate().join()
 
         assertEquals(HttpStatus.REQUEST_ENTITY_TOO_LARGE, response.status())
@@ -1048,6 +909,7 @@ class PiiShadowProxyServiceTest {
             HttpRequest.streaming(
                 RequestHeaders.builder(HttpMethod.POST, "/v1/chat/completions")
                     .contentType(MediaType.JSON)
+                    .add("authorization", TEST_DUMMY_AUTHORIZATION)
                     .build(),
             )
 
@@ -1264,6 +1126,7 @@ class PiiShadowProxyServiceTest {
             HttpRequest.streaming(
                 RequestHeaders.builder(HttpMethod.POST, "/v1/chat/completions")
                     .contentType(MediaType.JSON)
+                    .add("authorization", TEST_DUMMY_AUTHORIZATION)
                     .build(),
             )
         val response = client.execute(request).aggregate()
@@ -1615,6 +1478,22 @@ class PiiShadowProxyServiceTest {
         )
     }
 
+    /** One exact invalid Authorization shape and its safe HTTP/audit outcome. */
+    private data class IdentityRejectCase(
+        /** Diagnostic case name and body-sentinel prefix. */
+        val name: String,
+        /** Authorization header lines supplied to the real gateway. */
+        val headers: List<Pair<String, String>>,
+        /** Expected stable HTTP status. */
+        val status: HttpStatus,
+        /** Expected stable JSON error code. */
+        val error: String,
+        /** Expected source-value-free durable audit error. */
+        val auditCode: String,
+        /** Whether the response must carry the exact Bearer challenge. */
+        val challenge: Boolean,
+    )
+
     /**
      * Starts the production shadow service with real policy components and bounded executors.
      *
@@ -1631,8 +1510,8 @@ class PiiShadowProxyServiceTest {
         quota: RequestSourceQuota = RequestSourceQuota(),
         detector: Detector? = null,
         policyDeadline: Duration = Duration.ofSeconds(2),
-        identitySettings: IdentitySettings =
-            IdentitySettings(IdentityMode.ANONYMOUS, null, null, emptyList()),
+        identitySettings: DummyIdentitySettings =
+            DummyIdentitySettings("test-user", emptySet()),
         responseContexts: MutableList<PolicyContext>? = null,
         serviceContexts: MutableList<com.linecorp.armeria.server.ServiceRequestContext>? = null,
         requestBodyDemandObserved: AtomicBoolean? = null,
@@ -1668,7 +1547,7 @@ class PiiShadowProxyServiceTest {
                 protocol = protocol,
                 workflow = ShadowInspectionWorkflow(protocol, policyEngine, auditLogger),
                 inspectionExecutor = requestExecutor,
-                identityExtractor = IdentityExtractor(identitySettings),
+                identityExtractor = DummyIdentityExtractor(identitySettings),
                 auditLogger = auditLogger,
                 auditStore = auditStore,
             )
@@ -1776,8 +1655,16 @@ class PiiShadowProxyServiceTest {
             paths.map { path -> path.fileName.toString() }.sorted().toList()
         }
 
-    /** Returns the enabled global ALLOW-only policy required by the first increment. */
-    private fun shadowPolicy(deadline: Duration): Policy {
+    /**
+     * Returns an enabled ALLOW-only policy for one subject.
+     *
+     * @param deadline bounded inspection deadline used by the policy.
+     * @param subject identity subject selected by the policy.
+     */
+    private fun shadowPolicy(
+        deadline: Duration,
+        subject: PolicySubject = PolicySubject(SubjectType.ANY, SubjectId("*")),
+    ): Policy {
         val allow = Reaction(Disposition.ALLOW, emptyList())
         return Policy(
             reference = PolicyReference(PolicyId("shadow"), PolicyVersion("1")),
@@ -1787,7 +1674,7 @@ class PiiShadowProxyServiceTest {
                     url = "*",
                     model = "*",
                     phase = PolicyPhase.REQUEST,
-                    subject = PolicySubject(SubjectType.ANY, SubjectId("*")),
+                    subject = subject,
                 ),
             detectors = listOf(DetectorId("fast-pii")),
             deadline = deadline,

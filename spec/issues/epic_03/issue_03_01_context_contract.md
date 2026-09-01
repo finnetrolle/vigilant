@@ -25,17 +25,14 @@ handoff можно реализовать независимо без разны
    `NormalizedProtocolAttributes(model)`. Произвольной map нет; protocol
    family/operation/transport и fragments не входят в `PolicyContext`.
 3. `model` обязателен и непуст после successful parse. Missing/invalid model
-   даёт typed assembly failure. Anonymous identity представлена `user=null` и
-   immutable empty `groups`; missing identity не является ошибкой в режиме
-   `ANONYMOUS` и совпадает с policy subject `ANY`.
-4. Identity config выбирает ровно один mode: `ANONYMOUS`, `TRUSTED_HEADERS`
-   или `BASIC`, поэтому cross-source precedence отсутствует. Header names
-   configurable. User/group IDs используют bounded ASCII token grammar,
-   Locale.ROOT lowercase; groups передаются comma-separated с optional OWS.
-5. `TRUSTED_HEADERS` принимает identity только когда immediate peer входит в
-   configured trusted CIDR. Forwarded address headers не расширяют boundary.
-   Supplied identity header от untrusted peer даёт `UNTRUSTED_IDENTITY`; все
-   Vigilant identity headers и consumed Basic credentials strip-ятся upstream.
+   даёт typed assembly failure. Generic `NormalizedIdentity` сохраняет явную
+   форму `user=null`, immutable empty `groups` для extractors, которым она
+   нормативно разрешена; policy subject `ANY` совпадает с ней.
+4. Source-specific extraction не входит в assembly contract. После VIG-27
+   current runtime принимает configured normalized identity только через
+   temporary Dummy Bearer boundary.
+5. Raw authentication values не входят в `PolicyContext`. Accepted end-to-end
+   Authorization остаётся transport-owned и передаётся upstream unchanged.
 6. Existing immutable `PolicyContext(url, model, phase, user, groups)` является
    engine contract. Request context создаётся один раз, сохраняется typed
    attribute в Armeria `ServiceRequestContext`, response context меняет только

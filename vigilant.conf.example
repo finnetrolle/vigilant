@@ -5,6 +5,8 @@
 # VIGILANT_AUDIT_*, VIGILANT_SHUTDOWN_*, VIGILANT_INSPECTION_*, VIGILANT_TRACING_*,
 # VIGILANT_IDENTITY_* и VIGILANT_OTLP_ENABLED переопределяют значения файла.
 vigilant {
+  # DUMMY permitted only for development/test. Production has no valid mode until VIG-28.
+  environment = "development"
   upstream-url = "http://127.0.0.1:18081"
   audit-directory = "./.vigilant-audit"
   audit-max-event-bytes = 65536
@@ -36,12 +38,10 @@ vigilant {
   tracing-session-header = "x-session-id"
   tracing-traceparent-header = "traceparent"
 
-  # Ровно один identity mode: ANONYMOUS, TRUSTED_HEADERS или BASIC.
-  identity-mode = "ANONYMOUS"
-  # Для TRUSTED_HEADERS настройте хотя бы один header и непустой CIDR list:
-  # identity-user-header = "x-vigilant-user"
-  # identity-groups-header = "x-vigilant-groups"
-  # identity-trusted-cidrs = ["127.0.0.0/8", "2001:db8::/32"]
+  # Dummy проверяет только наличие одного Bearer header; token не валидируется и не сохраняется.
+  identity-mode = "DUMMY"
+  identity-dummy-user = "local-user"
+  identity-dummy-groups = ["local-group"]
 
   # OTLP JSON Lines traces и metrics в stdout. Сетевого подключения к Collector нет.
   otlp-enabled = true

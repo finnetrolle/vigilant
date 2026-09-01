@@ -94,11 +94,11 @@ policies = [
   учёта регистра;
 - `type="*"` с точным идентификатором запрещён.
 
-Идентификация выполняется до выбора политик. `ANONYMOUS` задаёт `user=null` и
-пустой список групп. `TRUSTED_HEADERS` принимает настроенные заголовки только
-от непосредственного узла в настроенной сети CIDR. `BASIC` сохраняет только
-нормализованное имя пользователя в ASCII. Полный контракт доверия описан в
-[контракте исполнения](runtime-contract.md#identity-modes).
+Идентификация выполняется до выбора политик. Текущий Dummy Bearer extractor
+передаёт configured normalized user/groups после проверки единственного
+Bearer header; token не входит в policy context. Полный временный startup и
+HTTP contract описан в
+[контракте исполнения](runtime-contract.md#dummy-bearer-identity).
 
 ## Переопределения
 

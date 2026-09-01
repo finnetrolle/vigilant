@@ -237,7 +237,7 @@ final class DurabilityQualificationReportTest {
                 outcome("detector-error", 200, "none", 1, 1_048_647, "ERROR", "POLICY_DEADLINE_EXCEEDED"),
                 outcome("parser-failure", 400, "malformed_message", 0, 0, "ERROR", "MALFORMED_MESSAGE"),
                 outcome("source-failure", 413, "request_too_large", 0, 0, "ERROR", "REQUEST_TOO_LARGE"),
-                outcome("identity-failure", 403, "untrusted_identity", 0, 0, "ERROR", "UNTRUSTED_IDENTITY"),
+                outcome("identity-failure", 401, "authentication_required", 0, 0, "ERROR", "AUTHENTICATION_REQUIRED"),
                 outcome("inspection-failure", 500, "inspection_failed", 0, 0, "ERROR", "INSPECTION_FAILED")
             ),
             List.of(

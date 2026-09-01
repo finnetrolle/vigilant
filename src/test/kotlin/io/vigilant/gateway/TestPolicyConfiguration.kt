@@ -28,5 +28,10 @@ internal fun ProcessBuilder.withTestRuntimeConfiguration(
     auditDirectory: String = newTestAuditDirectory(),
 ): ProcessBuilder =
     withTestPolicyConfiguration().apply {
-        environment()["VIGILANT_AUDIT_DIRECTORY"] = auditDirectory
+        environment().apply {
+            put("VIGILANT_AUDIT_DIRECTORY", auditDirectory)
+            put("VIGILANT_ENVIRONMENT", "test")
+            put("VIGILANT_IDENTITY_MODE", "DUMMY")
+            put("VIGILANT_IDENTITY_DUMMY_USER", "test-user")
+        }
     }

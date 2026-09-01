@@ -117,7 +117,8 @@ Issue является листом mind map, если:
 | [VIG-18: Inspection load baseline and production report](issues/issue_18_inspection_load_report.md) | `Done` | завершена | 0 дней осталось |
 | [VIG-19: Типизированный workflow request-side shadow inspection](issues/issue_19_typed_shadow_inspection_workflow.md) | `Done` | завершена | 0 дней осталось |
 | [VIG-26: Универсальное ядро windowed inspection](issues/issue_26_generic_windowing_core.md) | `Done` | завершена | 0 дней осталось |
-| [VIG-27: Dummy Bearer identity extractor](issues/issue_27_dummy_identity_extractor.md) | `Ready for implementation` | не начата | 1-2 дня |
+| [VIG-27: Dummy Bearer identity extractor](issues/issue_27_dummy_identity_extractor.md) | `Done` | завершена | 0 дней осталось |
+| [VIG-28: Offline trusted JWT Bearer identity extractor](issues/issue_28_keycloak_jwt_identity_extractor.md) | `Ready for implementation` | не начата | 3-5 дней |
 
 ## Как закрывать work item
 

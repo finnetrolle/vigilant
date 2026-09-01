@@ -152,6 +152,7 @@ assert_shadow_exchange() {
     curl --fail --silent --show-error \
         --request POST \
         --header 'content-type: application/json' \
+        --header 'authorization: Bearer oci-dummy-token' \
         --header 'x-vigilant-qualification-case: oci-shadow' \
         --data-binary "@$TMP_DIR/request.json" \
         --output "$response_file" \
@@ -205,6 +206,9 @@ POLICY_CONFIG_ARGS=(
 )
 RUNTIME_ARGS=(
     --env "JAVA_OPTS=$VIGILANT_QUALIFICATION_JAVA_OPTIONS"
+    --env VIGILANT_ENVIRONMENT=test
+    --env VIGILANT_IDENTITY_MODE=DUMMY
+    --env VIGILANT_IDENTITY_DUMMY_USER=oci-user
 )
 : "${VIGILANT_QUALIFICATION_JAVA:?qualification Java executable is required}"
 : "${VIGILANT_QUALIFICATION_CLASSPATH:?qualification classpath is required}"
@@ -315,6 +319,9 @@ RECOVERY_CONTAINER_ID=""
 printf '%s\n' \
     'vigilant {' \
     "  upstream-url = \"http://host.docker.internal:$UPSTREAM_PORT\"" \
+    '  environment = "test"' \
+    '  identity-mode = "DUMMY"' \
+    '  identity-dummy-user = "oci-user"' \
     '  port = 8080' \
     '}' \
     >"$TMP_DIR/vigilant.conf"

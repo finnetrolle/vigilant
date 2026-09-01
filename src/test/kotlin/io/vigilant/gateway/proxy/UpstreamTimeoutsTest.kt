@@ -114,6 +114,9 @@ class UpstreamTimeoutsTest {
         val env = mutableMapOf(
             "VIGILANT_UPSTREAM_URL" to serverUri(upstream).toString(),
             "VIGILANT_AUDIT_DIRECTORY" to Files.createTempDirectory("vigilant-timeout-audit").toString(),
+            "VIGILANT_ENVIRONMENT" to "test",
+            "VIGILANT_IDENTITY_MODE" to "DUMMY",
+            "VIGILANT_IDENTITY_DUMMY_USER" to "timeout-test-user",
         ).apply(extraEnv)
         val config = loadAppConfig(env = env, defaultConfigPaths = emptyList())
         val factory = buildUpstreamClientFactory(config.upstream).also(upstreamClientFactories::add)

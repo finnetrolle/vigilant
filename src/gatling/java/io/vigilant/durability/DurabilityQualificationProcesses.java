@@ -149,18 +149,14 @@ final class DurabilityQualificationProcesses implements AutoCloseable {
         );
     }
 
-    /** Starts one untrusted-header gateway for exact pre-body identity rejection. */
+    /** Starts one gateway for exact pre-body Bearer authentication rejection. */
     Gateway startIdentityFailureGateway() {
         return startGateway(
             profile.identityGatewayPort(),
             "identity-failure",
             profile.defaults(),
             profile.projectDirectory().resolve("config/qualification/politics-durability.conf"),
-            Map.of(
-                "VIGILANT_IDENTITY_MODE", "TRUSTED_HEADERS",
-                "VIGILANT_IDENTITY_USER_HEADER", "x-qualification-identity",
-                "VIGILANT_IDENTITY_TRUSTED_CIDRS", "192.0.2.0/24"
-            ),
+            Map.of(),
             null
         );
     }
@@ -292,6 +288,9 @@ final class DurabilityQualificationProcesses implements AutoCloseable {
         environment.put("VIGILANT_UPSTREAM_URL", profile.upstreamBaseUrl());
         environment.put("VIGILANT_PORT", Integer.toString(port));
         environment.put("VIGILANT_AUDIT_DIRECTORY", auditDirectory.toString());
+        environment.put("VIGILANT_ENVIRONMENT", "test");
+        environment.put("VIGILANT_IDENTITY_MODE", "DUMMY");
+        environment.put("VIGILANT_IDENTITY_DUMMY_USER", "qualification-user");
         environment.put("VIGILANT_AUDIT_MAX_EVENT_BYTES", Integer.toString(bounds.maxEventBytes()));
         environment.put("VIGILANT_AUDIT_MAX_PENDING_EVENTS", Integer.toString(bounds.maxPendingEvents()));
         environment.put("VIGILANT_AUDIT_MAX_RETAINED_BYTES", Long.toString(bounds.maxRetainedBytes()));

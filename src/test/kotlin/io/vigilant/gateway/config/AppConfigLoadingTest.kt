@@ -1,6 +1,5 @@
 package io.vigilant.gateway.config
 
-import io.vigilant.gateway.identity.TrustedNetwork
 import java.net.URI
 import java.nio.file.Files
 import java.nio.file.Path
@@ -162,205 +161,164 @@ class AppConfigLoadingTest {
         )
     }
 
-    /** Trusted-header identity cannot start without an explicit immediate-peer trust boundary. */
+    /** Loads and normalizes the complete Dummy identity contract from HOCON. */
     @Test
-    fun `trusted header identity requires at least one trusted cidr`() {
+    fun `dummy identity settings load from hocon`() {
         val file = writeConfig(
             """
             vigilant {
               upstream-url = "http://127.0.0.1:18081"
-              identity-mode = "TRUSTED_HEADERS"
-              identity-user-header = "x-vigilant-user"
+              environment = "development"
+              identity-mode = "DUMMY"
+              identity-dummy-user = "Local.User"
+              identity-dummy-groups = ["Operators", "operators", "Security"]
             }
             """.trimIndent(),
         )
 
-        val exception = assertFailsWith<IllegalArgumentException> {
-            loadAppConfig(
-                env = mapOf("VIGILANT_CONFIG" to file.toString()),
-                defaultConfigPaths = emptyList(),
-            )
-        }
-
-        assertEquals(
-            "VIGILANT_IDENTITY_TRUSTED_CIDRS must contain at least one CIDR in TRUSTED_HEADERS mode",
-            exception.message,
-        )
-    }
-
-    /** Anonymous mode rejects settings that would otherwise create a hidden header source. */
-    @Test
-    fun `anonymous identity rejects trusted header settings`() {
-        val file = writeConfig(
-            """
-            vigilant {
-              upstream-url = "http://127.0.0.1:18081"
-              identity-mode = "ANONYMOUS"
-              identity-user-header = "x-vigilant-user"
-            }
-            """.trimIndent(),
-        )
-
-        val exception = assertFailsWith<IllegalArgumentException> {
-            loadAppConfig(
-                env = mapOf("VIGILANT_CONFIG" to file.toString()),
-                defaultConfigPaths = emptyList(),
-            )
-        }
-
-        assertEquals(
-            "VIGILANT_IDENTITY_USER_HEADER is only valid in TRUSTED_HEADERS mode",
-            exception.message,
-        )
-    }
-
-    /** Loads one canonical trusted-header contract without hard-coded identity header names. */
-    @Test
-    fun `trusted header identity settings are configurable`() {
-        val file = writeConfig(
-            """
-            vigilant {
-              upstream-url = "http://127.0.0.1:18081"
-              identity-mode = "TRUSTED_HEADERS"
-              identity-user-header = "X-Vigilant-User"
-              identity-groups-header = "X-Vigilant-Groups"
-              identity-trusted-cidrs = ["127.0.0.0/8", "2001:db8::/32"]
-            }
-            """.trimIndent(),
-        )
-
-        val config = loadAppConfig(
+        val config = loadAppConfigWithoutIdentityDefaults(
             env = mapOf("VIGILANT_CONFIG" to file.toString()),
-            defaultConfigPaths = emptyList(),
         )
 
         assertEquals(
-            IdentitySettings(
-                mode = IdentityMode.TRUSTED_HEADERS,
-                userHeader = "x-vigilant-user",
-                groupsHeader = "x-vigilant-groups",
-                trustedNetworks =
-                    listOf(
-                        requireNotNull(TrustedNetwork.parseOrNull("127.0.0.0/8")),
-                        requireNotNull(TrustedNetwork.parseOrNull("2001:db8::/32")),
-                    ),
+            "DummyIdentitySettings(user=local.user, groups=[operators, security])",
+            config.identity.toString(),
+        )
+    }
+
+    /** Environment overrides every Dummy field decoded from HOCON. */
+    @Test
+    fun `dummy identity settings load from environment with precedence`() {
+        val file = writeConfig(
+            """
+            vigilant {
+              upstream-url = "http://file-upstream:1"
+              environment = "development"
+              identity-mode = "DUMMY"
+              identity-dummy-user = "file-user"
+              identity-dummy-groups = ["file-group"]
+            }
+            """.trimIndent(),
+        )
+
+        val config = loadAppConfigWithoutIdentityDefaults(
+            env = mapOf(
+                "VIGILANT_CONFIG" to file.toString(),
+                "VIGILANT_ENVIRONMENT" to "test",
+                "VIGILANT_IDENTITY_MODE" to "DUMMY",
+                "VIGILANT_IDENTITY_DUMMY_USER" to "Env.User",
+                "VIGILANT_IDENTITY_DUMMY_GROUPS" to "Env.Group,env.group,Second",
             ),
-            config.identity,
+        )
+
+        assertEquals(
+            "DummyIdentitySettings(user=env.user, groups=[env.group, second])",
+            config.identity.toString(),
         )
     }
 
-    /** Trust boundaries accept address literals only and never perform a startup DNS lookup. */
+    /** Missing environment, mode, or Dummy user fails the validated startup boundary. */
     @Test
-    fun `trusted header identity rejects malformed cidr`() {
-        val file = writeConfig(
-            """
-            vigilant {
-              upstream-url = "http://127.0.0.1:18081"
-              identity-mode = "TRUSTED_HEADERS"
-              identity-user-header = "x-vigilant-user"
-              identity-trusted-cidrs = ["identity-secret.example/24"]
-            }
-            """.trimIndent(),
-        )
-
-        val exception = assertFailsWith<IllegalArgumentException> {
-            loadAppConfig(
-                env = mapOf("VIGILANT_CONFIG" to file.toString()),
-                defaultConfigPaths = emptyList(),
+    fun `dummy identity requires complete startup configuration`() {
+        val base =
+            mapOf(
+                "VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081",
+                "VIGILANT_AUDIT_DIRECTORY" to TEST_AUDIT_DIRECTORY.toString(),
+                "VIGILANT_ENVIRONMENT" to "test",
+                "VIGILANT_IDENTITY_MODE" to "DUMMY",
+                "VIGILANT_IDENTITY_DUMMY_USER" to "local-user",
             )
-        }
-
-        assertEquals(
-            "VIGILANT_IDENTITY_TRUSTED_CIDRS must contain only literal IPv4 or IPv6 CIDRs",
-            exception.message,
-        )
-    }
-
-    /** Trusted-header mode must configure at least one actual identity source. */
-    @Test
-    fun `trusted header identity requires a configured identity header`() {
-        val file = writeConfig(
-            """
-            vigilant {
-              upstream-url = "http://127.0.0.1:18081"
-              identity-mode = "TRUSTED_HEADERS"
-              identity-trusted-cidrs = ["127.0.0.0/8"]
-            }
-            """.trimIndent(),
-        )
-
-        val exception = assertFailsWith<IllegalArgumentException> {
-            loadAppConfig(
-                env = mapOf("VIGILANT_CONFIG" to file.toString()),
-                defaultConfigPaths = emptyList(),
+        val cases =
+            listOf(
+                "VIGILANT_ENVIRONMENT" to "VIGILANT_ENVIRONMENT is required",
+                "VIGILANT_IDENTITY_MODE" to "VIGILANT_IDENTITY_MODE is required and must be DUMMY",
+                "VIGILANT_IDENTITY_DUMMY_USER" to "VIGILANT_IDENTITY_DUMMY_USER is required",
             )
-        }
 
-        assertEquals(
-            "TRUSTED_HEADERS mode requires VIGILANT_IDENTITY_USER_HEADER or VIGILANT_IDENTITY_GROUPS_HEADER",
-            exception.message,
-        )
-    }
-
-    /** User and group extraction cannot assign two meanings to the same HTTP field. */
-    @Test
-    fun `trusted user and group headers must be distinct`() {
-        val file = writeConfig(
-            """
-            vigilant {
-              upstream-url = "http://127.0.0.1:18081"
-              identity-mode = "TRUSTED_HEADERS"
-              identity-user-header = "x-vigilant-identity"
-              identity-groups-header = "X-Vigilant-Identity"
-              identity-trusted-cidrs = ["127.0.0.0/8"]
+        cases.forEach { (removed, expectedMessage) ->
+            val exception = assertFailsWith<IllegalArgumentException> {
+                io.vigilant.gateway.config.loadAppConfig(
+                    env = base - removed,
+                    defaultConfigPaths = emptyList(),
+                )
             }
-            """.trimIndent(),
-        )
-
-        val exception = assertFailsWith<IllegalArgumentException> {
-            loadAppConfig(
-                env = mapOf("VIGILANT_CONFIG" to file.toString()),
-                defaultConfigPaths = emptyList(),
-            )
+            assertEquals(expectedMessage, exception.message)
         }
-
-        assertEquals(
-            "VIGILANT_IDENTITY_USER_HEADER and VIGILANT_IDENTITY_GROUPS_HEADER must be distinct",
-            exception.message,
-        )
     }
 
-    /** Identity extraction defaults to explicit anonymous mode for backward compatibility. */
+    /** Production deterministically rejects the sole currently available identity mode. */
     @Test
-    fun `identity defaults to anonymous mode`() {
-        val config = loadAppConfig(
-            env = mapOf("VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081"),
-            defaultConfigPaths = emptyList(),
-        )
-
-        assertEquals(
-            IdentitySettings(IdentityMode.ANONYMOUS, null, null, emptyList()),
-            config.identity,
-        )
-    }
-
-    /** Unknown identity source names fail startup rather than falling back to anonymous. */
-    @Test
-    fun `unknown identity mode fails startup`() {
+    fun `production rejects dummy identity mode`() {
         val exception = assertFailsWith<IllegalArgumentException> {
             loadAppConfig(
                 env = mapOf(
                     "VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081",
-                    "VIGILANT_IDENTITY_MODE" to "UNKNOWN_SENTINEL",
+                    "VIGILANT_ENVIRONMENT" to "production",
                 ),
                 defaultConfigPaths = emptyList(),
             )
         }
 
-        assertEquals(
-            "VIGILANT_IDENTITY_MODE must be ANONYMOUS, TRUSTED_HEADERS, or BASIC",
-            exception.message,
-        )
+        assertEquals("DUMMY identity mode is not permitted in production", exception.message)
+    }
+
+    /** Every removed mode is rejected without a compatibility alias. */
+    @Test
+    fun `legacy and unknown identity modes fail startup`() {
+        listOf("ANONYMOUS", "TRUSTED_HEADERS", "BASIC", "UNKNOWN_SENTINEL").forEach { mode ->
+            val exception = assertFailsWith<IllegalArgumentException> {
+                loadAppConfig(
+                    env = mapOf(
+                        "VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081",
+                        "VIGILANT_IDENTITY_MODE" to mode,
+                    ),
+                    defaultConfigPaths = emptyList(),
+                )
+            }
+            assertEquals("VIGILANT_IDENTITY_MODE is required and must be DUMMY", exception.message)
+        }
+    }
+
+    /** Every removed legacy identity key is rejected by strict HOCON decoding. */
+    @Test
+    fun `legacy identity keys fail startup`() {
+        listOf(
+            "identity-user-header",
+            "identity-groups-header",
+            "identity-trusted-cidrs",
+        ).forEach { legacyKey ->
+            val file = writeConfig(
+                """
+                vigilant {
+                  upstream-url = "http://127.0.0.1:18081"
+                  environment = "test"
+                  identity-mode = "DUMMY"
+                  identity-dummy-user = "local-user"
+                  $legacyKey = "legacy-value"
+                }
+                """.trimIndent(),
+            )
+            val exception = assertFailsWith<IllegalArgumentException> {
+                loadAppConfigWithoutIdentityDefaults(mapOf("VIGILANT_CONFIG" to file.toString()))
+            }
+            assertTrue(exception.message.orEmpty().contains(legacyKey))
+        }
+    }
+
+    /** Group normalization enforces the existing maximum of 128 distinct identities. */
+    @Test
+    fun `dummy groups reject the 129th distinct normalized identity`() {
+        val exception = assertFailsWith<IllegalArgumentException> {
+            loadAppConfig(
+                env = mapOf(
+                    "VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081",
+                    "VIGILANT_IDENTITY_DUMMY_GROUPS" to (0..128).joinToString(",") { "group-$it" },
+                ),
+                defaultConfigPaths = emptyList(),
+            )
+        }
+
+        assertEquals("VIGILANT_IDENTITY_DUMMY_GROUPS must contain at most 128 groups", exception.message)
     }
 
     /** Unknown identity configuration keys fail startup instead of being silently ignored. */
@@ -370,17 +328,16 @@ class AppConfigLoadingTest {
             """
             vigilant {
               upstream-url = "http://127.0.0.1:18081"
-              identity-mode = "ANONYMOUS"
+              environment = "test"
+              identity-mode = "DUMMY"
+              identity-dummy-user = "local-user"
               identity-unknown-setting = "must-not-be-ignored"
             }
             """.trimIndent(),
         )
 
         assertFailsWith<IllegalArgumentException> {
-            loadAppConfig(
-                env = mapOf("VIGILANT_CONFIG" to file.toString()),
-                defaultConfigPaths = emptyList(),
-            )
+            loadAppConfigWithoutIdentityDefaults(mapOf("VIGILANT_CONFIG" to file.toString()))
         }
     }
 
@@ -398,33 +355,6 @@ class AppConfigLoadingTest {
         )
 
         assertEquals(URI("http://127.0.0.1:18081"), config.upstreamUri)
-    }
-
-    /** Environment configuration exposes the same trusted-header contract as HOCON. */
-    @Test
-    fun `trusted header identity is configurable through environment`() {
-        val config = loadAppConfig(
-            env = mapOf(
-                "VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081",
-                "VIGILANT_IDENTITY_MODE" to "TRUSTED_HEADERS",
-                "VIGILANT_IDENTITY_USER_HEADER" to "X-Env-User",
-                "VIGILANT_IDENTITY_TRUSTED_CIDRS" to "127.0.0.0/8,2001:db8::/32",
-            ),
-            defaultConfigPaths = emptyList(),
-        )
-
-        assertEquals(
-            IdentitySettings(
-                IdentityMode.TRUSTED_HEADERS,
-                "x-env-user",
-                null,
-                listOf(
-                    requireNotNull(TrustedNetwork.parseOrNull("127.0.0.0/8")),
-                    requireNotNull(TrustedNetwork.parseOrNull("2001:db8::/32")),
-                ),
-            ),
-            config.identity,
-        )
     }
 
     /** Verifies environment overrides for every bounded request-source limit. */
@@ -866,14 +796,29 @@ class AppConfigLoadingTest {
     private fun writeConfig(content: String): Path =
         Files.createTempFile("vigilant-test", ".conf").also { it.writeText(content) }
 
+    /** Loads exact supplied identity fields while adding only the unrelated audit prerequisite. */
+    private fun loadAppConfigWithoutIdentityDefaults(env: Map<String, String>): AppConfig =
+        io.vigilant.gateway.config.loadAppConfig(
+            env = env + ("VIGILANT_AUDIT_DIRECTORY" to TEST_AUDIT_DIRECTORY.toString()),
+            defaultConfigPaths = emptyList(),
+        )
+
     /** Supplies the unrelated mandatory audit input to legacy configuration cases. */
     private fun loadAppConfig(env: Map<String, String>, defaultConfigPaths: List<Path>): AppConfig =
         io.vigilant.gateway.config.loadAppConfig(
-            env = env + ("VIGILANT_AUDIT_DIRECTORY" to TEST_AUDIT_DIRECTORY.toString()),
+            env = VALID_DUMMY_ENV + env + ("VIGILANT_AUDIT_DIRECTORY" to TEST_AUDIT_DIRECTORY.toString()),
             defaultConfigPaths = defaultConfigPaths,
         )
 
     private companion object {
+        /** Shared persistent prerequisite for configuration-only tests. */
         private val TEST_AUDIT_DIRECTORY: Path = Files.createTempDirectory("vigilant-config-audit")
+        /** Complete valid identity prerequisite overridden only by the behavior under test. */
+        private val VALID_DUMMY_ENV =
+            mapOf(
+                "VIGILANT_ENVIRONMENT" to "test",
+                "VIGILANT_IDENTITY_MODE" to "DUMMY",
+                "VIGILANT_IDENTITY_DUMMY_USER" to "test-user",
+            )
     }
 }

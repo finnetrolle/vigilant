@@ -16,27 +16,21 @@ import java.util.concurrent.atomic.AtomicReference
 internal class ReplayReadyRequest private constructor(
     private val owner: BoundedRequestSourceOwner,
     private val publisher: Flow.Publisher<ByteBuffer>,
-    private val headersToStrip: Set<String>,
 ) : AutoCloseable {
     private val state = AtomicReference(TransferState.READY)
 
     /**
-     * Transfers exact source replay and immutable consumed-header names to transport once.
+     * Transfers exact source replay to transport once.
      *
      * A synchronous callback failure closes the source and is rethrown unchanged. Repeated
      * transfer, including after [close], fails before the callback is invoked.
      */
-    fun <T> transferTo(
-        forward: (
-            publisher: Flow.Publisher<ByteBuffer>,
-            headersToStrip: Set<String>,
-        ) -> T,
-    ): T {
+    fun <T> transferTo(forward: (publisher: Flow.Publisher<ByteBuffer>) -> T): T {
         check(state.compareAndSet(TransferState.READY, TransferState.TRANSFERRING)) {
             "Request replay transfer is no longer ready"
         }
         return try {
-            val result = forward(publisher, headersToStrip)
+            val result = forward(publisher)
             check(state.compareAndSet(TransferState.TRANSFERRING, TransferState.TRANSFERRED))
             result
         } catch (failure: Throwable) {
@@ -64,13 +58,10 @@ internal class ReplayReadyRequest private constructor(
          *
          * @throws SafeSourceFailure when the owner cannot provide its sole replay lease.
          */
-        fun create(
-            owner: BoundedRequestSourceOwner,
-            headersToStrip: Set<String>,
-        ): ReplayReadyRequest =
+        fun create(owner: BoundedRequestSourceOwner): ReplayReadyRequest =
             when (val replay = owner.replay()) {
                 is RequestSourceReplayResult.Available ->
-                    ReplayReadyRequest(owner, replay.publisher, java.util.Set.copyOf(headersToStrip))
+                    ReplayReadyRequest(owner, replay.publisher)
 
                 is RequestSourceReplayResult.Unavailable -> throw SafeSourceFailure(replay.code)
             }

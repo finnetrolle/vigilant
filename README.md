@@ -17,8 +17,8 @@ Vigilant - OpenAI-совместимый guardrails gateway для платфо�
 - Shadow-only решение: найденный PII фиксируется как `DETECTED`, но текущая
   disposition всегда `ALLOW`.
 - Byte-identical replay исходного body и сохранение неизвестных полей.
-- Config-driven `ANONYMOUS`, trusted-header или Basic identity с immediate-peer
-  CIDR boundary, safe credential stripping и request-to-response context handoff.
+- Development/test Dummy Bearer identity с configured normalized user/groups,
+  unchanged upstream Authorization и request-to-response context handoff.
 - Streaming pass-through ответа upstream, включая SSE.
 - Stable fail-closed ошибки для неподдерживаемой или неоднозначной request
   schema и при исчерпании inspection capacity.
@@ -44,6 +44,9 @@ mkdir -p .vigilant-audit
 
 VIGILANT_UPSTREAM_URL=https://api.openai.com \
   VIGILANT_AUDIT_DIRECTORY="$PWD/.vigilant-audit" \
+  VIGILANT_ENVIRONMENT=development \
+  VIGILANT_IDENTITY_MODE=DUMMY \
+  VIGILANT_IDENTITY_DUMMY_USER=local-user \
   ./build/install/vigilant/bin/vigilant
 ~~~
 
@@ -98,6 +101,8 @@ Application configuration загружается с приоритетом
 - `VIGILANT_UPSTREAM_URL` или `vigilant.upstream-url` в HOCON;
 - существующий persistent `VIGILANT_AUDIT_DIRECTORY` или
   `vigilant.audit-directory` в HOCON;
+- `VIGILANT_ENVIRONMENT`, `VIGILANT_IDENTITY_MODE=DUMMY` и
+  `VIGILANT_IDENTITY_DUMMY_USER` для временного development/test extractor;
 - валидный `politics.conf`, по умолчанию из текущей директории;
 - `VIGILANT_PORT` необязателен, значение по умолчанию - `8080`.
 
@@ -109,6 +114,9 @@ defaults, validation rules и порядок поиска файлов прив�
 Невалидная или неполная application/policy configuration печатает безопасную
 ошибку в stderr и завершает процесс с кодом `2`.
 
+`DUMMY` запрещён в `production`. После VIG-27 production startup намеренно
+невозможен до появления real Bearer extractor в следующем identity increment.
+
 ## OCI image
 
 ~~~bash
@@ -118,6 +126,9 @@ docker run --rm --name vigilant \
   --publish 8080:8080 \
   --stop-timeout 35 \
   --env VIGILANT_UPSTREAM_URL=https://api.openai.com \
+  --env VIGILANT_ENVIRONMENT=development \
+  --env VIGILANT_IDENTITY_MODE=DUMMY \
+  --env VIGILANT_IDENTITY_DUMMY_USER=local-user \
   --env VIGILANT_POLITICS_CONFIG=/etc/vigilant/politics.conf \
   --mount type=bind,src="$PWD/politics.conf",dst=/etc/vigilant/politics.conf,readonly \
   --mount type=volume,src=vigilant-audit,dst=/var/lib/vigilant/audit \

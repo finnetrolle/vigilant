@@ -11,6 +11,24 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class MainTest {
+    /** Verifies production cannot start while Dummy is the sole available identity mode. */
+    @Test
+    fun `production deterministically rejects dummy identity at process startup`() {
+        val result =
+            runGateway(
+                mapOf(
+                    "VIGILANT_ENVIRONMENT" to "production",
+                    "VIGILANT_IDENTITY_MODE" to "DUMMY",
+                    "VIGILANT_IDENTITY_DUMMY_USER" to "production-user",
+                    "VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081",
+                ),
+            )
+
+        assertEquals(2, result.exitCode)
+        assertTrue(result.stderr.contains("DUMMY identity mode is not permitted in production"))
+        assertFalse(result.stderr.contains("production-user"))
+    }
+
     /** Verifies a configured non-directory fails before the server can accept traffic. */
     @Test
     fun `unavailable audit directory exits with code 2 and safe stderr`() {

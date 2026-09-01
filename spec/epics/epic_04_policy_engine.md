@@ -588,7 +588,7 @@ Raw exception, stack trace внешнего plugin worker, payload и findings �
 
 - Парсинг HTTP-запроса или ответа.
 - Извлечение URL, модели, пользователя, групп или payload.
-- Конфигурация identity headers и Basic Authentication.
+- Парсинг и startup configuration request identity.
 - Изменение request/response payload по spans.
 - Формирование безопасного HTTP-ответа при `BLOCK`.
 - Интеграция engine в текущий streaming proxy path.

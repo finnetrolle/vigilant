@@ -141,6 +141,9 @@ class UpstreamConnectionPoolingTest {
                 "VIGILANT_UPSTREAM_URL" to upstream.uri.toString(),
                 "VIGILANT_UPSTREAM_CONNECTION_IDLE_TIMEOUT" to "${connectionIdleTimeout.toMillis()}ms",
                 "VIGILANT_AUDIT_DIRECTORY" to Files.createTempDirectory("vigilant-pool-audit").toString(),
+                "VIGILANT_ENVIRONMENT" to "test",
+                "VIGILANT_IDENTITY_MODE" to "DUMMY",
+                "VIGILANT_IDENTITY_DUMMY_USER" to "pool-test-user",
             ),
             defaultConfigPaths = emptyList(),
         )

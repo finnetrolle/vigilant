@@ -2,13 +2,18 @@ package io.vigilant.gateway
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.linecorp.armeria.client.WebClient
+import com.linecorp.armeria.common.HttpData
 import com.linecorp.armeria.common.HttpMethod
 import com.linecorp.armeria.common.HttpRequest
 import com.linecorp.armeria.common.HttpResponse
 import com.linecorp.armeria.common.MediaType
+import com.linecorp.armeria.common.RequestHeaders
 
 /** Canonical supported Chat Completions path used by gateway integration tests. */
 internal const val CHAT_COMPLETIONS_PATH = "/v1/chat/completions"
+
+/** Canonical valid Dummy credential used by tests outside the identity matrix. */
+internal const val TEST_DUMMY_AUTHORIZATION = "Bearer test-dummy-token"
 
 private val CHAT_COMPLETIONS_JSON = ObjectMapper()
 
@@ -32,12 +37,16 @@ internal fun chatCompletionsBody(
 internal fun chatCompletionsRequest(
     content: String,
     stream: Boolean = false,
-): HttpRequest =
+): HttpRequest = chatCompletionsRequestWithBody(chatCompletionsBody(content, stream))
+
+/** Builds one authenticated supported-path request around an exact caller-supplied body. */
+internal fun chatCompletionsRequestWithBody(body: String): HttpRequest =
     HttpRequest.of(
-        HttpMethod.POST,
-        CHAT_COMPLETIONS_PATH,
-        MediaType.JSON,
-        chatCompletionsBody(content, stream),
+        RequestHeaders.builder(HttpMethod.POST, CHAT_COMPLETIONS_PATH)
+            .contentType(MediaType.JSON)
+            .add("authorization", TEST_DUMMY_AUTHORIZATION)
+            .build(),
+        HttpData.ofUtf8(body),
     )
 
 /** Executes one valid supported request through this real Armeria client. */

@@ -377,8 +377,9 @@ integration. VIG-18 подтверждает только `64 KiB` single-fragme
 VIG-21-02 отдельно подтверждает опубликованную max-shape matrix. EPIC-07 и
 request-only EPIC-08 также имеют status `Done`. Identity
 scope исторического first production increment был anonymous-only. После
-него VIG-03-03..06 закрыли full identity path; current runtime поддерживает
-ровно один configured mode из `ANONYMOUS`, `TRUSTED_HEADERS`, `BASIC`.
+него VIG-03-03..06 закрыли прежний identity path. VIG-27 заменил его
+development/test-only mode `DUMMY`; production startup намеренно невозможен
+до появления real Bearer extractor.
 
 Все standalone integration issues Stage 3 закрыты: VIG-11..17 имеют status
 `Done`. Production `MainKt` и OCI image выполняют bounded PII shadow inspection
@@ -418,8 +419,8 @@ frontier.
 - `BLOCK`, `MASK`, `REMOVE` и изменение protocol source.
 - historical scope первого milestone не включал user/group identity
   extraction и trusted ingress model. Это temporal boundary, а не current
-  exclusion: current runtime уже реализует `ANONYMOUS`, `TRUSTED_HEADERS`
-  и `BASIC`.
+  exclusion: current development/test runtime получает configured identity
+  через Dummy Bearer contract, но real authentication пока отсутствует.
 - External object storage.
 - Kubernetes manifests, Helm, autoscaling и centralized log storage.
 - Backend-specific Langfuse/MLflow exporters и authentication внутри Vigilant.

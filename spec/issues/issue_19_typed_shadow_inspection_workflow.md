@@ -315,8 +315,7 @@ RED для уже существующего runtime behavior не создаё�
 Существующий real-Armeria seam должен продолжать доказывать:
 
 - byte-identical forwarding и один safe aggregate audit;
-- Basic и trusted-header identity handoff и точный header stripping;
-- anonymous mode без потребления identity-like headers;
+- Dummy Bearer identity handoff и unchanged accepted Authorization;
 - identity rejection и unsupported descriptor до body demand/upstream;
 - fail-closed malformed/ambiguous content и explicit inspection gap для
   recognized non-text content;

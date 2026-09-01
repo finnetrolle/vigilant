@@ -97,6 +97,7 @@ public final class InspectionLoadSimulation extends Simulation {
     private ChainBuilder request(String requestName, String sessionId, boolean measured) {
         var request = http(requestName)
             .post("/v1/chat/completions")
+            .header("Authorization", "Bearer inspection-load-token")
             .header("Content-Type", "application/json")
             .header(InspectionPayload.SHA256_HEADER, requestDigest)
             .header(SESSION_HEADER, sessionId)

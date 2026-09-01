@@ -49,9 +49,10 @@ events, включая model, извлекает отдельный
 [EPIC-06](epic_06_llm_message_parsing.md). EPIC-03 получает их в готовом
 нормализованном виде и не разбирает raw body повторно.
 
-Пользователь может определяться через Basic Authentication или специальный
-HTTP-заголовок. Названия служебных заголовков не могут быть жёстко заданы в
-коде и должны настраиваться.
+Текущая migration state после VIG-27 использует development/test-only Dummy
+Bearer extractor: он проверяет только representation единственного
+Authorization header и возвращает configured normalized user/groups. Real
+Bearer authentication принадлежит следующему identity increment.
 
 Извлечение и нормализация этих значений отделяются от механизма выбора политик. Policy engine должен получать готовый контекст и не должен самостоятельно разбирать HTTP-запрос, авторизацию или тело сообщения.
 
@@ -125,34 +126,19 @@ transport, fragments, provenance и inspection gaps не входят в
 set`. Это valid anonymous context, который совпадает с subject `ANY` и не
 совпадает с USER/GROUP по contract EPIC-04.
 
-## Identity modes и trust boundary
+## Temporary Dummy Bearer boundary
 
-Strict config выбирает ровно один mode:
+Strict config требует `environment`, sole mode `DUMMY`, configured user и
+optional groups. `DUMMY` разрешён только в development/test и запрещён в
+production. User/groups используют ASCII grammar
+`[A-Za-z0-9][A-Za-z0-9._:@/\-]{0,127}` и Locale.ROOT lowercase; groups
+deduplicate-ятся и ограничены 128 values.
 
-```text
-ANONYMOUS
-TRUSTED_HEADERS(userHeader?, groupsHeader?, trustedCidrs[])
-BASIC
-```
-
-Modes взаимоисключающие, поэтому cross-source precedence отсутствует.
-`TRUSTED_HEADERS` принимает values только от immediate socket peer внутри
-configured CIDR. `Forwarded`, `X-Forwarded-For` и подобные client-controlled
-headers не расширяют boundary. Supplied configured identity header от
-untrusted peer даёт `UNTRUSTED_IDENTITY` и запрещает forwarding.
-
-User/group IDs используют ASCII grammar
-`[A-Za-z0-9][A-Za-z0-9._:@/\-]{0,127}` и Locale.ROOT lowercase. Groups
-передаются comma-separated с optional OWS, допускают repeated header lines,
-deduplicate-ятся и ограничены 128 values. User имеет максимум одно value.
-
-`BASIC` strict-decodes Base64 bytes, берёт ASCII username до первого `:` и
-никогда не преобразует password bytes в retained String. Отсутствие identity
-value даёт anonymous identity; duplicate, malformed или contradictory values
-дают typed safe failure. Configured Vigilant-only identity headers всегда
-strip-ятся upstream. `Authorization` strip-ится этой capability только когда
-consumed как BASIC identity; upstream authentication остаётся отдельной
-integration responsibility.
+Request обязан содержать ровно один case-insensitive Bearer Authorization.
+Token может быть пустым, игнорируется и не сохраняется. Missing/non-Bearer
+получает typed authentication challenge; duplicate/malformed representation
+получает typed safe failure. Accepted Authorization остаётся end-to-end и
+передаётся upstream с исходным value.
 
 ## Immutable assembly и handoff
 
@@ -179,10 +165,9 @@ VIG-03-04.
 - Модель и любые другие body-derived attributes принимаются из результата
   EPIC-06 и не извлекаются в EPIC-03.
 - Фаза определяется точкой вызова policy engine, а не содержимым payload.
-- Пользователь и группы извлекаются настраиваемым способом.
-- Названия HTTP-заголовков с identity-данными задаются через конфигурацию.
-- Должна быть предусмотрена возможность извлечения пользователя из Basic Authentication.
-- Служебные identity-заголовки не должны передаваться upstream, если они предназначены только для Vigilant.
+- Пользователь и группы поступают в normalized contract из выбранного
+  extractor-а; текущий Dummy использует configured values.
+- Accepted Bearer Authorization передаётся upstream без изменения.
 - Пароли, токены и исходные значения credentials не должны попадать в контекст политики, ошибки или логи.
 - Результат сборки context не зависит от конкретной реализации
   `PolicyProvider`.
@@ -215,7 +200,8 @@ VIG-03-04.
 - Одинаковые логические значения из поддерживаемых источников дают одинаковый контекст.
 - Контекст ответа содержит URL, модель, пользователя и группы исходного запроса.
 - Названия служебных identity-заголовков не зашиты в коде.
-- Чувствительные authentication-данные не передаются upstream и не попадают в логи.
+- Чувствительные authentication-данные не попадают в context, audit или logs;
+  upstream получает исходный end-to-end Authorization.
 - Каждый active leaf использует выбранные contracts без скрытого fallback.
 
 ## Ambiguity Report

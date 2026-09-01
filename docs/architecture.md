@@ -54,13 +54,11 @@ context клиенту и передаёт его upstream.
 worst-case disk bytes до identity extraction и body demand. Exhausted или
 unhealthy store возвращает `503 audit_unavailable` без чтения body и upstream.
 
-Затем `IdentityExtractor` применяет ровно один startup mode. `ANONYMOUS` не
-потребляет headers. `TRUSTED_HEADERS` читает только настроенные user/groups
-headers и доверяет им только когда immediate socket peer входит в настроенный
-literal IPv4/IPv6 CIDR; `Forwarded` и `X-Forwarded-For` не влияют на boundary.
-`BASIC` strict-decodes `Authorization`, сохраняет только нормализованный ASCII
-username и не преобразует password bytes в retained string. Ошибка identity
-отклоняется до body demand и upstream call.
+Затем `DummyIdentityExtractor` требует ровно один case-insensitive Bearer
+`Authorization`, игнорирует token и возвращает configured normalized
+user/groups. Missing или другой scheme получает Bearer challenge; duplicate и
+malformed representation отклоняются до body demand и upstream call. Token не
+сохраняется, а принятый Authorization передаётся upstream без изменения.
 
 Для поддерживаемого запроса `RequestSourceQuota` резервирует owner. Body
 принимается с backpressure и полностью сохраняется в bounded in-memory source.
@@ -188,16 +186,14 @@ exhaustion достигает typed owner в `PiiShadowProxyService`, а gracefu
 [durability qualification](durability-qualification-2026-08-31.md)
 подтверждает оба независимых outcome.
 
-`ReplayReadyRequest` инкапсулирует demand-driven publisher и immutable strip
-set. Его `transferTo` допускает ровно один transport handoff. `close()` до
+`ReplayReadyRequest` инкапсулирует demand-driven publisher. Его `transferTo`
+допускает ровно один transport handoff. `close()` до
 handoff и synchronous callback failure освобождают source; после принятого
 handoff owner освобождается только terminal signal replay. Это исключает окно
 без владельца между workflow и transport.
 
-Во время handoff из request headers удаляется только strip set, возвращённый
-identity extractor: configured Vigilant-only headers для `TRUSTED_HEADERS` или
-consumed `Authorization` для `BASIC`. Затем исходные bytes передаются в
-`BypassProxyService`. Этот transport слой:
+Во время handoff исходные end-to-end headers, включая accepted Authorization,
+и исходные bytes передаются в `BypassProxyService`. Этот transport слой:
 
 - переписывает scheme, authority и base path под upstream URL;
 - удаляет стандартные hop-by-hop headers и headers из `Connection`;

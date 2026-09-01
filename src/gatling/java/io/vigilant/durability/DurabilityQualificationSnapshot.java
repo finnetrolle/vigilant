@@ -126,7 +126,8 @@ record DurabilityQualificationSnapshot(
             "detector-error", new ExpectedOutcome(200, "none", 1, 1_048_647, "ERROR", "POLICY_DEADLINE_EXCEEDED"),
             "parser-failure", new ExpectedOutcome(400, "malformed_message", 0, 0, "ERROR", "MALFORMED_MESSAGE"),
             "source-failure", new ExpectedOutcome(413, "request_too_large", 0, 0, "ERROR", "REQUEST_TOO_LARGE"),
-            "identity-failure", new ExpectedOutcome(403, "untrusted_identity", 0, 0, "ERROR", "UNTRUSTED_IDENTITY"),
+            "identity-failure",
+            new ExpectedOutcome(401, "authentication_required", 0, 0, "ERROR", "AUTHENTICATION_REQUIRED"),
             "inspection-failure", new ExpectedOutcome(500, "inspection_failed", 0, 0, "ERROR", "INSPECTION_FAILED")
         );
 

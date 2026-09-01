@@ -6,6 +6,10 @@ import io.vigilant.protocol.NormalizedProtocolAttributes
 import java.util.ArrayList
 import java.util.Collections
 import java.util.LinkedHashSet
+import java.util.Locale
+
+/** Maximum number of distinct normalized group identities accepted for one subject. */
+internal const val MAX_NORMALIZED_IDENTITY_GROUPS = 128
 
 /** Immutable normalized subject identity used for policy-context assembly. */
 class NormalizedIdentity(
@@ -22,16 +26,10 @@ class NormalizedIdentity(
 
     /** Whether this candidate exactly satisfies the normalized identity contract. */
     internal val isCanonical: Boolean =
-        (user == null || user.isNormalizedIdentityToken()) &&
-            groupSnapshot.size <= MAX_IDENTITY_GROUPS &&
+        (user == null || user.isCanonicalIdentityToken()) &&
+            groupSnapshot.size <= MAX_NORMALIZED_IDENTITY_GROUPS &&
             groupSnapshot.size == this.groups.size &&
-            groupSnapshot.all(String::isNormalizedIdentityToken)
-
-    /** Normalized identity contract limits. */
-    private companion object {
-        /** Maximum number of distinct normalized group identities. */
-        const val MAX_IDENTITY_GROUPS = 128
-    }
+            groupSnapshot.all(String::isCanonicalIdentityToken)
 }
 
 /** Stable policy-context assembly failure categories. */
@@ -122,8 +120,15 @@ object PolicyContextAssembler {
         }
 }
 
+/** Normalizes one bounded ASCII identity token with locale-independent casing. */
+internal fun String.normalizeIdentityTokenOrNull(): String? =
+    takeIf(RAW_IDENTITY_TOKEN::matches)?.lowercase(Locale.ROOT)
+
 /** Checks one candidate against the normalized lowercase ASCII identity-token grammar. */
-private fun String.isNormalizedIdentityToken(): Boolean = NORMALIZED_IDENTITY_TOKEN.matches(this)
+private fun String.isCanonicalIdentityToken(): Boolean = NORMALIZED_IDENTITY_TOKEN.matches(this)
 
 /** Canonical lowercase ASCII identity token grammar. */
 private val NORMALIZED_IDENTITY_TOKEN = Regex("[a-z0-9][a-z0-9._:@/\\-]{0,127}")
+
+/** Source-case ASCII identity-token grammar accepted before normalization. */
+private val RAW_IDENTITY_TOKEN = Regex("[A-Za-z0-9][A-Za-z0-9._:@/\\-]{0,127}")

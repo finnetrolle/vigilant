@@ -1,4 +1,4 @@
-# VIG-03-06: E2E security и upstream identity stripping
+# VIG-03-06: E2E security identity handoff
 
 **Статус:** Done
 **Epic:** [EPIC-03](../../epics/epic_03_policy_context_extraction.md)  
@@ -8,18 +8,17 @@
 
 ## Результат
 
-E2E tests через реальные Armeria server и upstream подтверждают, что context
-строится для request/response phases, а Vigilant-only identity headers и
-credentials не передаются upstream и не раскрываются в логах или errors.
+Historical E2E security path заменён VIG-27. Current real-Armeria evidence
+подтверждает configured Dummy identity в request/response context, safe
+pre-body Bearer rejects, отсутствие token в logs/audit и unchanged accepted
+Authorization upstream.
 
 ## Критерии приёмки
 
-- [x] Проверены `ANONYMOUS`, `TRUSTED_HEADERS` и `BASIC` как взаимоисключающие
-  identity modes; E2E подтверждает отсутствие cross-source precedence.
-- [x] Служебные identity headers удаляются только по конфигурации.
+- [x] Legacy extractor modes и consumed-header stripping удалены VIG-27.
 - [x] End-to-end headers и raw body, не относящиеся к identity, сохраняются.
-- [x] Basic password, Authorization и sentinel values отсутствуют upstream,
-  stdout и stderr согласно принятому контракту.
+- [x] Token и identity sentinel values отсутствуют stdout/stderr; accepted
+  Authorization достигает upstream unchanged.
 - [x] Request и streaming/non-streaming response получают один context.
 - [x] Existing proxy transparency, backpressure и cancellation tests проходят.
 - [x] `./gradlew build` проходит.
