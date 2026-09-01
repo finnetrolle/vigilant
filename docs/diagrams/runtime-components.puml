@@ -18,7 +18,8 @@ node "Процесс Vigilant" as Vigilant {
   component "ChatCompletionsRequestParser" as Parser
   component "Сборщик PolicyContext" as Context
   component "PolicyEngine" as PolicyEngine
-  component "fast-pii и оконная обработка" as FastPii
+  component "fast-pii adapter и recognizers" as FastPii
+  component "Generic windowing core" as Windowing
   component "LocalAuditStore" as AuditStore
   component "ReplayReadyRequest" as Replay
   component "BypassProxyService" as Transport
@@ -33,6 +34,7 @@ Workflow --> Parser : представление только для чтени�
 Parser --> Context : модель и фрагменты
 Context --> PolicyEngine : PolicyContext
 PolicyEngine --> FastPii : независимые фрагменты
+FastPii --> Windowing : capability и detector contract
 Workflow --> AuditStore : неизменяемая безопасная запись
 AuditStore --> AuditVolume : запись WAL и force(true)
 Workflow --> Replay : решение Forward

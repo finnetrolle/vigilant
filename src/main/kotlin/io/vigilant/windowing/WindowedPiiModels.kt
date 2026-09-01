@@ -3,16 +3,6 @@ package io.vigilant.windowing
 import io.vigilant.detectors.pii.PiiFinding
 import java.util.Collections
 
-/** Versioned detector capability required for safe sliding-window execution. */
-data class WindowedPiiCapability(
-    /** Versioned capability proof identifier. */
-    val version: String,
-    /** Maximum UTF-8 bytes accepted by one detector invocation. */
-    val maxWindowUtf8Bytes: Int,
-    /** Maximum finding plus required lookaround span, or absent when unbounded. */
-    val maximumEvidenceSpanUtf8Bytes: Int?,
-)
-
 /** Published capability proof for the built-in Fast PII recognizer set. */
 object FastPiiWindowCapability {
     /**
@@ -25,36 +15,11 @@ object FastPiiWindowCapability {
      * version 2 reserves this evidence context on both sides of each ownership core.
      */
     val VERSIONED =
-        WindowedPiiCapability(
+        WindowedCapability(
             version = "fast-pii-window-capability@2",
             maxWindowUtf8Bytes = 1_048_576,
             maximumEvidenceSpanUtf8Bytes = 4_096,
         )
-}
-
-/** Opaque association with the original logical fragment. */
-@JvmInline
-value class FragmentReference(
-    /** Caller-owned opaque reference value. */
-    val value: String,
-) {
-    init {
-        require(value.isNotBlank()) { "Fragment reference must not be blank" }
-    }
-
-    /** Avoids exposing protocol locators through incidental state descriptions. */
-    override fun toString(): String = "FragmentReference(redacted)"
-}
-
-/** Complete decoded logical text fragment and its opaque provenance. */
-class InspectableTextFragment(
-    /** Exact decoded text inspected by the detector. */
-    val text: String,
-    /** Opaque source association retained in the result. */
-    val provenance: FragmentReference,
-) {
-    /** Avoids exposing fragment text through incidental state descriptions. */
-    override fun toString(): String = "InspectableTextFragment(provenance=$provenance)"
 }
 
 /** Stable safe window-execution failure categories. */

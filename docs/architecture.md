@@ -139,9 +139,12 @@ request, включая случаи `DETECTED`, `CLEAN` и `INSPECTION_GAP`. De
 - российские ИНН, СНИЛС, внутренний паспорт и полис ОМС.
 
 Finding содержит тип, UTF-8 offsets, evidence strength и versioned recognizer
-metadata, но не matched text. Фрагменты больше одновызовного лимита detector
-разбиваются на перекрывающиеся UTF-8-safe windows; результаты переводятся в
-координаты исходного fragment и дедуплицируются.
+metadata, но не matched text. PII-free `WindowedInspectionExecutor` разбивает
+фрагменты больше одновызовного лимита на перекрывающиеся UTF-8-safe windows,
+переводит результаты в координаты исходного fragment и детерминированно
+дедуплицирует их. `WindowedFastPiiExecutor` остаётся тонким adapter-ом: он
+предоставляет capability, exhaustive вызов `FastPiiDetector`, semantic identity,
+сравнение PII metadata и канонический порядок.
 
 Поддерживаемые типы, семантика свидетельств, возможности оконной обработки,
 свидетельства качества и явные ограничения описаны в
@@ -258,5 +261,6 @@ Quiet period и force timeout настраиваются. Полный опер�
 | OpenAI normalization | `protocol/openai/*` |
 | Bounded request source | `source/*` |
 | Policy loading и engine | `policy/config/*`, `policy/selection/*`, `policy/execution/*`, `policy/engine/*` |
-| PII detector и windowing | `detectors/pii/*`, `windowing/*` |
+| Generic windowing core | `windowing/WindowedInspectionModels.kt`, `windowing/WindowedInspectionExecutor.kt` |
+| PII detector и windowing adapter | `detectors/pii/*`, `windowing/WindowedFastPiiExecutor.kt`, `windowing/WindowedPiiModels.kt` |
 | Logs, traces и metrics | `gateway/proxy/ShadowAuditLogger.kt`, `gateway/tracing/*`, `gateway/metrics/*` |

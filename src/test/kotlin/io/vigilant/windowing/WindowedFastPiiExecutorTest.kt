@@ -213,15 +213,15 @@ class WindowedFastPiiExecutorTest {
     fun `capability validation returns stable safe outcomes before detection`() {
         val invalidCapabilities =
             listOf(
-                WindowedPiiCapability("", 32, 16),
-                WindowedPiiCapability("test", 0, 1),
-                WindowedPiiCapability("test", -1, 1),
-                WindowedPiiCapability("test", 32, -1),
-                WindowedPiiCapability("test", 32, 0),
-                WindowedPiiCapability("test", 32, 32),
-                WindowedPiiCapability("test", 32, 33),
-                WindowedPiiCapability("test", 32, 16),
-                WindowedPiiCapability("test", 32, 30),
+                WindowedCapability("", 32, 16),
+                WindowedCapability("test", 0, 1),
+                WindowedCapability("test", -1, 1),
+                WindowedCapability("test", 32, -1),
+                WindowedCapability("test", 32, 0),
+                WindowedCapability("test", 32, 32),
+                WindowedCapability("test", 32, 33),
+                WindowedCapability("test", 32, 16),
+                WindowedCapability("test", 32, 30),
             )
         val invocations = AtomicInteger()
         val detector = detector { invocations.incrementAndGet(); emptyList() }
@@ -249,7 +249,7 @@ class WindowedFastPiiExecutorTest {
                 WindowedFastPiiExecutor(
                     executorService,
                     detector,
-                    WindowedPiiCapability("unbounded", 8, null),
+                    WindowedCapability("unbounded", 8, null),
                 ).inspect(InspectableTextFragment("short", FragmentReference("unbounded-direct")), emptySet())
                     .get(5, TimeUnit.SECONDS)
             assertIs<WindowedPiiInspectionResult.Success>(directResult)
@@ -258,7 +258,7 @@ class WindowedFastPiiExecutorTest {
                 WindowedFastPiiExecutor(
                     executorService,
                     detector,
-                    WindowedPiiCapability("unbounded", 8, null),
+                    WindowedCapability("unbounded", 8, null),
                 ).inspect(InspectableTextFragment("123456789", FragmentReference("unbounded")), emptySet())
                     .get(5, TimeUnit.SECONDS)
 
@@ -302,7 +302,7 @@ class WindowedFastPiiExecutorTest {
                     WindowedFastPiiExecutor(
                         executorService,
                         case.detector,
-                        WindowedPiiCapability("test", 32, 8),
+                        WindowedCapability("test", 32, 8),
                     ).inspect(InspectableTextFragment(case.fragment, FragmentReference("secret locator")), setOf(PiiType.EMAIL_ADDRESS))
                         .get(5, TimeUnit.SECONDS)
 
@@ -325,7 +325,7 @@ class WindowedFastPiiExecutorTest {
                     WindowedFastPiiExecutor(
                         executorService,
                         conflictingDetector,
-                        WindowedPiiCapability("test", 32, 8),
+                        WindowedCapability("test", 32, 8),
                     ).inspect(InspectableTextFragment(" ".repeat(40), FragmentReference("conflict")), setOf(PiiType.EMAIL_ADDRESS))
                         .get(5, TimeUnit.SECONDS)
 
@@ -347,7 +347,7 @@ class WindowedFastPiiExecutorTest {
         val invalidExecutor = Executors.newSingleThreadExecutor()
         try {
             val result =
-                WindowedFastPiiExecutor(invalidExecutor, invalidFragmentDetector, WindowedPiiCapability("test", 32, 8))
+                WindowedFastPiiExecutor(invalidExecutor, invalidFragmentDetector, WindowedCapability("test", 32, 8))
                     .inspect(InspectableTextFragment("\ud800", FragmentReference("invalid-unicode")), emptySet())
                     .get(5, TimeUnit.SECONDS)
 
@@ -371,7 +371,7 @@ class WindowedFastPiiExecutorTest {
         val failingExecutor = Executors.newSingleThreadExecutor()
         try {
             val result =
-                WindowedFastPiiExecutor(failingExecutor, failingDetector, WindowedPiiCapability("test", 32, 8))
+                WindowedFastPiiExecutor(failingExecutor, failingDetector, WindowedCapability("test", 32, 8))
                     .inspect(InspectableTextFragment(" ".repeat(80), FragmentReference("no-partial")), setOf(PiiType.EMAIL_ADDRESS))
                     .get(5, TimeUnit.SECONDS)
 
@@ -423,7 +423,7 @@ class WindowedFastPiiExecutorTest {
                     WindowedFastPiiExecutor(
                         executorService,
                         recordingDetector,
-                        WindowedPiiCapability("resource-proof", 32, 8),
+                        WindowedCapability("resource-proof", 32, 8),
                     ).inspect(InspectableTextFragment(" ".repeat(80), FragmentReference("resources")), setOf(PiiType.EMAIL_ADDRESS))
                         .get(5, TimeUnit.SECONDS),
                 )
@@ -435,6 +435,49 @@ class WindowedFastPiiExecutorTest {
             assertEquals(1, maximumActiveCalls.get())
             assertEquals(setOf("bounded-pii-cpu"), detectorThreads.toSet())
         } finally {
+            executorService.shutdownNow()
+        }
+    }
+
+    /** Fast PII receives the immutable enabled-type snapshot captured before CPU execution. */
+    @Test
+    fun `enabled PII types are snapshotted before executor handoff`() {
+        val blockerStarted = CountDownLatch(1)
+        val releaseBlocker = CountDownLatch(1)
+        val observedTypes = AtomicReference<Set<PiiType>>()
+        val detector =
+            object : PiiDetector {
+                /** Records the detector input snapshot presented after the queued handoff. */
+                override fun detect(
+                    payload: String,
+                    stopOnFirst: Boolean,
+                    enabledTypes: Set<PiiType>,
+                ): List<PiiFinding> {
+                    observedTypes.set(enabledTypes)
+                    return emptyList()
+                }
+            }
+        val executorService = Executors.newSingleThreadExecutor()
+
+        try {
+            executorService.submit {
+                blockerStarted.countDown()
+                releaseBlocker.await(5, TimeUnit.SECONDS)
+            }
+            assertTrue(blockerStarted.await(5, TimeUnit.SECONDS))
+            val enabledTypes = mutableSetOf(PiiType.EMAIL_ADDRESS)
+            val future =
+                WindowedFastPiiExecutor(executorService, detector, WindowedCapability("snapshot", 32, 8))
+                    .inspect(InspectableTextFragment("text", FragmentReference("snapshot")), enabledTypes)
+
+            enabledTypes.clear()
+            enabledTypes += PiiType.PHONE_NUMBER
+            releaseBlocker.countDown()
+            assertIs<WindowedPiiInspectionResult.Success>(future.get(5, TimeUnit.SECONDS))
+
+            assertEquals(setOf(PiiType.EMAIL_ADDRESS), observedTypes.get())
+        } finally {
+            releaseBlocker.countDown()
             executorService.shutdownNow()
         }
     }
@@ -462,7 +505,7 @@ class WindowedFastPiiExecutorTest {
         try {
             val success =
                 assertIs<WindowedPiiInspectionResult.Success>(
-                    WindowedFastPiiExecutor(executorService, detector, WindowedPiiCapability("test", 32, 8))
+                    WindowedFastPiiExecutor(executorService, detector, WindowedCapability("test", 32, 8))
                         .inspect(InspectableTextFragment("12345678", FragmentReference("ordered")), setOf(PiiType.EMAIL_ADDRESS))
                         .get(5, TimeUnit.SECONDS),
                 )
@@ -494,7 +537,7 @@ class WindowedFastPiiExecutorTest {
 
         try {
             val future =
-                WindowedFastPiiExecutor(executorService, detector, WindowedPiiCapability("test", 32, 8))
+                WindowedFastPiiExecutor(executorService, detector, WindowedCapability("test", 32, 8))
                     .inspect(InspectableTextFragment("text", FragmentReference("cancelled")), setOf(PiiType.EMAIL_ADDRESS))
             assertTrue(started.await(5, TimeUnit.SECONDS))
 

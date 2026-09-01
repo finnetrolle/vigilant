@@ -1,375 +1,169 @@
 package io.vigilant.windowing
 
-import io.vigilant.detectors.pii.PiiDetectionException
+import io.vigilant.detectors.pii.EvidenceStrength
 import io.vigilant.detectors.pii.PiiDetector
 import io.vigilant.detectors.pii.PiiFinding
 import io.vigilant.detectors.pii.PiiType
 import io.vigilant.detectors.pii.fast.FastPiiDetector
-import java.util.concurrent.CancellationException
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Future
+import java.util.concurrent.TimeUnit
 
-/** Executes Fast PII detection for one complete logical fragment on a bounded CPU executor. */
-@Suppress("ComplexCondition", "MagicNumber", "ReturnCount", "TooManyFunctions")
+/** Adapts exhaustive Fast PII detection to the reusable generic windowing core. */
 class WindowedFastPiiExecutor(
-    private val cpuExecutor: ExecutorService,
-    private val detector: PiiDetector = FastPiiDetector(),
-    private val capability: WindowedPiiCapability = FastPiiWindowCapability.VERSIONED,
+    cpuExecutor: ExecutorService,
+    detector: PiiDetector = FastPiiDetector(),
+    capability: WindowedCapability = FastPiiWindowCapability.VERSIONED,
 ) {
+    private val genericExecutor = WindowedInspectionExecutor(cpuExecutor)
+    private val contract = FastPiiWindowedDetectorContract(detector, capability)
+
     /**
-     * Schedules exhaustive inspection without running detector work on the caller thread.
+     * Schedules exhaustive Fast PII inspection on the generic bounded CPU seam.
      *
      * @param fragment complete decoded fragment and opaque provenance.
      * @param enabledTypes PII categories eligible for detection.
-     * @return cancellable future containing a complete aggregate or safe typed error.
+     * @return cancellable future containing the unchanged PII-facing aggregate or error.
      */
     fun inspect(
         fragment: InspectableTextFragment,
         enabledTypes: Set<PiiType>,
     ): Future<WindowedPiiInspectionResult> {
         val enabledSnapshot = enabledTypes.toSet()
-        return cpuExecutor.submit<WindowedPiiInspectionResult> {
-            inspectOnCpuThread(fragment, enabledSnapshot)
-        }
+        val genericFuture = genericExecutor.inspect(fragment, enabledSnapshot, contract)
+        return FastPiiInspectionFuture(genericFuture)
     }
+}
 
-    /** Performs one sequential bounded inspection after executor handoff. */
-    private fun inspectOnCpuThread(
-        fragment: InspectableTextFragment,
-        enabledTypes: Set<PiiType>,
-    ): WindowedPiiInspectionResult {
-        checkCancellation()
-        if (!capability.isValid()) {
-            return error(WindowedPiiInspectionErrorCode.INVALID_CAPABILITY)
-        }
-        val totalUtf8Bytes = utf8Length(fragment.text) ?: return error(WindowedPiiInspectionErrorCode.INVALID_FRAGMENT)
-        if (totalUtf8Bytes <= capability.maxWindowUtf8Bytes) {
-            return inspectDirect(fragment, enabledTypes, totalUtf8Bytes)
-        }
-        val maximumEvidenceSpan =
-            capability.maximumEvidenceSpanUtf8Bytes
-                ?: return error(WindowedPiiInspectionErrorCode.WINDOWING_UNSUPPORTED)
-        return inspectWindows(fragment, enabledTypes, totalUtf8Bytes, maximumEvidenceSpan - 1)
-    }
-
-    /** Invokes the detector once for a fragment within the detector limit. */
-    private fun inspectDirect(
-        fragment: InspectableTextFragment,
-        enabledTypes: Set<PiiType>,
-        totalUtf8Bytes: Int,
-    ): WindowedPiiInspectionResult =
-        when (val detected = detect(fragment.text, enabledTypes)) {
-            is DetectorInvocation.Error -> detected.result
-            is DetectorInvocation.Success -> {
-                val validated = validateAndTranslate(detected.findings, fragment.text, totalUtf8Bytes, 0L)
-                if (validated == null) {
-                    error(WindowedPiiInspectionErrorCode.INVALID_DETECTOR_RESULT)
-                } else {
-                    val findingsByIdentity = LinkedHashMap<FindingIdentity, PiiFinding>()
-                    mergeFindings(findingsByIdentity, validated)
-                        ?: success(fragment.provenance, findingsByIdentity.values.sortedWith(FINDING_ORDER))
-                }
-            }
-        }
-
-    /** Generates context-backed core windows and aggregates each finding from its owning core. */
-    private fun inspectWindows(
-        fragment: InspectableTextFragment,
-        enabledTypes: Set<PiiType>,
-        totalUtf8Bytes: Int,
-        requiredContext: Int,
-    ): WindowedPiiInspectionResult {
-        val findingsByIdentity = LinkedHashMap<FindingIdentity, PiiFinding>()
-        val coreBudget = capability.maxWindowUtf8Bytes - 2 * requiredContext
-        var coreStart = Utf8Boundary(0, 0)
-
-        while (coreStart.utf8Offset < totalUtf8Bytes) {
-            checkCancellation()
-            val coreEnd = advanceAtMost(fragment.text, coreStart, coreBudget)
-            if (coreEnd.character <= coreStart.character) {
-                return error(WindowedPiiInspectionErrorCode.INVALID_CAPABILITY)
-            }
-            val windowStart = retreatAtMost(fragment.text, coreStart, requiredContext)
-            val windowEnd = advanceAtMost(fragment.text, coreEnd, requiredContext)
-            val windowText = fragment.text.substring(windowStart.character, windowEnd.character)
-            val localUtf8Bytes = windowEnd.utf8Offset - windowStart.utf8Offset
-            when (val detected = detect(windowText, enabledTypes)) {
-                is DetectorInvocation.Error -> return detected.result
-                is DetectorInvocation.Success -> {
-                    val translated =
-                        validateAndTranslate(
-                            detected.findings,
-                            windowText,
-                            localUtf8Bytes,
-                            windowStart.utf8Offset.toLong(),
-                        ) ?: return error(WindowedPiiInspectionErrorCode.INVALID_DETECTOR_RESULT)
-                    val owned =
-                        translated.filter { finding ->
-                            finding.startUtf8 >= coreStart.utf8Offset.toLong() &&
-                                finding.startUtf8 < coreEnd.utf8Offset.toLong()
-                        }
-                    val mergeError = mergeFindings(findingsByIdentity, owned)
-                    if (mergeError != null) {
-                        return mergeError
-                    }
-                }
-            }
-            coreStart = coreEnd
-        }
-
-        return success(fragment.provenance, findingsByIdentity.values.sortedWith(FINDING_ORDER))
-    }
-
-    /** Advances to the latest code-point boundary within [maximumBytes]. */
-    private fun advanceAtMost(
-        text: String,
-        start: Utf8Boundary,
-        maximumBytes: Int,
-    ): Utf8Boundary {
-        var character = start.character
-        var utf8Offset = start.utf8Offset
-        val limit = start.utf8Offset + maximumBytes
-        while (character < text.length) {
-            val width = utf8WidthAt(text, character)
-            if (utf8Offset + width > limit) {
-                break
-            }
-            utf8Offset += width
-            character += Character.charCount(text.codePointAt(character))
-        }
-        return Utf8Boundary(character, utf8Offset)
-    }
-
-    /** Retreats to the earliest code-point boundary no more than [maximumBytes] away. */
-    private fun retreatAtMost(
-        text: String,
-        start: Utf8Boundary,
-        maximumBytes: Int,
-    ): Utf8Boundary {
-        var character = start.character
-        var utf8Offset = start.utf8Offset
-        var contextBytes = 0
-        while (character > 0) {
-            val previous = previousCodePointStart(text, character)
-            val width = utf8WidthAt(text, previous)
-            if (contextBytes + width > maximumBytes) {
-                break
-            }
-            contextBytes += width
-            character = previous
-            utf8Offset -= width
-        }
-        return Utf8Boundary(character, utf8Offset)
-    }
-
-    /** Invokes one detector call and converts expected failures to a safe module result. */
-    private fun detect(
+/** Fast PII invocation, identity, metadata, and canonical-order semantics. */
+private class FastPiiWindowedDetectorContract(
+    private val detector: PiiDetector,
+    override val capability: WindowedCapability,
+) : WindowedDetectorContract<Set<PiiType>, FastPiiFindingMetadata, FastPiiFindingIdentity> {
+    /** Invokes Fast PII exhaustively and separates local offsets from immutable metadata. */
+    override fun detect(
         window: String,
-        enabledTypes: Set<PiiType>,
-    ): DetectorInvocation =
-        try {
-            checkCancellation()
-            DetectorInvocation.Success(
-                detector.detect(window, stopOnFirst = false, enabledTypes = enabledTypes),
+        input: Set<PiiType>,
+    ): List<LocalFinding<FastPiiFindingMetadata>> =
+        detector.detect(window, stopOnFirst = false, enabledTypes = input).map { finding ->
+            LocalFinding(
+                value = finding.toMetadata(),
+                startUtf8 = finding.startUtf8,
+                endUtf8 = finding.endUtf8,
             )
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (_: PiiDetectionException) {
-            DetectorInvocation.Error(error(WindowedPiiInspectionErrorCode.DETECTOR_ERROR))
-        } catch (_: RuntimeException) {
-            DetectorInvocation.Error(error(WindowedPiiInspectionErrorCode.DETECTOR_ERROR))
         }
 
-    /** Validates local detector spans and translates them to original-fragment coordinates. */
-    private fun validateAndTranslate(
-        findings: List<PiiFinding>,
-        window: String,
-        windowUtf8Bytes: Int,
-        windowStartUtf8: Long,
-    ): List<PiiFinding>? {
-        if (findings.any { finding -> finding.endUtf8 > windowUtf8Bytes }) {
-            return null
-        }
-        val requiredBoundaries =
-            findings
-                .flatMap { finding -> listOf(finding.startUtf8, finding.endUtf8) }
-                .toMutableSet()
-        removeValidUtf8Boundaries(window, requiredBoundaries)
-        if (requiredBoundaries.isNotEmpty()) {
-            return null
-        }
+    /** Builds the unchanged PII duplicate identity in original-fragment coordinates. */
+    override fun semanticIdentity(finding: GlobalFinding<FastPiiFindingMetadata>): FastPiiFindingIdentity =
+        FastPiiFindingIdentity(
+            type = finding.value.type,
+            startUtf8 = finding.startUtf8,
+            endUtf8 = finding.endUtf8,
+            recognizerId = finding.value.recognizerId,
+        )
 
-        val translated = ArrayList<PiiFinding>(findings.size)
-        findings.forEach { finding ->
-            checkCancellation()
-            translated +=
-                finding.copy(
-                    startUtf8 = windowStartUtf8 + finding.startUtf8,
-                    endUtf8 = windowStartUtf8 + finding.endUtf8,
-                )
-        }
-        return translated
-    }
+    /** Requires all PII metadata excluded from duplicate identity to remain equal. */
+    override fun hasEquivalentMetadata(
+        first: FastPiiFindingMetadata,
+        second: FastPiiFindingMetadata,
+    ): Boolean =
+        first.recognizerVersion == second.recognizerVersion &&
+            first.evidenceStrength == second.evidenceStrength &&
+            first.confidence == second.confidence
 
-    /** Removes requested offsets found during one linear scan of UTF-8 boundaries. */
-    private fun removeValidUtf8Boundaries(
-        text: String,
-        requiredBoundaries: MutableSet<Long>,
-    ) {
-        var offset = 0L
-        var character = 0
-        requiredBoundaries.remove(offset)
-        while (requiredBoundaries.isNotEmpty() && character < text.length) {
-            val codePoint = text.codePointAt(character)
-            offset += codePoint.utf8Width()
-            character += Character.charCount(codePoint)
-            requiredBoundaries.remove(offset)
-        }
-    }
+    /** Canonical PII ordering retained independently of generic window chunking. */
+    override val canonicalComparator: Comparator<GlobalFinding<FastPiiFindingMetadata>> =
+        compareBy(
+            GlobalFinding<FastPiiFindingMetadata>::startUtf8,
+            GlobalFinding<FastPiiFindingMetadata>::endUtf8,
+            { finding -> finding.value.type.name },
+            { finding -> finding.value.recognizerId },
+            { finding -> finding.value.recognizerVersion },
+        )
+}
 
-    /** Merges translated findings by semantic identity and detects metadata conflicts. */
-    private fun mergeFindings(
-        findingsByIdentity: MutableMap<FindingIdentity, PiiFinding>,
-        findings: List<PiiFinding>,
-    ): WindowedPiiInspectionResult.Error? {
-        findings.forEach { finding ->
-            val identity = FindingIdentity(finding.type, finding.startUtf8, finding.endUtf8, finding.recognizerId)
-            val existing = findingsByIdentity[identity]
-            if (existing == null) {
-                findingsByIdentity[identity] = finding
-            } else if (!existing.hasSameMetadata(finding)) {
-                return error(WindowedPiiInspectionErrorCode.INCONSISTENT_WINDOW_RESULT)
-            }
-        }
-        return null
-    }
+/** Immutable PII metadata carried by the generic core without local ownership coordinates. */
+private data class FastPiiFindingMetadata(
+    /** Detector-specific category. */
+    val type: PiiType,
+    /** Detector confidence when supplied. */
+    val confidence: Double?,
+    /** Validation basis for the finding. */
+    val evidenceStrength: EvidenceStrength,
+    /** Stable recognizer implementation identifier. */
+    val recognizerId: String,
+    /** Version of the recognizer logic and reference data. */
+    val recognizerVersion: String,
+)
 
-    /** Compares metadata excluded from semantic duplicate identity. */
-    private fun PiiFinding.hasSameMetadata(other: PiiFinding): Boolean =
-        recognizerVersion == other.recognizerVersion &&
-            evidenceStrength == other.evidenceStrength &&
-            confidence == other.confidence
+/** Stable PII semantic identity used for duplicate suppression across overlap windows. */
+private data class FastPiiFindingIdentity(
+    /** Detector-specific category. */
+    val type: PiiType,
+    /** Inclusive global UTF-8 byte offset. */
+    val startUtf8: Long,
+    /** Exclusive global UTF-8 byte offset. */
+    val endUtf8: Long,
+    /** Stable recognizer implementation identifier. */
+    val recognizerId: String,
+)
 
-    /** Calculates exact UTF-8 length and rejects unpaired UTF-16 surrogates. */
-    private fun utf8Length(text: String): Int? {
-        var utf8Length = 0L
-        var character = 0
-        while (character < text.length) {
-            val current = text[character]
-            if (
-                current.isSurrogate() &&
-                !(current.isHighSurrogate() &&
-                    character + 1 < text.length &&
-                    text[character + 1].isLowSurrogate())
-            ) {
-                return null
-            }
-            val codePoint = text.codePointAt(character)
-            utf8Length += codePoint.utf8Width()
-            if (utf8Length > Int.MAX_VALUE) {
-                return null
-            }
-            character += Character.charCount(codePoint)
-        }
-        return utf8Length.toInt()
-    }
-
-    /** Returns the UTF-8 width of the code point starting at [character]. */
-    private fun utf8WidthAt(
-        text: String,
-        character: Int,
-    ): Int = text.codePointAt(character).utf8Width()
-
-    /** Returns the UTF-16 start of the code point ending at [character]. */
-    private fun previousCodePointStart(
-        text: String,
-        character: Int,
-    ): Int =
-        if (character >= 2 && text[character - 1].isLowSurrogate() && text[character - 2].isHighSurrogate()) {
-            character - 2
-        } else {
-            character - 1
-        }
-
-    /** Returns this Unicode code point's UTF-8 width. */
-    private fun Int.utf8Width(): Int =
-        when {
-            this <= ONE_BYTE_MAX -> 1
-            this <= TWO_BYTE_MAX -> 2
-            this <= THREE_BYTE_MAX -> 3
-            else -> 4
-        }
-
-    /** Validates all capability relations before any detector invocation. */
-    private fun WindowedPiiCapability.isValid(): Boolean {
-        if (version.isBlank() || maxWindowUtf8Bytes <= 0) {
-            return false
-        }
-        val maximumEvidenceSpan = maximumEvidenceSpanUtf8Bytes ?: return true
-        val requiredContext = maximumEvidenceSpan - 1L
-        return maximumEvidenceSpan > 0 &&
-            maximumEvidenceSpan <= maxWindowUtf8Bytes &&
-            maxWindowUtf8Bytes.toLong() - 2L * requiredContext >= MAX_CODE_POINT_UTF8_BYTES.toLong()
-    }
-
-    /** Creates an immutable successful aggregate. */
-    private fun success(
-        provenance: FragmentReference,
-        findings: Collection<PiiFinding>,
-    ): WindowedPiiInspectionResult.Success = WindowedPiiInspectionResult.Success(provenance, findings)
-
-    /** Creates one safe typed error. */
-    private fun error(code: WindowedPiiInspectionErrorCode): WindowedPiiInspectionResult.Error =
-        WindowedPiiInspectionResult.Error(code)
-
-    /** Preserves cooperative cancellation and the worker's interrupt flag. */
-    private fun checkCancellation() {
-        if (Thread.currentThread().isInterrupted) {
-            throw CancellationException()
-        }
-    }
-
-    /** UTF-8 boundary in both Kotlin-string and original byte coordinates. */
-    private data class Utf8Boundary(
-        val character: Int,
-        val utf8Offset: Int,
+/** Maps one detector finding into offset-free metadata before generic aggregation. */
+private fun PiiFinding.toMetadata(): FastPiiFindingMetadata =
+    FastPiiFindingMetadata(
+        type = type,
+        confidence = confidence,
+        evidenceStrength = evidenceStrength,
+        recognizerId = recognizerId,
+        recognizerVersion = recognizerVersion,
     )
 
-    /** Semantic identity used to deduplicate overlap findings. */
-    private data class FindingIdentity(
-        val type: PiiType,
-        val startUtf8: Long,
-        val endUtf8: Long,
-        val recognizerId: String,
+/** Maps one complete generic result to the established PII-facing result contract. */
+private fun WindowedInspectionResult<FastPiiFindingMetadata>.toPiiResult(): WindowedPiiInspectionResult =
+    when (this) {
+        is WindowedInspectionResult.Success ->
+            WindowedPiiInspectionResult.Success(
+                provenance,
+                findings.map { finding -> finding.toPiiFinding() },
+            )
+
+        is WindowedInspectionResult.Error ->
+            WindowedPiiInspectionResult.Error(WindowedPiiInspectionErrorCode.valueOf(code.name))
+    }
+
+/** Restores one PII finding with validated original-fragment coordinates. */
+private fun GlobalFinding<FastPiiFindingMetadata>.toPiiFinding(): PiiFinding =
+    PiiFinding(
+        type = value.type,
+        startUtf8 = startUtf8,
+        endUtf8 = endUtf8,
+        confidence = value.confidence,
+        evidenceStrength = value.evidenceStrength,
+        recognizerId = value.recognizerId,
+        recognizerVersion = value.recognizerVersion,
     )
 
-    /** Internal detector-call outcome without partial aggregation. */
-    private sealed interface DetectorInvocation {
-        /** Complete local findings. */
-        data class Success(
-            val findings: List<PiiFinding>,
-        ) : DetectorInvocation
+/** Cancellation-preserving view that maps a completed generic result without another task. */
+@Suppress("kotlin:S6514") // `get` must map the generic result without scheduling another CPU task.
+private class FastPiiInspectionFuture(
+    private val delegate: Future<WindowedInspectionResult<FastPiiFindingMetadata>>,
+) : Future<WindowedPiiInspectionResult> {
+    /** Delegates cooperative interruption to the generic CPU task. */
+    override fun cancel(mayInterruptIfRunning: Boolean): Boolean = delegate.cancel(mayInterruptIfRunning)
 
-        /** Safe module error. */
-        data class Error(
-            val result: WindowedPiiInspectionResult.Error,
-        ) : DetectorInvocation
-    }
+    /** Reports whether the generic CPU task was cancelled. */
+    override fun isCancelled(): Boolean = delegate.isCancelled
 
-    private companion object {
-        private const val ONE_BYTE_MAX = 0x7f
-        private const val TWO_BYTE_MAX = 0x7ff
-        private const val THREE_BYTE_MAX = 0xffff
-        private const val MAX_CODE_POINT_UTF8_BYTES = 4
+    /** Reports whether the generic CPU task reached a terminal state. */
+    override fun isDone(): Boolean = delegate.isDone
 
-        /** Canonical aggregate ordering independent of window chunking. */
-        val FINDING_ORDER: Comparator<PiiFinding> =
-            compareBy(
-                PiiFinding::startUtf8,
-                PiiFinding::endUtf8,
-                { finding -> finding.type.name },
-                PiiFinding::recognizerId,
-                PiiFinding::recognizerVersion,
-            )
-    }
+
+    /** Waits for terminal generic completion and maps only the safe result. */
+    override fun get(): WindowedPiiInspectionResult = delegate.get().toPiiResult()
+
+    /** Waits at most [timeout] for generic completion and maps only the safe result. */
+    override fun get(
+        timeout: Long,
+        unit: TimeUnit,
+    ): WindowedPiiInspectionResult = delegate.get(timeout, unit).toPiiResult()
 }
