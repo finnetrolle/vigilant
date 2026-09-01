@@ -119,6 +119,11 @@ Issue является листом mind map, если:
 | [VIG-26: Универсальное ядро windowed inspection](issues/issue_26_generic_windowing_core.md) | `Done` | завершена | 0 дней осталось |
 | [VIG-27: Dummy Bearer identity extractor](issues/issue_27_dummy_identity_extractor.md) | `Done` | завершена | 0 дней осталось |
 | [VIG-28: Offline trusted JWT Bearer identity extractor](issues/issue_28_keycloak_jwt_identity_extractor.md) | `Done` | завершена | 0 дней осталось |
+| [VIG-29: OpenAI-compatible error contract for enforcement](issues/issue_29_openai_error_contract.md) | `Draft` | открыты response/error details | не оценено |
+| [VIG-30: External Bearer identity extractor](issues/issue_30_external_identity_extractor.md) | `Draft` | внешний identity contract не определён | не оценено |
+| [VIG-31: Cache external identity lookup](issues/issue_31_identity_lookup_cache.md) | `Draft` | cache semantics не определены | не оценено |
+| [VIG-32: Best-effort asynchronous audit writer](issues/issue_32_async_audit_writer.md) | `Draft` | file/queue contract не определён | не оценено |
+| [VIG-33: Availability SLO and operational evidence](issues/issue_33_availability_slo_and_operations.md) | `Draft` | production SLO не определён | не оценено |
 
 ## Как закрывать work item
 
