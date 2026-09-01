@@ -73,3 +73,25 @@
 - не требует доступа к policy decision или enforcement point;
 - может быть подключена через стабильный адаптер без потери контроля риска.
 
+## MVP-specific non-goals
+
+### OUT-10. Выполнение инструментов
+
+Vigilant может позднее анализировать `tool_calls` как часть LLM traffic, но MVP
+не запускает инструменты, не поставляет tool middleware и не проверяет фактический
+tool execution или tool result.
+
+### OUT-11. Не-PII detector-ы
+
+Prompt injection, jailbreak, secrets, regex/allowlist/blocklist rules и domain
+filtering не входят в MVP. Единственный detector MVP: `fast-pii`.
+
+### OUT-12. Другие LLM protocol surfaces
+
+MVP не поддерживает OpenAI Responses API, Anthropic API, MCP и прочие protocol
+surfaces. Поддерживается только OpenAI Chat Completions.
+
+### OUT-13. Dynamic control plane и plugins
+
+MVP не включает hot reload policies, control plane, plugin workers, public plugin
+API или marketplace. Policy file загружается только при startup.

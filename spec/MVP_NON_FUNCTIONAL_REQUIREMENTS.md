@@ -1,249 +1,98 @@
 # Vigilant: нефункциональные требования и стек MVP
 
-## Назначение
-
-Документ фиксирует нефункциональные требования к Vigilant, выбранный
-технологический стек и границы первого исполняемого инкремента.
-
-Функциональное наполнение целевого MVP описано в `MVP_FUNCTIONS.md`. Первая
-версия `v0 — Bypass Proxy` является техническим фундаментом MVP и не реализует
-политики или проверки: она только прозрачно передаёт трафик между клиентом и
-настроенным upstream.
-
 ## Производительность
 
-### PERF-01. Накладные расходы gateway
+### PERF-01. Guardrail latency
 
-При установившейся нагрузке 2 000 запросов в секунду одна реплика gateway
-должна добавлять не более 2 мс к p99 latency по сравнению с прямым вызовом
-того же upstream.
+При 2 000 RPS одна replica должна выполнять `fast-pii`, policy evaluation и
+применение реакции с `p99 <= 2 ms` отдельно для request и response path.
 
-Измеряется именно добавленная задержка:
+Request measurement начинается после получения полного request body Vigilant и
+заканчивается при передаче body upstream. Response measurement начинается после
+получения полного upstream response и заканчивается перед передачей client.
+Identity lookup не входит в этот budget: нагрузочный тест использует warm cache
+или mock extractor.
 
-`proxy_overhead = latency_through_vigilant - latency_direct_to_upstream`.
+### PERF-02. Load profile
 
-### PERF-02. Вызов изолированного plugin worker
+SLO подтверждается non-streaming Chat Completions profile с request `1 KiB` и
+response `4 KiB`. Отчёт фиксирует warmup, duration, hardware, JVM, connections,
+payload sizes и percentiles. Max-size и overload scenarios проверяются отдельно
+и не обязаны удовлетворять `2 ms`.
 
-Локальный no-op plugin worker, не выполняющий полезных вычислений и запущенный
-в том же кластере, должен добавлять не более 5 мс к p99 latency. Время полезной
-работы детектора или внешнего ML/LLM-вызова в этот бюджет не входит.
+### PERF-03. Policy deadline
 
-### PERF-03. Параллельное исполнение
+Каждая policy задаёт свой positive deadline в `politics.conf`. Для нескольких
+применимых policies действует minimum deadline. Timeout `fast-pii` или policy
+даёт `503`; implicit fail-open не допускается.
 
-Независимые plugin workers должны запускаться параллельно. Последовательное
-исполнение допускается только при явно заданной зависимости между проверками
-или когда результат одной проверки является входом другой.
+## Ресурсы и cancellation
 
-### PERF-04. Deadline проверки
+### CONC-01. Bounded inspection
 
-Общий deadline выполнения набора guardrails задаётся политикой. Значение по
-умолчанию — 50 мс. Поведение при превышении deadline определяется настройкой
-`fail-open`, `fail-closed` или `escalate`.
+Один request или response допускает до `16 MiB` aggregate inspectable text и до
+`20 MiB` raw body. Большие text fragments проверяются UTF-8-safe windowing без
+silent truncation. Превышение limits не передаётся дальше.
 
-### PERF-05. Классы исполнения
+### CONC-02. Capacity outcome
 
-Детерминированные проверки и медленные ML/LLM-проверки должны использовать
-разные классы исполнения, лимиты конкурентности, очереди и таймауты. Медленный
-плагин не должен исчерпывать ресурсы gateway или задерживать независимые
-быстрые проверки.
+RAM или spool exhaustion не создаёт unbounded queue и не пропускает
+непроверенный traffic. Gateway быстро отвечает `503 Service Unavailable` с
+`Retry-After`; exact capacity limits являются deployment configuration.
 
-### PERF-06. Методика проверки
+### CONC-03. Execution classes
 
-Нагрузочный тест выполняется после прогрева JVM до устойчивого состояния.
-Продолжительность прогрева, длительность замера, характеристики оборудования,
-размеры запросов и ответов, число соединений и профиль streaming/non-streaming
-фиксируются вместе с результатом. Результат без этих данных не подтверждает
-выполнение SLO.
+Netty event loop не выполняет blocking I/O или CPU-bound `fast-pii`. Blocking
+identity integration выполняется вне event loop; detector использует bounded CPU
+executor и queue.
 
-## Параллелизм и управление ресурсами
+### CONC-04. Cancellation и shutdown
 
-### CONC-01. Сетевой путь
+Client cancellation прекращает inspection, spool и upstream work, если оно
+больше не нужно. Graceful shutdown немедленно переводит readiness в `503`,
+останавливает admission новых requests, bounded-drain-ит активные операции и
+затем отменяет остаток.
 
-Gateway использует неблокирующий сетевой ввод-вывод и backpressure. На Netty
-event loop запрещены блокирующие вызовы, ML-инференс и продолжительные
-вычисления.
+## Proxy и protocol
 
-### CONC-02. Блокирующие интеграции
+### PROXY-01. Bounded response enforcement
 
-Короткоживущие блокирующие I/O-операции выполняются на Java virtual threads.
-Virtual threads не используются как способ ускорить CPU-bound детекторы.
+Request и response, включая SSE, удерживаются до policy decision в bounded
+spool. Клиент не получает response byte до `ALLOW` или `MASK`; при `BLOCK` body
+upstream не раскрывается.
 
-### CONC-03. CPU-bound проверки
+### PROXY-02. Lossless forwarding and mutation
 
-CPU-bound проверки выполняются в отдельных ограниченных пулах с лимитом
-конкурентности и ограниченной очередью. Переполнение обрабатывается как
-формальный отказ guardrail, а не как бесконтрольное накопление задач.
+Разрешённый body передаётся losslessly. `MASK` patch-ит только exact text spans,
+сохраняет JSON structure и unknown fields, затем корректирует transport headers.
 
-### CONC-04. Отмена
+### PROXY-03. Stable technical failures
 
-Отключение клиента, timeout или отмена запроса должны отменять downstream- и
-plugin-вызовы, если их продолжение больше не требуется для аудита.
+Capacity exhaustion, detector/policy failure и unavailable identity дают `503`
+с `Retry-After`. Contract policy `BLOCK` и client error body оформляется отдельно
+в [VIG-29](issues/issue_29_openai_error_contract.md).
 
-## Расширяемость и изоляция
+## Наблюдаемость и audit
 
-### EXT-01. Модель плагинов
+### OBS-01. Metrics и tracing
 
-Плагины выполняются только в изолированных worker-процессах. Динамическая
-загрузка сторонних JAR-файлов в процесс gateway не используется как граница
-безопасности.
+Gateway публикует request/response outcomes, latency каждого path, PII counts по
+type, deadline/errors, spool/capacity rejects, audit queue depth/drops и identity
+cache hit/miss/lookup latency. Tracing содержит session, trace ID, span ID и
+parent span ID.
 
-### EXT-02. Контракт
+### OBS-02. Privacy
 
-Gateway и plugin workers взаимодействуют через версионируемый gRPC/Protobuf
-контракт по постоянным HTTP/2-соединениям. Контракт не зависит от языка
-реализации worker, хотя первая официальная SDK-реализация ориентирована на
-Java и Kotlin.
+Audit, logs, metrics, traces и errors не содержат body, PII value/span, Bearer
+token, user ID или groups. Исключение: tracing identifiers хранятся для
+корреляции.
 
-### EXT-03. Подключение без остановки
+## Deployment и stack
 
-Перед активацией новый worker проходит проверку совместимости контракта и
-health/readiness probe. После успешной проверки control plane атомарно
-публикует новый неизменяемый routing snapshot. Запросы, начатые на старом
-snapshot, завершаются с прежним набором плагинов.
-
-### EXT-04. Изоляция отказов
-
-Worker имеет собственные лимиты CPU, памяти, конкурентности и времени
-исполнения. Ошибка, утечка памяти или аварийное завершение worker не должны
-приводить к остановке gateway.
-
-## Надёжность proxy
-
-### PROXY-01. Потоковая передача
-
-Gateway не буферизует целиком request или response без необходимости. Обычные
-и streaming-ответы передаются с backpressure; time-to-first-byte не должен
-ожидать завершения всего ответа upstream.
-
-Исключение для guardrail-enabled OpenAI MVP: SSE response, для которого policy
-decision должен быть принят до раскрытия любого output клиенту, обрабатывается
-атомарно через bounded spool. В этом режиме TTFB ожидает terminal event и
-итоговый policy decision; при `ALLOW` исходный SSE replay-ится с backpressure,
-при `BLOCK` ни один upstream SSE byte не отправляется клиенту. Исключение не
-меняет потоковое поведение bypass v0 и не разрешает unbounded buffering в heap.
-
-### PROXY-02. Прозрачность
-
-В bypass-режиме gateway сохраняет HTTP method, path, query, тело, статус ответа
-и end-to-end headers. Hop-by-hop headers обрабатываются по правилам HTTP proxy,
-а значение `Host` формируется для настроенного upstream.
-
-### PROXY-03. Ошибки upstream
-
-Статус и тело корректного HTTP-ответа upstream передаются клиенту без
-интерпретации. Ошибка соединения, timeout или некорректный ответ upstream
-преобразуются в стабильную proxy-ошибку и отражаются в метриках и trace.
-
-## Наблюдаемость
-
-Каждый запрос получает correlation/trace ID. Gateway экспортирует через
-OpenTelemetry как минимум request count, active requests, upstream latency,
-gateway processing latency, response status, timeouts, cancellations и
-transport errors. Proxy overhead вычисляется нагрузочным тестом относительно
-прямого baseline, а не измеряется самим gateway для каждого боевого запроса.
-Логи должны быть структурированными и не должны по умолчанию содержать тела
-запросов, ответов, токены авторизации или другие секреты.
-
-## Выбранный технологический стек
-
-### Язык и runtime
-
-- Java 25 LTS как версия JVM и базовый уровень Java API.
-- Kotlin 2.4.10 как основной язык реализации.
-- Gradle с Kotlin DSL для сборки и управления зависимостями.
-- Обычный JVM runtime. GraalVM Native Image не входит в первую версию: SLO
-  проверяется на HotSpot JVM, а AOT-сборка добавила бы отдельный контур сборки,
-  конфигурации reflection и профилирования до появления подтверждённой пользы.
-
-### Gateway и параллелизм
-
-- Armeria как HTTP/gRPC framework.
-- Netty как неблокирующий сетевой runtime под Armeria.
-- Kotlin Coroutines для orchestration и structured cancellation.
-- Java virtual threads для ограниченных блокирующих I/O-интеграций.
-- Отдельные bounded executors для CPU-bound задач.
-
-Spring Boot не входит в data plane: для первой версии он не даёт необходимых
-возможностей сверх Armeria, но увеличивает поверхность конфигурации и запуска.
-
-### Контракты и данные
-
-- Protocol Buffers как IDL и wire format plugin API.
-- gRPC поверх HTTP/2 для связи gateway с изолированными workers.
-- Версионируемые immutable-модели request context и guardrail decision.
-- OpenAI/Anthropic HTTP-трафик в bypass data path передаётся как поток байтов и
-  не разбирается в JSON без функциональной необходимости.
-
-### Наблюдаемость и тестирование
-
-- OpenTelemetry API/SDK и OTLP для traces и metrics.
-- Структурированные логи через SLF4J.
-- JUnit 5 для модульных и интеграционных тестов.
-- JMH для микробенчмарков критических участков.
-- Gatling для нагрузочной проверки SLO.
-- Testcontainers для будущих интеграций с внешней инфраструктурой; первая
-  bypass-версия не требует базы данных или брокера сообщений.
-
-### Поставка
-
-- Один versioned JAR и один OCI-контейнер gateway.
-- Конфигурация через environment variables и/или read-only config file.
-- Graceful shutdown с прекращением приёма новых запросов и ограниченным
-  ожиданием активных запросов.
-
-## Первая версия: v0 — Bypass Proxy
-
-### Единственная функция
-
-Клиент отправляет запрос на Vigilant, Vigilant без анализа и изменения тела
-передаёт его настроенному upstream и потоково возвращает ответ клиенту.
-
-Минимальная схема:
-
-`Client -> Vigilant Gateway -> Upstream LLM API -> Vigilant Gateway -> Client`
-
-### Входит в v0
-
-- единый настраиваемый upstream base URL;
-- передача HTTP method, path, query, headers и body;
-- передача status, headers и response body;
-- поддержка обычных и streaming-запросов/ответов;
-- connection pooling, backpressure, timeout и cancellation propagation;
-- health/readiness endpoints;
-- базовые безопасные логи, metrics и traces;
-- graceful shutdown;
-- нагрузочный тест для `PERF-01`.
-
-### Не входит в v0
-
-- запуск plugin workers и gRPC plugin API;
-- политики, решения allow/block/mask/escalate и policy DSL;
-- разбор OpenAI/Anthropic JSON и знание семантики tool calls;
-- PII, secrets, prompt injection, jailbreak и другие детекторы;
-- аудит содержимого запросов и ответов;
-- база данных, Redis, Kafka или другой broker;
-- web UI, control plane и динамическая конфигурация;
-- multi-tenant routing и несколько upstream-провайдеров;
-- SDK и интеграции с agent frameworks.
-
-### Критерии готовности v0
-
-1. Интеграционный тест подтверждает прозрачную передачу обычного HTTP-ответа.
-2. Интеграционный тест подтверждает потоковую передачу без полной буферизации.
-3. Отмена клиентом закрывает или отменяет upstream-запрос.
-4. Ошибка соединения и timeout upstream дают стабильную proxy-ошибку.
-5. Тела и authorization headers отсутствуют в логах по умолчанию.
-6. Нагрузочный тест при 2 000 RPS подтверждает `PERF-01` либо сохраняет полный
-   отчёт с причиной отклонения и измеренным baseline.
-
-## Зафиксированные альтернативы
-
-- Go и Rust не выбраны: JVM удовлетворяет требованиям производительности и
-  параллелизма, а опыт команды в Java/Kotlin снижает стоимость разработки и
-  эксплуатации.
-- Spring Boot не выбран для data plane в первой версии: используется более
-  узкий асинхронный стек Armeria/Netty.
-- In-process плагины и PF4J не используются: требование изоляции важнее
-  минимального выигрыша во внутрипроцессной задержке.
-- GraalVM Native Image не выбран для первой версии: сначала SLO должен быть
-  подтверждён на HotSpot JVM без отдельной AOT-сложности.
+- MVP запускается в нескольких stateless replicas за load balancer. Каждая
+  replica владеет local identity cache, spool и audit file.
+- Численный availability SLO пока не задан; его определяет
+  [VIG-33](issues/issue_33_availability_slo_and_operations.md) после production
+  telemetry.
+- Stack: Kotlin 2.4.10, Java 25, Armeria/Netty, Metro, Gradle Kotlin DSL и OCI
+  image. Spring Boot и GraalVM Native Image не входят в MVP.
