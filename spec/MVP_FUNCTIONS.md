@@ -62,17 +62,23 @@ upstream byte-for-byte. Vigilant временно использует его т
 Детали extractor и cache принадлежат [VIG-30](issues/issue_30_external_identity_extractor.md)
 и [VIG-31](issues/issue_31_identity_lookup_cache.md).
 
-## MVP-06. Безопасный асинхронный audit
+## MVP-06. Безопасный best-effort audit через stdout
 
-Audit пишет safe records в файл асинхронно и не участвует в admission или policy
-decision. Record содержит применённые policy IDs, outcome, aggregate PII counts
-и session/trace/span/parent tracing context. Он не содержит body, PII values или
-spans, Bearer token, user ID и groups.
+Audit публикует safe structured JSON event через existing non-blocking Logback
+stdout path и не участвует в admission, policy decision, readiness или traffic
+forwarding. Для каждого направления analysis lifecycle состоит из
+`policy.analysis_started` и `policy.analysis_completed`. Events содержат phase,
+trace/span correlation, selected detector references, applied policy/reaction,
+safe outcome и aggregate PII counts; payload, PII values/spans, Bearer, user ID,
+groups, headers и identity запрещены.
 
-При переполнении bounded audit queue удаляются oldest records, сохраняются
-latest records и возникает rate-limited technical alert. Failure audit writer
-или file не влияет на traffic. Точный file/queue contract принадлежит
-[VIG-32](issues/issue_32_async_audit_writer.md).
+Единственная queue - existing Logback `AsyncAppender` with `neverBlock=true`.
+Event может быть потерян при overload или stdout failure; это не меняет traffic.
+Application не создаёт file/WAL/Collector/own queue/worker/metric/drop alert.
+REQUEST pair принадлежит
+[VIG-32-01](issues/epic_32/issue_32_01_stdout_request_audit_migration.md),
+RESPONSE pair -
+[VIG-20-02](issues/epic_20/issue_20_02_response_inspection_enforcement.md).
 
 ## MVP-07. Минимальная интеграция
 

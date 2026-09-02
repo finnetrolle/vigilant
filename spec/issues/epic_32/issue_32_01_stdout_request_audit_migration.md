@@ -1,0 +1,125 @@
+# VIG-32-01: Stdout request audit migration
+
+**Статус:** Ready for implementation
+**Epic:** [EPIC-32](../../epics/epic_32_best_effort_stdout_audit.md)
+**Ветка:** Migrate request audit contract > operator-visible stdout pair
+**Зависит от:** нет
+**Блокирует:** [VIG-32-02](issue_32_02_durable_audit_removal.md), [VIG-20-02](../epic_20/issue_20_02_response_inspection_enforcement.md), [VIG-34](../issue_34_request_pii_enforcement.md)
+**Оценка:** 3-5 инженерных дней
+**Уверенность:** Medium
+
+## Результат
+
+Один supported Chat Completions request, для которого после parse, context и
+policy selection действительно начинается detector execution, публикует в
+existing JSONL stdout ровно одну safe пару `policy.analysis_started` и
+`policy.analysis_completed`. Публикация best-effort не ожидает delivery и не
+требует durable acknowledgement перед исходным HTTP outcome или upstream
+handoff.
+
+Этот tracer bullet мигрирует request audit contract первым. Durable store,
+его outer admission/readiness integration и packaging ещё могут существовать
+до VIG-32-02, но request analysis больше не создаёт и не ждёт durable record.
+
+## Public seam и TDD slices
+
+Основной seam - installed distribution, запущенный против real Armeria
+upstream, и его operator-visible JSONL stdout. Первый RED case фиксирует
+`analysis_started` до причинно удерживаемого detector execution и
+`analysis_completed` после terminal decision, но до разрешённого transport
+handoff. Последующие vertical slices добавляют outcome/privacy matrix и
+non-blocking failure behavior по одному observable case.
+
+Внутренние test appenders или detector barriers допустимы только как
+детерминированные fixtures этого seam. Они не заменяют process stdout evidence,
+не используют sleeps/timestamps и имеют bounded waits с last observed state.
+
+## Stdout schema contract
+
+Оба event используют existing structured JSONL encoding и содержат:
+
+- `event.name`, `protocol=openai.chat_completions`, `phase=REQUEST`;
+- server-generated `trace.id`, `span.id`, `parent.span.id` одного inspection
+  span без session ID, inbound `traceparent`/`tracestate` или другой
+  user-controlled correlation;
+- canonical deterministic policy references в формате `id@version` и detector
+  references `detector.id`/`detector.version`.
+
+`policy.analysis_started` публикуется ровно один раз после successful complete
+source parse, identity/context assembly и policy selection, непосредственно
+перед первым detector execution. Пустой selected policy set, unsupported или
+malformed request, failed identity/context/source и cancellation до detector
+execution не создают started/completed pair.
+
+`policy.analysis_completed` публикуется ровно один раз после всех реально
+запущенных fragment evaluations и содержит:
+
+- `outcome`: `CLEAN`, `DETECTED`, `INSPECTION_GAP` или `ERROR`;
+- фактически applied canonical policy references;
+- `reaction=ALLOW` для текущего successful shadow contract; для `ERROR` поле
+  `reaction` отсутствует и присутствует stable `error.code`;
+- aggregate `coverage`, inspected-fragment count, total findings, counts by PII
+  type и evidence strength, а также non-negative `analysis.duration_ms`.
+
+Event никогда не содержит payload, content preview, PII value/span, request
+path/query, headers, credentials, identity, user ID, groups, session ID, raw
+exception, generated event ID или reversible payload-derived value. Policy и
+detector references остаются stdout-only и не попадают в client errors.
+
+## Требования
+
+`MVP-06`, `OBS-01`, `OBS-02`; current request shadow-inspection and tracing
+contract; [EPIC-32](../../epics/epic_32_best_effort_stdout_audit.md).
+
+## Критерии готовности
+
+- [ ] Causal real-Armeria test доказывает exact ordering: started видим после
+  selection и до первого detector execution; completed видим после final
+  outcome и до transport release. Один request создаёт не более одной пары,
+  независимо от количества fragments и policies.
+- [ ] Table-driven stdout assertions покрывают `CLEAN`, `DETECTED`,
+  `INSPECTION_GAP` и detector/policy `ERROR`, exact required fields, canonical
+  ordering policy references, aggregate counts/duration и отсутствие
+  `reaction` для `ERROR`.
+- [ ] Tests покрывают отсутствие пары для unsupported/malformed request,
+  identity/context/source failure, empty selection и cancellation до analysis,
+  а также terminal completion при cancellation после реально начатого analysis.
+- [ ] Request workflow не резервирует audit record, не submit-ит его и не ждёт
+  write/force/durable future. Upstream и исходные stable request errors больше
+  не зависят от durable acknowledgement.
+- [ ] Existing Logback `AsyncAppender` с `neverBlock=true` остаётся единственной
+  queue. Slow, full или throwing logging sink не меняет status/body, не
+  задерживает upstream handoff и не создаёт audit queue/worker/config/metric/
+  callback/drop alert.
+- [ ] Privacy tests используют уникальные sentinels для body, PII values/spans,
+  path/query, headers, credentials, identity, user/groups, session и inbound
+  propagation, затем доказывают их отсутствие в обоих stdout events и client
+  errors.
+- [ ] `MVP-06`, `OBS-01`, `OBS-02` и current observability/coverage docs
+  описывают реализованную REQUEST pair, сохраняя RESPONSE pair как future
+  behavior owning leaves EPIC-20.
+- [ ] Все добавленные и изменённые Kotlin declarations, lifecycle helpers и
+  test methods имеют актуальный KDoc. Зафиксированы expected RED, focused GREEN,
+  affected request/process suite, `./gradlew validateWorkItems` и
+  `./gradlew build`.
+
+## Не входит
+
+- Удаление audit store, WAL, Collector handoff, audit configuration,
+  admission/readiness integration, packaging и qualification. Это VIG-32-02.
+- RESPONSE audit pair, response source/parser/SSE или enforcement reactions.
+- Новый logger backend, direct exporter, custom queue, batching, retries,
+  durability, drop metric/alert или audit delivery configuration.
+- Изменение policy selection, detector behavior, request protocol/error
+  semantics или tracing generation.
+
+## Ambiguity Report
+
+```text
+Goals:        0.0   operator-visible REQUEST pair определена
+Acceptance:   0.10  outcome, absence и privacy matrices explicit
+Boundaries:   0.05  removal и response ownership отделены
+Alternatives: 0.05  existing JSONL/AsyncAppender seam обязателен
+Assumptions:  0.15  current policy seam потребует bounded migration refactor
+Aggregate:    0.07  Ready for implementation.
+```

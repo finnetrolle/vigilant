@@ -4,8 +4,8 @@
 - **Тип:** Issue
 - **Статус:** Draft
 - **Приоритет:** High
-- **Зависит от:** нет
-- **Блокирует:** нет
+- **Зависит от:** [VIG-35](issue_35_production_identity_mode.md)
+- **Блокирует:** [VIG-31](issue_31_identity_lookup_cache.md)
 - **Оценка:** не оценено
 
 ## Цель

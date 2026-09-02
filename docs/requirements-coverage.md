@@ -30,14 +30,14 @@
 | `PERF-01` | Не реализовано | Есть bypass/shadow benchmark, но нет отдельного request/response enforcement latency evidence с новым profile. |
 | `PERF-02` | Частично | Existing reports фиксируют warmup и hardware; новый non-streaming profile и warm/mock identity setup отсутствуют. |
 | `PERF-03` | Частично | Current policies имеют deadline, но новый per-policy aggregation/fail-closed contract не реализован. |
-| `CONC-01` | Частично | Request source и windowing bounded; `16 MiB` text / `20 MiB` request-response limits и response spool отсутствуют. |
-| `CONC-02` | Частично | Existing request capacity gives typed failure; shared request/response capacity contract ещё не реализован. |
+| `CONC-01` | Частично | Request source и windowing bounded; required response in-memory lifecycle и cleanup пока отсутствуют. Response quota intentionally не требуется. |
+| `CONC-02` | Частично | Existing request capacity gives typed failure; response capacity intentionally не резервируется до будущего in-memory response lifecycle. |
 | `CONC-03` | Частично | CPU inspection isolation реализована; external identity integration отсутствует. |
 | `CONC-04` | Частично | Request cancellation и graceful shutdown реализованы; response enforcement lifecycle отсутствует. |
 | `PROXY-01` | Не реализовано | Response/SSE currently pass through; bounded hold-before-release enforcement отсутствует. |
 | `PROXY-02` | Не реализовано | Exact-span JSON mutation отсутствует. |
 | `PROXY-03` | Частично | Capacity errors существуют, но новый `503`/`Retry-After` matrix и policy `BLOCK` contract принадлежат VIG-29. |
-| `OBS-01` | Частично | Base metrics/tracing существуют; new outcome, audit-drop и identity metrics отсутствуют. |
+| `OBS-01` | Частично | Base metrics/tracing существуют; new outcome и identity metrics отсутствуют. Audit-drop metrics intentionally не требуются. |
 | `OBS-02` | Частично | Logs/audit безопасны для payload и credentials, но новый tracing/audit contract не реализован. |
 
 ## Stage 1 и non-goals

@@ -1,10 +1,11 @@
-# Epic 20: Atomic response spooling and secure disk spill
+# Epic 20: Atomic in-memory response analysis
 
 **ID:** `EPIC-20`
 **Тип:** Epic
 **Статус:** Draft
 **Приоритет:** High
-**Предварительная оценка:** не оценён; дочерние issues не определены
+**Предварительная оценка:** не оценён; 0/4 опубликованных issues завершено,
+SSE leaves ещё не опубликованы
 **Связанные требования:** `PROXY-01`, `PROXY-02`, `CONC-01`, `CONC-02`, `CONC-03`
 
 ## Контекст
@@ -13,18 +14,17 @@
 source в завершённом [EPIC-08](epic_08_message_spooling_replay.md). Response,
 включая SSE, пока остаётся streaming pass-through без content inspection.
 
-Этот epic принимает future response/SSE и disk-spill scope из EPIC-08. Он не
+Этот epic принимает future response/SSE scope из EPIC-08. Он не
 переоткрывает завершённый request contract и не обобщает request abstraction
 до выбора самостоятельных response lifecycle и storage contracts.
 
 ## Целевой результат
 
-Guardrail-enabled response полностью удерживается в bounded source до
+Guardrail-enabled response полностью удерживается в in-memory source до
 terminal event и итогового policy decision. При `ALLOW` exact original
 response раскрывается клиенту с backpressure, при `BLOCK` клиент не получает
-upstream status, headers или body. Если memory threshold недостаточен, source
-может использовать secure bounded disk spill без утечки raw content и без
-blocking file I/O на Netty event loop.
+upstream status, headers или body. Для MVP source использует доступный JVM heap
+и не имеет quota, disk spill path или persistent storage.
 
 ## Подтверждённые решения
 
@@ -37,39 +37,50 @@ blocking file I/O на Netty event loop.
   threshold или file lifecycle.
 - Unmodified `ALLOW` replay использует exact original source, а не protocol DTO
   serialization.
-- Response source lifecycle и secure spill требуют отдельных готовых issues до
+- Disk spill, temporary files, encryption, recovery и persistent response
+  storage исключены из MVP.
+- Response source lifecycle требует отдельных готовых issues до
   начала production implementation.
 
 ## Discovery map
 
 ```text
-EPIC-20 Atomic response spooling and secure disk spill
-├── response source contract (Draft)
+EPIC-20 Atomic in-memory response analysis
+├── response memory contract (Ready)
+│   ├── retained in-memory terminology
+│   ├── no application-level response quota
+│   └── deployment-owned heap sizing and OOM policy
+├── response source contract (Ready after memory contract)
 │   ├── ordinary response lifecycle
-│   ├── SSE terminal-event lifecycle
 │   ├── status/header disclosure boundary
 │   └── cancellation and upstream failure
-├── secure bounded storage contract (Draft)
-│   ├── memory-to-disk transition
-│   ├── private directory and file permissions
-│   ├── encryption and key ownership decision
-│   ├── disk and file-descriptor quotas
-│   └── normal and crash cleanup
-├── atomic response inspection tracer bullet (Draft)
-│   ├── complete parse and policy decision
+├── non-stream response enforcement (Draft)
+│   ├── complete JSON parse and policy decision
 │   ├── byte-identical ALLOW replay
-│   └── zero-byte BLOCK disclosure
-└── qualification evidence (Draft)
-    ├── backpressure and lifecycle matrix
-    ├── resource exhaustion outcomes
-    └── storage and latency baseline
+│   ├── exact MASK rewrite
+│   └── zero-byte BLOCK disclosure plus response audit pair
+├── SSE response enforcement (Draft; leaves not published)
+│   ├── framing and standalone terminal-event parser
+│   ├── text assembly by choice.index
+│   ├── cross-chunk MASK rewrite
+│   └── atomic ALLOW/BLOCK disclosure plus response audit pair
+└── reusable masking seam (Ready)
+    ├── typed masking instructions
+    ├── deterministic overlap handling
+    └── all-or-nothing invalid-input failure
 ```
 
 ## Дочерние issues
 
-Не опубликованы. Epic остаётся `Draft`, пока не закрыты решения, влияющие на
-границы response lifecycle и secure storage, и не подготовлены независимо
-проверяемые implementation leaves размером не более пяти инженерных дней.
+- [ ] [VIG-20-04: Retained in-memory response contract](../issues/epic_20/issue_20_04_retained_memory_response_contract.md) - `Ready for implementation`
+- [ ] [VIG-20-01: In-memory response source](../issues/epic_20/issue_20_01_bounded_memory_response_source.md) - `Ready for implementation`
+- [ ] [VIG-20-03: Reusable text masker](../issues/epic_20/issue_20_03_reusable_text_masker.md) - `Ready for implementation`
+- [ ] [VIG-20-02: Non-stream response inspection and enforcement](../issues/epic_20/issue_20_02_response_inspection_enforcement.md) - `Draft`
+
+VIG-20-02 сохранён как первый узкий enforcement leaf. Его прежний полный
+response/SSE contract поднят в этот epic. До перевода epic в
+`Ready for implementation` необходимо опубликовать отдельные bounded leaves
+для SSE framing/terminal parsing и SSE enforcement.
 
 ## Нормативный future scope
 
@@ -85,33 +96,52 @@ EPIC-20 Atomic response spooling and secure disk spill
 - Client cancellation, upstream cancellation/error, timeout и shutdown
   прекращают ingest/replay и запускают idempotent cleanup.
 
-### Secure bounded spill
+### Non-stream Chat Completions enforcement
 
-- Heap, disk bytes, file descriptors, retained segments и concurrent response
-  sources имеют явные configurable bounds.
-- Spill storage недоступно другим пользователям процесса и не переживает
-  normal cleanup lifecycle.
-- Directory ownership, permissions, encryption/key ownership и crash cleanup
-  должны быть зафиксированы до реализации.
-- Blocking file I/O не выполняется на Netty event loop.
-- Hard exhaustion даёт stable safe outcome без unbounded growth, silent
-  truncation или partial disclosure.
-- Raw source, temporary path, filename, content preview и reversible payload
-  hash не попадают в logs, metrics, traces или errors.
+- Каждый `choices[].message.content`, являющийся string, образует независимый
+  inspection fragment. Findings не пересекают границы choices.
+- `null`, recognized image/audio/file/tool-call и другие recognized non-text
+  shapes дают `INSPECTION_GAP` и `ALLOW` без изменения response.
+- Missing `choices`, invalid content type, malformed или ambiguous
+  content-bearing shape дают safe `502 invalid_upstream_response` по VIG-29.
+- `ALLOW` раскрывает exact original bytes. `MASK` изменяет только выбранные
+  spans, сохраняет unknown fields и пересчитывает framing headers. Любой
+  applicable `BLOCK` блокирует весь response до первого client byte.
+
+### SSE Chat Completions enforcement
+
+- Supported stream завершается только отдельным standalone `data: [DONE]`
+  event. Missing или malformed terminal event является safe protocol failure.
+- Text собирается независимо по `choice.index` из string
+  `choices[].delta.content`. Non-content event fields и порядок events
+  сохраняются.
+- Finding может пересекать transport chunks и несколько `delta.content`
+  fragments одного choice. `MASK` не раскрывает клиенту часть исходного PII
+  span.
+- До terminal event, полного анализа и final reaction клиент не получает
+  upstream status, headers или event bytes.
+
+### Response audit
+
+- Реально проанализированный response публикует ровно одну stdout pair из
+  VIG-32-01: `policy.analysis_started` непосредственно до detector execution и
+  `policy.analysis_completed` после final outcome.
+- Audit содержит только safe aggregate fields и tracing correlation. Payload,
+  spans, headers, credentials и identity запрещены.
+
+### In-memory source
+
+- Response не имеет application-level heap или concurrent-source quota; он
+  использует доступный JVM heap. После terminal lifecycle source освобождает
+  owned buffers и references, а память возвращает JVM GC.
+- Raw source, content preview и reversible payload hash не попадают в logs,
+  metrics, traces или errors.
 
 ## Открытые решения
 
-- Отдельные или общие lifecycle contracts для ordinary response и SSE.
-- Terminal-event и provider-error semantics каждого поддерживаемого protocol
-  adapter.
-- Memory-to-disk threshold, allocation order и precedence одновременного
-  исчерпания memory, disk и file-descriptor quota.
-- Private directory ownership, permission model, encryption requirement и key
-  lifecycle.
-- Crash cleanup strategy и допустимое время жизни orphaned files.
-- Представление задержанных status/headers и момент принятия transport
-  ownership при replay.
-- Bounded storage и latency thresholds, которые должны стать release gates.
+- JVM heap sizing и runtime OOM policy deployment выбирает вне application.
+- Точные public seams и границы двух будущих SSE leaves.
+- Принадлежность response JSON/SSE parser contracts между EPIC-06 и EPIC-20.
 
 ## Связи с соседними epics
 
@@ -128,37 +158,38 @@ EPIC-20 Atomic response spooling and secure disk spill
 ## Не входит в epic
 
 - Изменение завершённого in-memory request source EPIC-08.
-- Protocol parsing rules, policy selection или detector implementation.
-- Source rewriting, `MASK`/`REMOVE` patch API и protocol locator mapping.
+- Упрощение или удаление существующего policy engine, его match dimensions,
+  overrides либо detector registry.
+- `REMOVE` reaction, новые detector types и protocols кроме Chat Completions.
 - External object storage или доступность raw source вне процесса.
 - Realtime и Batch source lifecycle.
-- Реализация до публикации готовых дочерних issues.
+- Реализация SSE enforcement до публикации готовых bounded leaves.
 
 ## Предварительные критерии готовности epic
 
-- Unmodified response replay-ится byte-for-byte для memory и spill paths.
+- Unmodified response replay-ится byte-for-byte для memory path.
 - Slow upstream или client создаёт backpressure, а не unbounded queue.
-- Heap, disk, file descriptors и concurrent response sources имеют
-  проверяемые bounds.
+- Каждый terminal lifecycle освобождает response buffers и references.
 - Cancellation/error на каждой lifecycle phase освобождает все ресурсы.
-- Temporary source недоступен через logs/errors и удаляется после lifecycle.
-- Blocking storage I/O отсутствует на Netty event loop.
-- Hard exhaustion даёт stable safe outcome без partial disclosure.
+- Temporary source недоступен через logs/errors и освобождается после lifecycle.
 - SSE replay начинается только после terminal event и полного `ALLOW`; любой
   `BLOCK` оставляет upstream SSE полностью нераскрытым клиенту.
-- Resource thresholds подтверждены benchmark/baseline с зафиксированными
-  hardware и workload.
+- Non-stream JSON и SSE protocol/enforcement доказаны отдельными bounded
+  leaves, каждый с одним основным E2E или public parser seam.
+- Каждый реально проанализированный response публикует одну safe stdout audit
+  pair по VIG-32-01 без влияния logging failure на HTTP outcome.
 - Для добавленных и изменённых Kotlin declarations написан KDoc.
+- `./gradlew validateWorkItems` проходит после каждого изменения epic tree.
 - `./gradlew build` проходит после реализации всех дочерних issues.
 
 ## Ambiguity Report
 
 ```text
 Ambiguity Report:
-  Goals:        0.10  ✓ atomic response outcome fixed
-  Acceptance:   0.45  △ protocol and resource matrices not decomposed
-  Boundaries:   0.15  ✓ request scope remains in completed EPIC-08
-  Alternatives: 0.65  △ storage and encryption strategy unresolved
-  Assumptions:  0.55  △ thresholds and crash lifecycle need evidence
-  Aggregate:    0.38  △ Draft; resolve before implementation
+  Goals:        0.0   atomic response outcome fixed
+  Acceptance:   0.35  SSE branches still need published leaves
+  Boundaries:   0.25  response parser ownership must be assigned
+  Alternatives: 0.10  retained memory and no disk spill selected
+  Assumptions:  0.20  deployment owns heap sizing and OOM policy
+  Aggregate:    0.18  Draft: publish bounded SSE leaves before implementation.
 ```

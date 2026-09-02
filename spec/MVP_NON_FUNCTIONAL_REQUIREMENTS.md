@@ -28,17 +28,25 @@ payload sizes и percentiles. Max-size и overload scenarios проверяют�
 
 ## Ресурсы и cancellation
 
-### CONC-01. Bounded inspection
+### CONC-01. Request bounds и response heap lifecycle
 
-Один request или response допускает до `16 MiB` aggregate inspectable text и до
-`20 MiB` raw body. Большие text fragments проверяются UTF-8-safe windowing без
-silent truncation. Превышение limits не передаётся дальше.
+Один request допускает до `16 MiB` aggregate inspectable text и до `20 MiB`
+raw body. Большие text fragments проверяются UTF-8-safe windowing без silent
+truncation. Превышение request limits не передаётся дальше.
 
-### CONC-02. Capacity outcome
+Response не имеет application-level raw/text limit или shared capacity quota:
+он использует доступный JVM heap до terminal policy decision. После `ALLOW`,
+`MASK`, `BLOCK`, cancellation, upstream failure или shutdown response source
+освобождает owned buffers и references; фактическое освобождение heap выполняет
+JVM GC. Heap sizing и OOM policy принадлежат deployment.
 
-RAM или spool exhaustion не создаёт unbounded queue и не пропускает
+### CONC-02. Request capacity outcome
+
+Request RAM or spool exhaustion не создаёт unbounded queue и не пропускает
 непроверенный traffic. Gateway быстро отвечает `503 Service Unavailable` с
-`Retry-After`; exact capacity limits являются deployment configuration.
+`Retry-After`; exact request capacity limits являются deployment configuration.
+Response не резервирует отдельную application capacity; его heap lifecycle
+определён в `CONC-01`.
 
 ### CONC-03. Execution classes
 
@@ -77,8 +85,9 @@ Capacity exhaustion, detector/policy failure и unavailable identity дают `5
 ### OBS-01. Metrics и tracing
 
 Gateway публикует request/response outcomes, latency каждого path, PII counts по
-type, deadline/errors, spool/capacity rejects, audit queue depth/drops и identity
-cache hit/miss/lookup latency. Tracing содержит session, trace ID, span ID и
+type, deadline/errors, spool/capacity rejects и identity cache hit/miss/lookup
+latency. Audit queue depth/drops не публикуются: stdout delivery принадлежит
+Logback/container runtime. Tracing содержит session, trace ID, span ID и
 parent span ID.
 
 ### OBS-02. Privacy
@@ -90,7 +99,8 @@ token, user ID или groups. Исключение: tracing identifiers хран
 ## Deployment и stack
 
 - MVP запускается в нескольких stateless replicas за load balancer. Каждая
-  replica владеет local identity cache, spool и audit file.
+  replica владеет local identity cache и response source; audit delivery идёт
+  через container-managed stdout.
 - Численный availability SLO пока не задан; его определяет
   [VIG-33](issues/issue_33_availability_slo_and_operations.md) после production
   telemetry.

@@ -104,7 +104,7 @@ Issue является листом mind map, если:
 | [EPIC-08: Bounded in-memory request source and replay](epics/epic_08_message_spooling_replay.md) | `Done` | 2/2 | 0 дней осталось |
 | [EPIC-09: Закрытие архитектурных рисков v0](epics/epic_09_v0_architecture_closure.md) | `Done` | 9/9 | 0 дней осталось |
 | [EPIC-10: Повышение качества детерминированного PII-распознавания](epics/epic_10_pii_detection_quality.md) | `Done` | 8/8 | 0 дней осталось |
-| [EPIC-20: Atomic response spooling and secure disk spill](epics/epic_20_response_spooling_secure_spill.md) | `Draft` | 0/0 | future scope не оценён |
+| [EPIC-20: Atomic in-memory response analysis](epics/epic_20_response_spooling_secure_spill.md) | `Draft` | 0/4 | non-stream leaf сужен; SSE leaves и parser ownership ещё не определены |
 | [EPIC-21: Post-milestone architecture closure](epics/epic_21_post_milestone_architecture_closure.md) | `Done` | 5/5 | 0 дней осталось |
 | [EPIC-22: Durable minimum audit trail](epics/epic_22_durable_minimum_audit_trail.md) | `Done` | 5/5 | 0 дней осталось |
 | [VIG-11: Fast PII policy adapter](issues/issue_11_fast_pii_policy_adapter.md) | `Done` | завершена | 0 дней осталось |
@@ -119,11 +119,113 @@ Issue является листом mind map, если:
 | [VIG-26: Универсальное ядро windowed inspection](issues/issue_26_generic_windowing_core.md) | `Done` | завершена | 0 дней осталось |
 | [VIG-27: Dummy Bearer identity extractor](issues/issue_27_dummy_identity_extractor.md) | `Done` | завершена | 0 дней осталось |
 | [VIG-28: Offline trusted JWT Bearer identity extractor](issues/issue_28_keycloak_jwt_identity_extractor.md) | `Done` | завершена | 0 дней осталось |
-| [VIG-29: OpenAI-compatible error contract for enforcement](issues/issue_29_openai_error_contract.md) | `Draft` | открыты response/error details | не оценено |
+| [VIG-29: OpenAI-compatible error contract for enforcement](issues/issue_29_openai_error_contract.md) | `Ready for implementation` | status/body matrix определена | не оценено |
 | [VIG-30: External Bearer identity extractor](issues/issue_30_external_identity_extractor.md) | `Draft` | внешний identity contract не определён | не оценено |
 | [VIG-31: Cache external identity lookup](issues/issue_31_identity_lookup_cache.md) | `Draft` | cache semantics не определены | не оценено |
-| [VIG-32: Best-effort asynchronous audit writer](issues/issue_32_async_audit_writer.md) | `Draft` | file/queue contract не определён | не оценено |
+| [EPIC-32: Best-effort stdout audit migration](epics/epic_32_best_effort_stdout_audit.md) | `Ready for implementation` | 0/2 | 7-10 дней |
 | [VIG-33: Availability SLO and operational evidence](issues/issue_33_availability_slo_and_operations.md) | `Draft` | production SLO не определён | не оценено |
+| [VIG-34: Request-side PII enforcement](issues/issue_34_request_pii_enforcement.md) | `Draft` | reaction, rewrite и lifecycle contract требуют диалога | не оценено |
+| [VIG-35: Выбор production identity mode](issues/issue_35_production_identity_mode.md) | `Draft` | external-only или dual production mode не выбран | не оценено |
+| [VIG-36: Очистка superseded требований и архитектурных документов](issues/issue_36_superseded_requirements_cleanup.md) | `Draft` | требуется inventory и завершение contract dependencies | не оценено |
+
+## Active TODO: порядок следующей работы
+
+Этот список задаёт delivery order для агентов. Статус в issue-файле остаётся
+источником истины: пункт ниже не разрешает реализацию `Draft` issue. Для Draft
+разрешены только discovery, фиксация решений и декомпозиция до
+`Ready for implementation`.
+
+Принципы порядка:
+
+1. Сначала удалять ненужный runtime и только затем добавлять новые возможности.
+2. Внутри delivery phase сначала завершать доступные `Ready for implementation`
+   и `In progress` work items, затем уточнять `Draft` work items.
+3. Исключение допустимо только для минимальной декомпозиции, необходимой, чтобы
+   превратить removal work или parent epic в independently executable Ready
+   leaves.
+4. Не начинать новый пункт, пока предыдущий hard gate не завершён и
+   `./gradlew validateWorkItems` не подтверждает согласованность реестра.
+
+### Phase 0: подготовить удаление durable audit
+
+- [x] Декомпозировать [EPIC-32](epics/epic_32_best_effort_stdout_audit.md) на два
+  independently reviewable work items размером 1-5 дней:
+  - [VIG-32-01](issues/epic_32/issue_32_01_stdout_request_audit_migration.md)
+    публикует stdout request audit через один operator-visible logging seam;
+  - [VIG-32-02](issues/epic_32/issue_32_02_durable_audit_removal.md) удаляет
+    WAL/recovery/handoff и всех runtime, packaging и documentation consumers
+    старого audit path.
+- [x] Зафиксировать hard dependency: durable-audit removal начинается только
+  после готовой stdout migration.
+- [x] Перенести все критерии VIG-32 в новые leaves без потери требований,
+  добавить estimate/confidence и обновить зависимости VIG-20-02/VIG-34.
+
+### Phase 1: удалить ненужный durable audit
+
+- [ ] Реализовать и закрыть
+  [VIG-32-01](issues/epic_32/issue_32_01_stdout_request_audit_migration.md).
+- [ ] Реализовать и закрыть
+  [VIG-32-02](issues/epic_32/issue_32_02_durable_audit_removal.md): WAL, segments, recovery,
+  Collector handoff, reservation/acknowledgement, audit-driven
+  admission/readiness, audit configuration, Docker volume, durability Gradle
+  tasks/tests и current runtime docs.
+- [ ] Подтвердить, что logging failure больше не влияет на HTTP outcome,
+  readiness или upstream handoff.
+
+### Phase 2: закрыть готовый standalone frontier
+
+- [ ] Реализовать [VIG-29](issues/issue_29_openai_error_contract.md): exact
+  OpenAI-compatible status/body matrix, `Retry-After` и отсутствие upstream или
+  payload disclosure.
+
+### Phase 3: завершить декомпозицию EPIC-20
+
+- [ ] Назначить единственного owner response JSON/SSE parser contracts между
+  EPIC-06 и [EPIC-20](epics/epic_20_response_spooling_secure_spill.md).
+- [ ] Опубликовать отдельный bounded leaf для SSE framing и standalone
+  `data: [DONE]` terminal parsing.
+- [ ] Опубликовать отдельный bounded leaf для SSE inspection/enforcement.
+- [ ] Добавить estimates, confidence, hard dependencies, non-goals и один
+  основной public test seam каждому leaf.
+- [ ] Перевести EPIC-20 в `Ready for implementation` только после полного
+  дерева обязательных leaves.
+
+### Phase 4: закрыть готовые leaves EPIC-20
+
+- [ ] Реализовать
+  [VIG-20-04](issues/epic_20/issue_20_04_retained_memory_response_contract.md)
+  и синхронизировать retained-memory terminology.
+- [ ] После VIG-20-04 реализовать
+  [VIG-20-01](issues/epic_20/issue_20_01_bounded_memory_response_source.md).
+- [ ] Независимо реализовать
+  [VIG-20-03](issues/epic_20/issue_20_03_reusable_text_masker.md).
+
+### Phase 5: уточнить и реализовать Draft capabilities
+
+- [ ] Принять human-owned решение
+  [VIG-35](issues/issue_35_production_identity_mode.md): external-only или
+  external plus offline JWT.
+- [ ] После VIG-35 уточнить и реализовать
+  [VIG-30](issues/issue_30_external_identity_extractor.md), затем
+  [VIG-31](issues/issue_31_identity_lookup_cache.md).
+- [ ] Провести отдельный requirements dialogue по
+  [VIG-34](issues/issue_34_request_pii_enforcement.md), перевести issue в Ready
+  и только затем реализовать request `ALLOW`/`MASK`/`BLOCK`.
+- [ ] Закрыть открытые решения
+  [VIG-20-02](issues/epic_20/issue_20_02_response_inspection_enforcement.md),
+  затем реализовать non-stream response enforcement и опубликованные SSE
+  leaves.
+
+### Phase 6: финальная документация и operations
+
+- [ ] После VIG-20-04, VIG-32-02 и VIG-35 уточнить и выполнить
+  [VIG-36](issues/issue_36_superseded_requirements_cleanup.md), сохранив
+  исторические work items и evidence.
+- [ ] После стабилизации identity, enforcement и observability уточнить
+  [VIG-33](issues/issue_33_availability_slo_and_operations.md).
+
+Текущий следующий шаг: реализация VIG-32-01. VIG-32-02 остаётся готовым leaf,
+но заблокирован до завершения stdout migration.
 
 ## Как закрывать work item
 
