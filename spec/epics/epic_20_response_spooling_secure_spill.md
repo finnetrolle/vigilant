@@ -2,10 +2,9 @@
 
 **ID:** `EPIC-20`
 **Тип:** Epic
-**Статус:** Draft
+**Статус:** Ready for implementation
 **Приоритет:** High
-**Предварительная оценка:** не оценён; 0/4 опубликованных issues завершено,
-SSE enforcement leaf ещё не опубликован
+**Предварительная оценка:** 13-19 инженерных дней; 0/5 issues завершено
 **Связанные требования:** `PROXY-01`, `PROXY-02`, `CONC-01`, `CONC-02`, `CONC-03`
 
 ## Контекст
@@ -39,6 +38,8 @@ upstream status, headers или body. Для MVP source использует д�
   serialization.
 - Disk spill, temporary files, encryption, recovery и persistent response
   storage исключены из MVP.
+- JVM heap sizing и runtime OOM policy являются deployment responsibility;
+  application не добавляет скрытый response quota или admission rejection.
 - Response source lifecycle требует отдельных готовых issues до
   начала production implementation.
 
@@ -54,7 +55,7 @@ EPIC-20 Atomic in-memory response analysis
 │   ├── ordinary response lifecycle
 │   ├── status/header disclosure boundary
 │   └── cancellation and upstream failure
-├── non-stream response enforcement (Draft)
+├── non-stream response enforcement (Ready: VIG-20-02)
 │   ├── complete JSON parse and policy decision
 │   ├── byte-identical ALLOW replay
 │   ├── exact MASK rewrite
@@ -62,7 +63,7 @@ EPIC-20 Atomic in-memory response analysis
 ├── SSE protocol parsing (Done: VIG-06-03)
 │   ├── framing and standalone terminal-event parser
 │   └── text assembly by choice.index
-├── SSE response enforcement (Draft; leaf not published)
+├── SSE response enforcement (Ready: VIG-20-05)
 │   ├── cross-chunk MASK rewrite
 │   └── atomic ALLOW/BLOCK disclosure plus response audit pair
 └── reusable masking seam (Ready)
@@ -76,12 +77,12 @@ EPIC-20 Atomic in-memory response analysis
 - [ ] [VIG-20-04: Retained in-memory response contract](../issues/epic_20/issue_20_04_retained_memory_response_contract.md) - `Ready for implementation`
 - [ ] [VIG-20-01: In-memory response source](../issues/epic_20/issue_20_01_bounded_memory_response_source.md) - `Ready for implementation`
 - [ ] [VIG-20-03: Reusable text masker](../issues/epic_20/issue_20_03_reusable_text_masker.md) - `Ready for implementation`
-- [ ] [VIG-20-02: Non-stream response inspection and enforcement](../issues/epic_20/issue_20_02_response_inspection_enforcement.md) - `Draft`
+- [ ] [VIG-20-02: Non-stream response inspection and enforcement](../issues/epic_20/issue_20_02_response_inspection_enforcement.md) - `Ready for implementation`
+- [ ] [VIG-20-05: SSE response inspection and enforcement](../issues/epic_20/issue_20_05_sse_response_enforcement.md) - `Ready for implementation`
 
-VIG-20-02 сохранён как первый узкий enforcement leaf. Его прежний полный
-response/SSE contract поднят в этот epic. До перевода epic в
-`Ready for implementation` необходимо опубликовать отдельный bounded leaf
-для SSE enforcement; framing и terminal parsing завершены в
+VIG-20-02 является первым узким enforcement leaf. Его прежний полный
+response/SSE contract поднят в этот epic. VIG-20-05 публикует отдельный ready
+bounded SSE enforcement leaf; framing и terminal parsing завершены в
 [VIG-06-03](../issues/epic_06/issue_06_03_chat_completions_response_parser.md).
 
 ## Нормативный future scope
@@ -114,12 +115,13 @@ response/SSE contract поднят в этот epic. До перевода epic 
 
 - Supported stream завершается только отдельным standalone `data: [DONE]`
   event. Missing или malformed terminal event является safe protocol failure.
-- Text собирается независимо по `choice.index` из string
-  `choices[].delta.content`. Non-content event fields и порядок events
+- Text собирается независимо по `choice.index` и semantic field из string
+  `delta.content`, `delta.refusal`, modern tool-call arguments и deprecated
+  function-call arguments. Non-content event fields и порядок events
   сохраняются.
-- Finding может пересекать transport chunks и несколько `delta.content`
-  fragments одного choice. `MASK` не раскрывает клиенту часть исходного PII
-  span.
+- Finding может пересекать transport chunks и несколько delta events одного
+  logical field, но не разные choices, tool calls или semantic fields. `MASK`
+  не раскрывает клиенту часть исходного PII span.
 - До terminal event, полного анализа и final reaction клиент не получает
   upstream status, headers или event bytes.
 
@@ -138,11 +140,6 @@ response/SSE contract поднят в этот epic. До перевода epic 
   owned buffers и references, а память возвращает JVM GC.
 - Raw source, content preview и reversible payload hash не попадают в logs,
   metrics, traces или errors.
-
-## Открытые решения
-
-- JVM heap sizing и runtime OOM policy deployment выбирает вне application.
-- Точный public seam и границы будущего SSE enforcement leaf.
 
 ## Связи с соседними epics
 
@@ -165,7 +162,7 @@ response/SSE contract поднят в этот epic. До перевода epic 
 - `REMOVE` reaction, новые detector types и protocols кроме Chat Completions.
 - External object storage или доступность raw source вне процесса.
 - Realtime и Batch source lifecycle.
-- Реализация SSE enforcement до публикации готовых bounded leaves.
+- Реализация дочерних leaves до завершения их перечисленных dependencies.
 
 ## Предварительные критерии готовности epic
 
@@ -189,9 +186,9 @@ response/SSE contract поднят в этот epic. До перевода epic 
 ```text
 Ambiguity Report:
   Goals:        0.0   atomic response outcome fixed
-  Acceptance:   0.25  SSE enforcement still needs a published leaf
-  Boundaries:   0.10  EPIC-06 parser and EPIC-20 enforcement ownership fixed
+  Acceptance:   0.05  all mandatory leaves have explicit evidence
+  Boundaries:   0.05  source, parser, policy and transport ownership fixed
   Alternatives: 0.10  retained memory and no disk spill selected
-  Assumptions:  0.20  deployment owns heap sizing and OOM policy
-  Aggregate:    0.13  Draft: publish bounded SSE enforcement leaf before implementation.
+  Assumptions:  0.15  dependencies control implementation order
+  Aggregate:    0.07  Ready for implementation.
 ```

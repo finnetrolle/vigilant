@@ -104,7 +104,7 @@ Issue является листом mind map, если:
 | [EPIC-08: Bounded in-memory request source and replay](epics/epic_08_message_spooling_replay.md) | `Done` | 2/2 | 0 дней осталось |
 | [EPIC-09: Закрытие архитектурных рисков v0](epics/epic_09_v0_architecture_closure.md) | `Done` | 9/9 | 0 дней осталось |
 | [EPIC-10: Повышение качества детерминированного PII-распознавания](epics/epic_10_pii_detection_quality.md) | `Done` | 8/8 | 0 дней осталось |
-| [EPIC-20: Atomic in-memory response analysis](epics/epic_20_response_spooling_secure_spill.md) | `Draft` | 0/4 | non-stream leaf сужен; SSE enforcement leaf не опубликован; parser owner — EPIC-06 |
+| [EPIC-20: Atomic in-memory response analysis](epics/epic_20_response_spooling_secure_spill.md) | `Ready for implementation` | 0/5 | 13-19 дней; начать с VIG-20-04, VIG-20-03 независима |
 | [EPIC-21: Post-milestone architecture closure](epics/epic_21_post_milestone_architecture_closure.md) | `Done` | 5/5 | 0 дней осталось |
 | [EPIC-22: Durable minimum audit trail](epics/epic_22_durable_minimum_audit_trail.md) | `Done` | 5/5 | 0 дней осталось |
 | [VIG-11: Fast PII policy adapter](issues/issue_11_fast_pii_policy_adapter.md) | `Done` | завершена | 0 дней осталось |
@@ -184,10 +184,12 @@ Issue является листом mind map, если:
 - [x] Опубликовать combined
   [VIG-06-03](issues/epic_06/issue_06_03_chat_completions_response_parser.md)
   для ordinary JSON, SSE framing и standalone `data: [DONE]` parsing.
-- [ ] Опубликовать отдельный bounded leaf для SSE inspection/enforcement.
-- [ ] Добавить estimates, confidence, hard dependencies, non-goals и один
+- [x] Опубликовать отдельный bounded
+  [VIG-20-05](issues/epic_20/issue_20_05_sse_response_enforcement.md) для SSE
+  inspection/enforcement.
+- [x] Добавить estimates, confidence, hard dependencies, non-goals и один
   основной public test seam каждому leaf.
-- [ ] Перевести EPIC-20 в `Ready for implementation` только после полного
+- [x] Перевести EPIC-20 в `Ready for implementation` только после полного
   дерева обязательных leaves.
 
 ### Phase 4: закрыть готовые leaves EPIC-20
@@ -224,9 +226,9 @@ Issue является листом mind map, если:
 - [ ] После стабилизации identity, enforcement и observability уточнить
   [VIG-33](issues/issue_33_availability_slo_and_operations.md).
 
-Текущий следующий шаг: завершить декомпозицию EPIC-20, опубликовав bounded SSE
-inspection/enforcement leaf. VIG-29 завершён: exact error matrix реализована
-без подключения enforcement.
+Текущий следующий шаг: реализовать VIG-20-04, затем VIG-20-01; VIG-20-03
+доступна независимо. VIG-29 завершён: exact error matrix реализована без
+подключения enforcement.
 
 ## Как закрывать work item
 
