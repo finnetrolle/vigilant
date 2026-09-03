@@ -1,6 +1,9 @@
 # VIG-22-02: Mandatory audit acceptance в request path
 
 **Статус:** Done
+
+> Historical evidence only: runtime behavior superseded and removed by
+> [EPIC-32](../../epics/epic_32_best_effort_stdout_audit.md); `Done` is unchanged.
 **Epic:** [EPIC-22](../../epics/epic_22_durable_minimum_audit_trail.md)
 **Ветка:** Request-path tracer bullet > durable-before-forwarding
 **Зависит от:** [VIG-22-01](issue_22_01_local_durable_audit_store.md)

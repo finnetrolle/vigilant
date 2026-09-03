@@ -185,11 +185,7 @@ final class PerfProcesses implements AutoCloseable {
 
     /** Applies the mandatory benchmark environment to one packaged gateway. */
     private void configureGatewayEnvironment(ProcessBuilder builder, int gatewayPort) throws IOException {
-        PerformanceProcessSupport.configureAuditDirectory(
-            builder,
-            profile.projectDirectory(),
-            "perf-gateway-" + gatewayPort
-        );
+        PerformanceProcessSupport.configureTestIdentity(builder);
         builder.environment().put("VIGILANT_UPSTREAM_URL", profile.upstreamBaseUrl());
         builder.environment().put("VIGILANT_PORT", Integer.toString(gatewayPort));
         builder.environment().put(

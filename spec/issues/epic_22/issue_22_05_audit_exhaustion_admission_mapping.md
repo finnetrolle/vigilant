@@ -1,6 +1,9 @@
 # VIG-22-05: Exact audit exhaustion response через production admission chain
 
 **Статус:** Done
+
+> Historical evidence only: runtime behavior superseded and removed by
+> [EPIC-32](../../epics/epic_32_best_effort_stdout_audit.md); `Done` is unchanged.
 **Epic:** [EPIC-22](../../epics/epic_22_durable_minimum_audit_trail.md)
 **Ветка:** Request-path defect > lifecycle admission и audit availability
 **Зависит от:** [VIG-22-02](issue_22_02_request_path_audit_acceptance.md)

@@ -1,6 +1,9 @@
 # VIG-22-01: Локально durable audit store
 
 **Статус:** Done
+
+> Historical evidence only: runtime implementation superseded and removed by
+> [EPIC-32](../../epics/epic_32_best_effort_stdout_audit.md); `Done` is unchanged.
 **Epic:** [EPIC-22](../../epics/epic_22_durable_minimum_audit_trail.md)
 **Ветка:** Local durability module seam > bounded WAL, force and recovery
 **Зависит от:** [VIG-21-01](../epic_21/issue_21_01_minimum_audit_trail_contract.md)

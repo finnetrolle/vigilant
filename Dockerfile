@@ -18,18 +18,13 @@ LABEL org.opencontainers.image.title="Vigilant" \
 RUN groupadd --gid 10001 vigilant \
     && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /nonexistent \
         --shell /usr/sbin/nologin vigilant \
-    && mkdir -p /etc/vigilant /var/lib/vigilant/audit \
-    && chown --recursive 10001:10001 /var/lib/vigilant
+    && mkdir -p /etc/vigilant
 
 WORKDIR /opt/vigilant
 
 COPY --from=builder --chown=10001:10001 /workspace/build/oci-root/ ./
 
 USER 10001:10001
-
-ENV VIGILANT_AUDIT_DIRECTORY=/var/lib/vigilant/audit
-
-VOLUME ["/var/lib/vigilant/audit"]
 
 EXPOSE 8080
 STOPSIGNAL SIGTERM

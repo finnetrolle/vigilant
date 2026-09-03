@@ -228,45 +228,6 @@ val inspectionResourceContractTest = tasks.register<Test>("inspectionResourceCon
     description = "Runs exact owner, byte, cancellation, executor and shutdown cleanup contracts."
 }
 
-val durabilityQualificationContractTest = tasks.register<Test>("durabilityQualificationContractTest") {
-    dependsOn(tasks.named("testClasses"))
-    testClassesDirs = sourceSets.test.get().output.classesDirs
-    classpath = sourceSets.test.get().runtimeClasspath
-    useJUnitPlatform()
-    filter {
-        includeTestsMatching("io.vigilant.audit.AuditRecordContractTest")
-        includeTestsMatching("io.vigilant.audit.LocalAuditStoreTest")
-        includeTestsMatching("io.vigilant.audit.LocalAuditStoreCrashTest")
-        includeTestsMatching("io.vigilant.audit.AuditSegmentHandoffTest")
-        includeTestsMatching("io.vigilant.audit.AuditCollectorProcessTest")
-        includeTestsMatching("io.vigilant.gateway.health.HealthEndpointsTest")
-        includeTestsMatching("io.vigilant.gateway.metrics.MetricsServiceTest")
-        includeTestsMatching("io.vigilant.gateway.proxy.PiiShadowProxyServiceTest")
-        includeTestsMatching("io.vigilant.gateway.proxy.ShadowInspectionWorkflowTest")
-        includeTestsMatching("io.vigilant.gateway.ShutdownLifecycleTest")
-    }
-    group = "verification"
-    description = "Runs the exact causal audit, request, crash, Collector and shutdown contracts for VIG-22-04."
-}
-
-tasks.register<JavaExec>("durabilityQualification") {
-    dependsOn(
-        "installDist",
-        "ociArtifact",
-        perfContractTest,
-        durabilityQualificationContractTest,
-        gatlingSourceSet.map { it.classesTaskName },
-    )
-    group = "verification"
-    description = "Runs the installed-process and OCI durable-audit qualification matrix."
-    classpath = gatlingSourceSet.get().runtimeClasspath
-    mainClass.set("io.vigilant.durability.DurabilityQualificationMain")
-    systemProperty("perf.projectDir", rootDir.absolutePath)
-    systemProperty("perf.javaExecutable", piiJmhJavaLauncher.get().executablePath.asFile.absolutePath)
-    outputs.file(layout.buildDirectory.file("reports/durability/packaged-durability-qualification.md"))
-    outputs.upToDateWhen { false }
-}
-
 val workItemValidatorTest = tasks.register<Test>("workItemValidatorTest") {
     testClassesDirs = workItemValidatorTestSourceSet.output.classesDirs
     classpath = workItemValidatorTestSourceSet.runtimeClasspath

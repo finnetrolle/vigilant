@@ -18,9 +18,16 @@ application JAR, runtime dependencies и start scripts. Для локально�
 ./build/install/vigilant/bin/vigilant
 ~~~
 
-Перед запуском необходимо настроить upstream, предоставить валидный
-`politics.conf` и создать persistent audit directory. Полный список настроек находится в
+Перед запуском необходимо настроить upstream и предоставить валидный
+`politics.conf`. Полный список настроек находится в
 [configuration reference](configuration.md).
+
+После `installDist` повторяемый smoke-test запускает generated start script с
+env-only и HOCON configuration без audit settings против live upstream:
+
+~~~bash
+./scripts/installed-distribution-smoke-test
+~~~
 
 ## OCI image
 
@@ -37,7 +44,7 @@ Container:
 - использует `/opt/vigilant/bin/vigilant` как entrypoint;
 - объявляет port `8080`;
 - использует `STOPSIGNAL SIGTERM`;
-- объявляет `/var/lib/vigilant/audit` как writable audit volume;
+- не объявляет persistent directory или volume;
 - не содержит встроенной upstream или policy configuration.
 
 ## Запуск через environment
@@ -52,7 +59,6 @@ docker run --rm --name vigilant \
   --env VIGILANT_IDENTITY_DUMMY_USER=local-user \
   --env VIGILANT_POLITICS_CONFIG=/etc/vigilant/politics.conf \
   --mount type=bind,src="$PWD/politics.conf",dst=/etc/vigilant/politics.conf,readonly \
-  --mount type=volume,src=vigilant-audit,dst=/var/lib/vigilant/audit \
   vigilant:0.1.0-SNAPSHOT
 ~~~
 
@@ -65,16 +71,12 @@ docker run --rm --name vigilant \
   --mount type=bind,src="$PWD/vigilant.conf",dst=/etc/vigilant/vigilant.conf,readonly \
   --env VIGILANT_POLITICS_CONFIG=/etc/vigilant/politics.conf \
   --mount type=bind,src="$PWD/politics.conf",dst=/etc/vigilant/politics.conf,readonly \
-  --mount type=volume,src=vigilant-audit,dst=/var/lib/vigilant/audit \
   vigilant:0.1.0-SNAPSHOT
 ~~~
 
-Configuration files монтируются read-only. Audit volume обязан сохраняться при
-container restart, быть доступен только gateway UID/GID `10001` и явно
-авторизованному Collector service account, а также использовать подходящее
-deployment encryption at rest. Для production deployment secrets должны
-передаваться через предназначенный для них secret mechanism, а не записываться
-в image или config committed в repository.
+Configuration files монтируются read-only. Для production deployment secrets
+должны передаваться через предназначенный для них secret mechanism, а не
+записываться в image или config committed в repository.
 
 `DUMMY` mode разрешает только development/test deployment, поэтому первая
 команда остаётся local example. Production использует `identity-mode=JWT` в
@@ -82,26 +84,6 @@ mounted HOCON: exact issuer, audience и pinned RSA public JWK set. Gateway не
 обращается к Keycloak discovery/JWKS/UserInfo/introspection endpoints; rotation
 выполняется явным configuration/deployment update с overlap старого и нового
 public key.
-
-## External Audit Collector
-
-External delivery использует
-[vendor-neutral file handoff](audit-collector-file-handoff.md). Collector
-получает доступ к тому же persistent audit volume, читает только atomic ready
-manifests и immutable `.wal`, а создаёт только force-backed `.ack.json` после
-durable destination acknowledgement. Он не изменяет WAL или metadata Vigilant.
-VIG-32-01 отключил request analysis от этой transitional подсистемы:
-Collector outage не блокирует request outcome или upstream handoff. При
-исчерпании configured retained bound `/readyz` остаётся `503` до valid
-ack/reclaim; эта readiness integration удаляется в VIG-32-02.
-
-Deployment обязан ограничить directory permissions gateway/Collector service
-accounts, включить volume encryption at rest и передавать Collector credentials
-через внешний secret mechanism. Destination availability, retention,
-queryability, deduplication по `event_id`, backup/restore и disaster recovery
-принадлежат Collector/deployment. Успешный `force(true)` не покрывает volume
-loss, storage corruption, operator deletion или broken hardware flush
-semantics.
 
 ## Health и lifecycle
 
@@ -111,9 +93,8 @@ Orchestrator probes:
 - `GET /readyz` - readiness.
 
 `SIGTERM` запускает JVM shutdown hook. Readiness переключается на `503`, новые
-proxy exchanges и store admissions запрещаются, active exchanges получают bounded drain, затем
-WAL force-ится и seal-ится до закрытия inspection, upstream и OpenTelemetry
-resources.
+proxy exchanges запрещаются, active exchanges получают bounded drain, затем
+закрываются inspection, upstream и OpenTelemetry resources.
 
 Default graceful shutdown force timeout равен 30 seconds. Container stop
 timeout 35 seconds сохраняет этот budget и снижает риск последующего
@@ -145,36 +126,18 @@ Collector должен разделять записи по top-level `resourceS
 
 Скрипт собирает временный image и проверяет:
 
-- env-only и HOCON configuration;
+- env-only configuration без durable-audit settings;
 - read-only policy mount;
 - non-root user;
+- отсутствие persistent audit directory, image volume и audit environment;
 - `/healthz` и `/readyz`;
 - реальный PII Chat Completions request;
 - byte-identical request replay;
-- safe JSONL shadow audit;
-- fixed JVM memory settings;
-- restart container с тем же named audit volume и сохранённым WAL;
-- exit code `2` для невалидной application/policy configuration;
+- safe JSONL stdout request-audit pair;
 - graceful SIGTERM shutdown.
 
 Smoke test удаляет созданные container/image resources при завершении. Он
 запускается явно и не входит в `./gradlew build` или CI.
-
-Историческая packaged durability matrix прежнего request contract
-запускается командой до удаления в VIG-32-02:
-
-~~~bash
-./gradlew durabilityQualification
-~~~
-
-Она добавляет exact audit bounds, real Armeria upstream, отдельный fake
-Collector, crash/recovery и exhaustion phases. Текущий versioned
-[qualification report](durability-qualification-2026-08-31.md) имеет verdict
-`PASS` для прежнего durable request path: retained-capacity admission
-возвращает exact `503 audit_unavailable`,
-OCI restart сохраняет WAL на том же volume, ack/reclaim восстанавливает
-readiness. Этот report не является evidence текущего stdout request
-contract.
 
 ## Не входит в поставку
 

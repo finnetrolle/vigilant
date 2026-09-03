@@ -102,8 +102,8 @@ internal fun configuredPropagationHeaderName(key: String, traceparentHeader: Str
  * Runs [block] with the safe request tracing context installed in MDC.
  *
  * @param includeUserControlledCorrelation whether session and received propagation values may be
- * added for ordinary operational logs. Mandatory audit projections set this to `false` because
- * those request-controlled values are outside their safe schema.
+ * added for ordinary operational logs. Safe request-analysis events set this to `false` because
+ * those request-controlled values are outside their stdout schema.
  */
 internal fun <T> withRequestTracingMdc(
     ctx: com.linecorp.armeria.server.ServiceRequestContext,

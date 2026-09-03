@@ -31,6 +31,34 @@ class PiiShadowProxyProcessTest {
         fixture.close()
     }
 
+    /**
+     * Verifies the packaged entry point is ready and forwards a supported request without any
+     * application-owned durable-audit configuration while retaining stdout request audit.
+     */
+    @Test
+    fun `MainKt starts and forwards without durable audit configuration`() {
+        val upstreamRequests = CompletableFuture<Int>()
+        val upstream = fixture.startServer {
+            upstreamRequests.complete(1)
+            HttpResponse.of(HttpStatus.OK, MediaType.JSON, "{\"ok\":true}")
+        }
+        val process =
+            GatewayProcessFixture.launch(fixture.serverUri(upstream)).also { gateway = it }
+
+        val response =
+            process.awaitServing()
+                .execute(chatCompletionsRequestWithBody(chatCompletionsBody("ordinary text")))
+                .aggregate()
+                .join()
+
+        assertEquals(HttpStatus.OK, response.status())
+        assertEquals(1, upstreamRequests.join())
+        val (started, completed) = awaitAnalysisPair(process)
+        assertEquals("policy.analysis_started", started.kvp("event.name"))
+        assertEquals("policy.analysis_completed", completed.kvp("event.name"))
+        assertEquals("CLEAN", completed.kvp("outcome"))
+    }
+
     /** Verifies exact replay and the safe stdout lifecycle pair through the packaged entry point. */
     @Test
     fun `MainKt forwards PII request unchanged and writes detected JSONL audit`() {

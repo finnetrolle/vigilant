@@ -3,6 +3,11 @@
 **ID:** `EPIC-22`
 **Тип:** Epic
 **Статус:** Done
+
+> Исторический completed epic superseded
+> [EPIC-32](epic_32_best_effort_stdout_audit.md). Его дочерние `Done` work items
+> и прошлое evidence сохранены, но описанный durable subsystem удалён из current
+> runtime в VIG-32-02.
 **Приоритет:** High
 **Суммарная оценка:** 15-22 инженерных дня
 **Связанные требования:** `MVP-18`, `MVP-19`, `OUT-06`, `CONC-01`, `CONC-03`

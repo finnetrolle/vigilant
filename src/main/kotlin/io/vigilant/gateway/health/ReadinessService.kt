@@ -9,29 +9,24 @@ import com.linecorp.armeria.server.ServiceRequestContext
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.Inject
 import dev.zacsweers.metro.SingleIn
-import io.vigilant.audit.AuditStore
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Readiness probe of the gateway itself: `GET /readyz` answers `200` while the
  * gateway is ready to serve traffic and `503` once graceful shutdown has
- * started or durable-audit admission is unavailable, and is never forwarded to
- * the upstream. Readiness does not check upstream availability.
- *
- * @param auditStore authoritative admission and health source for mandatory audit acceptance.
+ * started, and is never forwarded to the upstream. Readiness does not check
+ * upstream availability or best-effort stdout logging.
  */
 @SingleIn(AppScope::class)
 @Inject
-class ReadinessService(
-    private val auditStore: AuditStore,
-) : HttpService {
+class ReadinessService : HttpService {
     private val acceptingTraffic = AtomicBoolean(true)
 
     /** Returns whether lifecycle state still permits a new proxy exchange. */
     fun isAcceptingTraffic(): Boolean = acceptingTraffic.get()
 
-    /** Returns composite probe readiness across lifecycle and mandatory audit admission. */
-    fun isReady(): Boolean = isAcceptingTraffic() && auditStore.isAvailableForAdmission()
+    /** Returns probe readiness from the gateway lifecycle state alone. */
+    fun isReady(): Boolean = isAcceptingTraffic()
 
     /**
      * Answers the probe locally without touching the upstream, according to the

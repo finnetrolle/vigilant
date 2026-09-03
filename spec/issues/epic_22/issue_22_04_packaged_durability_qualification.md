@@ -1,6 +1,9 @@
 # VIG-22-04: Packaged durability qualification
 
 **Статус:** Done
+
+> Historical evidence only: qualification surface superseded and removed by
+> [EPIC-32](../../epics/epic_32_best_effort_stdout_audit.md); `Done` is unchanged.
 **Epic:** [EPIC-22](../../epics/epic_22_durable_minimum_audit_trail.md)
 **Ветка:** Production evidence > packaged crash, exhaustion and lifecycle matrix
 **Зависит от:** [VIG-22-02](issue_22_02_request_path_audit_acceptance.md), [VIG-22-03](issue_22_03_collector_handoff_reclaim.md), [VIG-22-05](issue_22_05_audit_exhaustion_admission_mapping.md)

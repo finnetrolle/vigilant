@@ -11,7 +11,6 @@ import com.linecorp.armeria.common.MediaType
 import com.linecorp.armeria.common.RequestHeaders
 import com.linecorp.armeria.common.ResponseHeaders
 import java.time.Duration
-import java.nio.file.Files
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -35,9 +34,9 @@ class ShutdownLifecycleTest {
         fixture.close()
     }
 
-    /** Active traffic drains without request-audit WAL while new traffic is rejected locally. */
+    /** Active traffic drains while new traffic is rejected locally. */
     @Test
-    fun `shutdown drains active stream without request audit WAL and rejects new proxy traffic`() {
+    fun `shutdown drains active stream and rejects new proxy traffic`() {
         val upstreamPaths = CopyOnWriteArrayList<String>()
         val activeWriter = AtomicReference<HttpResponseWriter>()
         val activeStarted = CountDownLatch(1)
@@ -89,14 +88,6 @@ class ShutdownLifecycleTest {
         assertTrue(
             gateway.process.waitFor(PROCESS_EXIT_TIMEOUT.toSeconds(), TimeUnit.SECONDS),
             "gateway did not exit after the active stream drained; output: ${gateway.output()}",
-        )
-        val segmentNames =
-            Files.list(gateway.auditDirectory).use { paths ->
-                paths.map { path -> path.fileName.toString() }.toList()
-            }
-        assertTrue(
-            segmentNames.none { name -> name.endsWith(".wal") || name.endsWith(".active") },
-            "request analysis unexpectedly created durable audit data: $segmentNames",
         )
     }
 

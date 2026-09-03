@@ -10,7 +10,6 @@ import com.linecorp.armeria.common.ResponseHeaders
 import com.linecorp.armeria.server.Server
 import io.vigilant.gateway.config.loadAppConfig
 import java.net.URI
-import java.nio.file.Files
 import java.time.Duration
 import kotlin.concurrent.thread
 import kotlin.test.AfterTest
@@ -113,7 +112,6 @@ class UpstreamTimeoutsTest {
     private fun startGateway(upstream: Server, extraEnv: MutableMap<String, String>.() -> Unit = {}): Server {
         val env = mutableMapOf(
             "VIGILANT_UPSTREAM_URL" to serverUri(upstream).toString(),
-            "VIGILANT_AUDIT_DIRECTORY" to Files.createTempDirectory("vigilant-timeout-audit").toString(),
             "VIGILANT_ENVIRONMENT" to "test",
             "VIGILANT_IDENTITY_MODE" to "DUMMY",
             "VIGILANT_IDENTITY_DUMMY_USER" to "timeout-test-user",

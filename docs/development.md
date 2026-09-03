@@ -26,6 +26,9 @@
 application. `installDist` создаёт локальный runnable distribution в
 `build/install/vigilant/`. `ociArtifact` создаёт reproducible versioned tar в
 `build/distributions/`, который использует Dockerfile.
+`./scripts/installed-distribution-smoke-test` после `installDist` проверяет
+env-only и HOCON startup, readiness, exact request replay, stdout audit и
+graceful shutdown без application-owned audit directory.
 
 `./gradlew build` включает:
 
@@ -167,18 +170,6 @@ request `64 KiB` и пишет safe summary в `build/reports/inspection/load/`.
 production run опубликован в
 [inspection-load-result.md](inspection-load-result.md).
 
-Packaged durability и OCI qualification запускается отдельно:
-
-~~~bash
-./gradlew durabilityQualification
-~~~
-
-Task проверяет installed distribution, OCI restart на том же audit volume,
-decision/exhaustion/crash/recovery/shutdown/Collector matrix и сохраняет
-runtime report в `build/reports/durability/`. Текущий versioned
-[PASS result](durability-qualification-2026-08-31.md) подтверждает полный
-fail-closed matrix, same-volume recovery и payload-free safety boundary.
-
 ## Git hooks
 
 ~~~bash
@@ -210,8 +201,8 @@ pull request и push в `main`:
 - обязательный `build` job;
 - OWASP dependency-check job при наличии repository secret `NVD_API_KEY`.
 
-Mutation testing, PII report/внешний benchmark, OCI smoke, durability
-qualification, JMH baseline, PERF-01, inspection phase/load и SonarQube
+Mutation testing, PII report/внешний benchmark, OCI smoke, JMH baseline,
+PERF-01, inspection phase/load и SonarQube
 pipeline в текущий CI не входят.
 
 ## Поддержка документации

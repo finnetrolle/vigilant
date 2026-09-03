@@ -23,14 +23,11 @@ Response inspection, OpenAI Responses API и enforcement reactions пока не
 Архитектурные схемы оформлены в нотации UML 2.0:
 
 - [диаграмма компонентов исполняемой системы](diagrams/runtime-components.puml)
-  показывает границу процесса, внутренние компоненты, вышестоящий сервер,
-  постоянный том аудита, Collector и внешнее хранилище;
+  показывает границу процесса, внутренние компоненты, вышестоящий сервер и
+  container-managed stdout;
 - [последовательность проверки запроса](diagrams/request-inspection-sequence.puml)
   показывает отсутствие audit до detector execution, stdout lifecycle pair,
   точное воспроизведение и потоковый ответ;
-- [диаграмма состояний жизненного цикла аудита](diagrams/audit-lifecycle-state.puml)
-  показывает переходы `DECISION_CREATED` -> `STORE_OWNED` ->
-  `DURABLY_RETAINED` -> `EXTERNALLY_DELIVERED`.
 
 ### 1. Admission, metrics и tracing
 
@@ -161,31 +158,12 @@ coverage/counts и stable ERROR code либо successful `reaction=ALLOW`.
 
 Оба event идут через existing Logback `AsyncAppender` с `neverBlock=true`.
 Payload, matched text, locators, identity, session, headers и raw
-user-controlled correlation values в них не попадают. Workflow не резервирует,
-не submit-ит и не ждёт
-WAL record, queue delivery, stdout write или `force(true)`. Slow/full/throwing
-logging sink не меняет response и не задерживает upstream handoff.
-
-WAL использует один blocking-safe worker, exclusive directory lock, monotonic
-sequence metadata и active/ready segments. Exact byte bound, age bound и
-graceful close force-ят segment, atomic rename публикует immutable `.wal`, а
-bounded ready manifest публикуется последним. External Collector читает ready
-segments по sequence order и после durable destination acknowledgement
-атомарно публикует ack. Store принимает только contiguous exact prefix,
-force-ит delivered high-water mark и идемпотентно reclaim-ит segment bytes.
-Recovery сохраняет complete valid unacknowledged frames, завершает прерванный
-reclaim и отбрасывает partial или checksum-invalid active tail. File I/O,
-digest, ack watcher, seal, force и reclaim работают на том же store-owned
-worker, а не на Netty event loop. Публичный adapter описан в
-[Collector file handoff](audit-collector-file-handoff.md), нормативная модель -
-в [minimum audit trail contract](../spec/MINIMUM_AUDIT_TRAIL_CONTRACT.md).
-
-До VIG-32-02 `LocalAuditStore`, WAL/Collector handoff и composite audit
-readiness остаются transitional runtime components. Они больше не получают
-request-analysis records и не участвуют в `PiiShadowProxyService` workflow.
-Исторический packaged
-[durability qualification](durability-qualification-2026-08-31.md) отделён от
-текущего request audit contract.
+user-controlled correlation values в них не попадают. Эти request-analysis records
+остаются только в stdout; workflow не ждёт queue delivery или stdout write.
+Slow/full/throwing logging sink не меняет response, readiness или upstream
+handoff. Application-owned audit storage, delivery worker и persistence
+configuration отсутствуют; retention, rotation и delivery stdout принадлежат
+container runtime и deployment.
 
 `ReplayReadyRequest` инкапсулирует demand-driven publisher. Его `transferTo`
 допускает ровно один transport handoff. `close()` до
@@ -217,7 +195,6 @@ configured concurrent-source limit. Policy detector waits и deadlines такж�
 | Resource | Owner | Ограничение или lifecycle |
 |---|---|---|
 | Request bodies | `RequestSourceQuota` | byte/owner/segment limits из configuration |
-| Durable audit | `LocalAuditStore` | pending/retained/segment/manifest bounds, ready handoff, contiguous ack/reclaim, exclusive persistent directory |
 | Inspection orchestration | `InspectionResources` | virtual-thread executor |
 | Fast PII CPU | `InspectionResources` | bounded fixed-size pool и bounded queue |
 | Upstream connections | `UpstreamClientResources` | dedicated Armeria `ClientFactory` |
@@ -226,18 +203,16 @@ configured concurrent-source limit. Policy detector waits и deadlines такж�
 ## Startup и shutdown
 
 `MainKt` через Metro создаёт dependency graph и до старта server eagerly
-проверяет application configuration, immutable policy snapshot, открывает,
-lock-ит и восстанавливает audit store. Ошибка печатается безопасно в stderr и
-завершает процесс с code `2`.
+проверяет application configuration и immutable policy snapshot. Ошибка
+печатается безопасно в stderr и завершает процесс с code `2`.
 
 При `SIGTERM` shutdown hook выполняет порядок:
 
-1. readiness становится `503`, новые audit admissions и traffic запрещаются;
+1. readiness становится `503`, новый traffic запрещается;
 2. Armeria server выполняет bounded graceful drain;
-3. pending audit appends завершаются, active segment seal-ится, store закрывается;
-4. закрываются inspection executors;
-5. закрывается upstream connection factory;
-6. traces и metrics flush-ятся и закрываются.
+3. закрываются inspection executors;
+4. закрывается upstream connection factory;
+5. traces и metrics flush-ятся и закрываются.
 
 Quiet period и force timeout настраиваются. Полный операторский контракт
 описан в [deployment guide](deployment.md), telemetry - в
@@ -251,7 +226,6 @@ Quiet period и force timeout настраиваются. Полный опер�
 |---|---|
 | Composition и lifecycle | `gateway/Main.kt`, `gateway/AppComponent.kt` |
 | Application configuration | `gateway/config/AppConfig.kt` |
-| Durable audit WAL | `audit/*` |
 | Admission и probes | `gateway/health/*` |
 | Request inspection | `gateway/proxy/PiiShadowProxyService.kt`, `ShadowInspectionWorkflow.kt`, `ReplayReadyRequest.kt`, `InspectionResources.kt` |
 | Transport proxy | `gateway/proxy/BypassProxyService.kt`, `UpstreamClientResources.kt` |

@@ -2,7 +2,7 @@
 
 **ID:** `EPIC-32`
 **Тип:** Epic
-**Статус:** In progress
+**Статус:** Done
 **Приоритет:** High
 **Суммарная оценка:** 7-10 инженерных дней
 **Связанные требования:** `MVP-06`, `OBS-01`, `OBS-02`
@@ -77,7 +77,7 @@ VIG-32-01 Stdout request audit migration
 ## Дочерние issues
 
 - [x] [VIG-32-01: Stdout request audit migration](../issues/epic_32/issue_32_01_stdout_request_audit_migration.md) - `Done`
-- [ ] [VIG-32-02: Durable audit removal](../issues/epic_32/issue_32_02_durable_audit_removal.md) - `Ready for implementation`
+- [x] [VIG-32-02: Durable audit removal](../issues/epic_32/issue_32_02_durable_audit_removal.md) - `Done`
 
 ## Не входит
 

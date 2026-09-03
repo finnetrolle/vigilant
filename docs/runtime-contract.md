@@ -89,7 +89,7 @@ content-bearing structure обрабатываются fail-closed и не до�
 | Некорректный request source, включая несовпадение `Content-Length` | `400` | `{"error":"invalid_request_source"}` |
 | Per-request byte limit | `413` | `{"error":"request_too_large"}` |
 | Owner/global retained capacity | `503` | `{"error":"inspection_capacity_exhausted"}` |
-| Inspection executor admission failure | `503` | `{"error":"audit_unavailable"}` |
+| Inspection executor admission failure | `503` | `{"error":"inspection_capacity_exhausted"}` |
 | Непредвиденный inspection failure | `500` | `{"error":"inspection_failed"}` |
 
 Descriptor проверяется до identity и body demand. Некорректный session ID
@@ -99,26 +99,11 @@ request audit. Когда после selection действительно нач
 execution, gateway best-effort публикует в existing non-blocking JSONL stdout
 ровно одну пару `policy.analysis_started` и `policy.analysis_completed`.
 Terminal event появляется до разрешённого upstream handoff, но request path не
-резервирует audit record, не submit-ит его в WAL и не ожидает write, `force(true)`
-или delivery. Logging overload или failure не меняет исходный stable response
-и не запрещает upstream.
+ждёт queue delivery, stdout write или external delivery. Logging overload или
+failure не меняет исходный stable response и не запрещает upstream.
 
-До VIG-32-02 transitional LocalAuditStore, его readiness integration и
-Collector handoff остаются в процессе, но request analysis больше не создаёт в
-нём records и не проверяет его capacity перед body demand. Active WAL segment
-становится ready по exact byte bound, age bound или graceful close. Collector
-читает immutable ready segments через документированный
-[file handoff](audit-collector-file-handoff.md) и публикует ack только после
-durable retention всего segment во внешнем destination. Valid contiguous ack
-разрешает asynchronous reclaim. Outage Collector не меняет request
-outcome или upstream handoff, но после исчерпания
-`audit-max-retained-bytes` transitional `/readyz` остаётся `503` до valid
-ack/reclaim.
-
-Packaged [qualification 2026-08-31](durability-qualification-2026-08-31.md)
-подтверждает прежний durable request contract и не описывает
-текущую request path после VIG-32-01. Lifecycle shutdown независимо
-сохраняет plain `503 draining` для нового traffic.
+Application-owned audit persistence и delivery отсутствуют. Lifecycle shutdown
+независимо сохраняет plain `503 draining` для нового traffic.
 
 Policy deadline или typed detector error отражается как outcome `ERROR` со
 stable `error.code` и без reaction. Current shadow policy не блокирует request,
@@ -164,14 +149,12 @@ environment variables перечислены в
 ## Health и shutdown
 
 - `GET /healthz` возвращает `200`, пока server принимает соединения.
-- `GET /readyz` до VIG-32-02 возвращает `200` только при доступном
-  transitional audit store; `503` означает draining, exhausted store
-  capacity или store health failure, но не блокирует уже admitted request.
+- `GET /readyz` возвращает `200` в serving lifecycle state; `503` означает
+  graceful shutdown/draining и не блокирует уже admitted request.
 - Probes принадлежат gateway и никогда не проксируются upstream.
 - Readiness не проверяет доступность upstream.
 
-При SIGTERM readiness сначала переключается на `503`, новые proxy exchanges и
-store admissions запрещаются, а active exchanges получают время на drain. После
-drain gateway force-ит pending audit records, seal-ит active segment, затем
+При SIGTERM readiness сначала переключается на `503`, новые proxy exchanges
+запрещаются, а active exchanges получают время на drain. После drain gateway
 закрывает inspection, upstream и telemetry resources. Quiet period и force
 timeout конфигурируются через `VIGILANT_SHUTDOWN_*`.

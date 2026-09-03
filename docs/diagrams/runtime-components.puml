@@ -5,9 +5,6 @@ left to right direction
 
 actor "Клиент" as Client
 cloud "Вышестоящий сервер OpenAI" as Upstream
-component "Внешний Audit Collector" as Collector
-database "Постоянный том аудита" as AuditVolume
-database "Внешнее хранилище аудита" as AuditDestination
 cloud "Container-managed stdout" as Stdout
 
 node "Процесс Vigilant" as Vigilant {
@@ -23,7 +20,6 @@ node "Процесс Vigilant" as Vigilant {
   component "fast-pii adapter и recognizers" as FastPii
   component "Generic windowing core" as Windowing
   component "ShadowAuditLogger\nLogback AsyncAppender" as AuditLogger
-  component "LocalAuditStore" as AuditStore
   component "ReplayReadyRequest" as Replay
   component "BypassProxyService" as Transport
 }
@@ -41,25 +37,15 @@ PolicyEngine --> FastPii : независимые фрагменты
 FastPii --> Windowing : capability и detector contract
 Workflow --> AuditLogger : started/completed\nbest-effort pair
 AuditLogger --> Stdout : non-blocking JSONL
-AuditStore --> AuditVolume : запись WAL и force(true)
 Workflow --> Replay : решение Forward
 Replay --> Transport : одноразовая передача владения
 Transport --> Upstream : точное воспроизведение запроса
 Upstream --> Transport : потоковый ответ
 Transport --> Client : сквозной ответ
 
-Collector --> AuditVolume : чтение манифеста ready и WAL\nзапись долговечного ack
-Collector --> AuditDestination : доставка не менее одного раза
-AuditStore --> AuditVolume : непрерывный ack и освобождение
-
 note bottom of ShadowProxy
 Проверяются только запросы POST /v1/chat/completions
 с медиатипом application/json.
-end note
-
-note bottom of AuditStore
-Transitional до VIG-32-02.
-Request analysis records сюда не пишет.
 end note
 
 note bottom of Transport

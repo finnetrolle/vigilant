@@ -3,43 +3,20 @@
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$PROJECT_DIR/scripts/lib/packaged-smoke-helpers"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/vigilant-oci-smoke.XXXXXX")"
 IMAGE_TAG="vigilant:smoke-$$"
 CONTAINER_NAME="vigilant-smoke-$$"
-CONFIG_CONTAINER_NAME="${CONTAINER_NAME}-config"
-RECOVERY_CONTAINER_NAME="${CONTAINER_NAME}-recovery"
-INVALID_CONTAINER_NAME="${CONTAINER_NAME}-invalid"
-INVALID_POLICY_CONTAINER_NAME="${CONTAINER_NAME}-invalid-policy"
-UPSTREAM_CONTROL_DIR="$TMP_DIR/upstream-control"
-OCI_AUDIT_DIR="$TMP_DIR/oci-audit"
-OCI_EXTERNAL_DIR="$TMP_DIR/oci-external"
-OCI_COLLECTOR_CONTROL_DIR="$TMP_DIR/oci-collector-control"
+UPSTREAM_PORT=18181
 UPSTREAM_PID=""
-COLLECTOR_PID=""
 CONTAINER_ID=""
-CONFIG_CONTAINER_ID=""
-RECOVERY_CONTAINER_ID=""
 
 cleanup() {
     if [[ -n "$CONTAINER_ID" ]]; then
-        docker rm --force --volumes "$CONTAINER_ID" >/dev/null 2>&1 || true
+        docker rm --force "$CONTAINER_ID" >/dev/null 2>&1 || true
     fi
-    if [[ -n "$CONFIG_CONTAINER_ID" ]]; then
-        docker rm --force --volumes "$CONFIG_CONTAINER_ID" >/dev/null 2>&1 || true
-    fi
-    if [[ -n "$RECOVERY_CONTAINER_ID" ]]; then
-        docker rm --force "$RECOVERY_CONTAINER_ID" >/dev/null 2>&1 || true
-    fi
-    docker rm --force "$RECOVERY_CONTAINER_NAME" >/dev/null 2>&1 || true
-    docker rm --force --volumes "$INVALID_CONTAINER_NAME" >/dev/null 2>&1 || true
-    docker rm --force --volumes "$INVALID_POLICY_CONTAINER_NAME" >/dev/null 2>&1 || true
     if [[ -n "$UPSTREAM_PID" ]]; then
-        kill "$UPSTREAM_PID" >/dev/null 2>&1 || true
-        wait "$UPSTREAM_PID" >/dev/null 2>&1 || true
-    fi
-    if [[ -n "$COLLECTOR_PID" ]]; then
-        kill "$COLLECTOR_PID" >/dev/null 2>&1 || true
-        wait "$COLLECTOR_PID" >/dev/null 2>&1 || true
+        smoke_stop_process "$UPSTREAM_PID" "Armeria smoke upstream" "$TMP_DIR/upstream.log" || true
     fi
     docker image rm --force "$IMAGE_TAG" >/dev/null 2>&1 || true
     rm -rf "$TMP_DIR"
@@ -47,364 +24,86 @@ cleanup() {
 
 trap cleanup EXIT
 
-for COMMAND in curl docker python3; do
+for COMMAND in curl docker java python3; do
     if ! command -v "$COMMAND" >/dev/null 2>&1; then
         echo "$COMMAND is required for the OCI smoke test" >&2
         exit 1
     fi
 done
 
-await_gateway() {
-    local gateway_port="$1"
-    for _ in {1..120}; do
-        if curl --fail --silent "http://127.0.0.1:$gateway_port/healthz" >/dev/null &&
-            curl --fail --silent "http://127.0.0.1:$gateway_port/readyz" >/dev/null; then
-            return
-        fi
-        sleep 0.25
-    done
-    curl --fail --silent "http://127.0.0.1:$gateway_port/healthz" >/dev/null
-    curl --fail --silent "http://127.0.0.1:$gateway_port/readyz" >/dev/null
-}
-
-await_path() {
-    local path="$1"
-    local required_state="$2"
-    local attempts="$3"
-    local attempt
-    for ((attempt = 0; attempt < attempts; attempt++)); do
-        if [[ "$required_state" == "nonempty" && -s "$path" ]] ||
-            [[ "$required_state" == "present" && -f "$path" ]]; then
-            return
-        fi
-        sleep 0.25
-    done
-    if [[ "$required_state" == "nonempty" ]]; then
-        test -s "$path"
-    else
-        test -f "$path"
-    fi
-}
-
-await_http_ok() {
-    local endpoint="$1"
-    local attempts="$2"
-    local attempt
-    for ((attempt = 0; attempt < attempts; attempt++)); do
-        if curl --fail --silent "$endpoint" >/dev/null; then
-            return
-        fi
-        sleep 0.25
-    done
-    curl --fail --silent "$endpoint" >/dev/null
-}
-
-shadow_log_is_valid() {
-    local log_file="$1"
-    python3 - "$log_file" <<'PY'
-import json
-import pathlib
-import sys
-
-text = pathlib.Path(sys.argv[1]).read_text(errors="replace")
-if "oci-secret@example.com" in text:
-    raise SystemExit("sensitive request content appeared in container logs")
-
-events = []
-for line in text.splitlines():
-    try:
-        node = json.loads(line)
-    except json.JSONDecodeError:
-        continue
-    pairs = node.get("kvpList", [])
-    values = {key: str(value) for pair in pairs for key, value in pair.items()}
-    if values.get("event.name") == "policy.shadow_decision":
-        events.append(values)
-
-if len(events) != 1:
-    raise SystemExit("expected one policy.shadow_decision JSONL event")
-expected = {
-    "protocol": "openai.chat_completions",
-    "phase": "REQUEST",
-    "decision": "DETECTED",
-    "disposition": "ALLOW",
-    "coverage": "FULLY_INSPECTABLE",
-    "detector.id": "fast-pii",
-    "detector.version": "fast-pii@1",
-    "findings.by_type": "EMAIL_ADDRESS:1",
-}
-mismatches = {
-    key: (expected_value, events[0].get(key))
-    for key, expected_value in expected.items()
-    if events[0].get(key) != expected_value
-}
-if mismatches:
-    raise SystemExit(f"unexpected shadow audit fields: {mismatches}")
-PY
-}
-
-assert_shadow_exchange() {
-    local container_id="$1"
-    local gateway_port="$2"
-    local log_file="$3"
-    local response_file="$4"
-
-    curl --fail --silent --show-error \
-        --request POST \
-        --header 'content-type: application/json' \
-        --header 'authorization: Bearer oci-dummy-token' \
-        --header 'x-vigilant-qualification-case: oci-shadow' \
-        --data-binary "@$TMP_DIR/request.json" \
-        --output "$response_file" \
-        "http://127.0.0.1:$gateway_port/v1/chat/completions?oci=kept"
-    REQUEST_BYTES="$(wc -c <"$TMP_DIR/request.json" | tr -d '[:space:]')"
-    UPSTREAM_BYTES="$(curl --fail --silent "http://127.0.0.1:$UPSTREAM_PORT/control/bytes/oci-shadow")"
-    if [[ "$UPSTREAM_BYTES" != "$REQUEST_BYTES" ]]; then
-        echo "OCI gateway did not replay the exact request byte count" >&2
-        exit 1
-    fi
-    UPSTREAM_EXACT="$(curl --fail --silent "http://127.0.0.1:$UPSTREAM_PORT/control/exact/oci-shadow")"
-    if [[ "$UPSTREAM_EXACT" != "true" ]]; then
-        echo "OCI gateway did not replay the request body byte-for-byte" >&2
-        exit 1
-    fi
-    if [[ "$(<"$response_file")" != '{"qualification":"ok"}' ]]; then
-        echo "unexpected proxied response: $(<"$response_file")" >&2
-        exit 1
-    fi
-
-    for _ in {1..40}; do
-        docker logs "$container_id" >"$log_file" 2>&1
-        if shadow_log_is_valid "$log_file" 2>/dev/null; then
-            break
-        fi
-        sleep 0.25
-    done
-
-    shadow_log_is_valid "$log_file"
+refresh_container_log() {
+    docker logs "$CONTAINER_ID" >"$TMP_DIR/container.log" 2>&1
 }
 
 cd "$PROJECT_DIR"
 if [[ "${VIGILANT_SKIP_OCI_ARTIFACT:-0}" != "1" ]]; then
-    ./gradlew --no-daemon ociArtifact
+    ./gradlew --no-daemon compileGatlingJava installDist ociArtifact
+else
+    ./gradlew --no-daemon compileGatlingJava installDist
 fi
-
-ARTIFACT="$(find build/distributions -maxdepth 1 -type f -name 'vigilant-*.tar' -print -quit)"
-if [[ -z "$ARTIFACT" ]]; then
-    echo "ociArtifact did not produce build/distributions/vigilant-<version>.tar" >&2
-    exit 1
-fi
-
+smoke_require_available_non_ephemeral_port "$UPSTREAM_PORT" "Armeria smoke upstream"
 cp politics.conf.example "$TMP_DIR/politics.conf"
 chmod 0444 "$TMP_DIR/politics.conf"
-printf '%s' \
-    '{ "model":"gpt-test", "messages":[{"role":"user","content":"contact oci-secret@example.com"}], "unknown":{"keep":true} }' \
-    >"$TMP_DIR/request.json"
-POLICY_CONFIG_ARGS=(
-    --env VIGILANT_POLITICS_CONFIG=/etc/vigilant/politics.conf
-    --mount "type=bind,src=$TMP_DIR/politics.conf,dst=/etc/vigilant/politics.conf,readonly"
-)
-RUNTIME_ARGS=(
-    --env "JAVA_OPTS=$VIGILANT_QUALIFICATION_JAVA_OPTIONS"
-    --env VIGILANT_ENVIRONMENT=test
-    --env VIGILANT_IDENTITY_MODE=DUMMY
-    --env VIGILANT_IDENTITY_DUMMY_USER=oci-user
-)
-: "${VIGILANT_QUALIFICATION_JAVA:?qualification Java executable is required}"
-: "${VIGILANT_QUALIFICATION_CLASSPATH:?qualification classpath is required}"
-: "${VIGILANT_QUALIFICATION_JAVA_OPTIONS:?qualification JVM options are required}"
-mkdir -p "$UPSTREAM_CONTROL_DIR" "$OCI_AUDIT_DIR" "$OCI_EXTERNAL_DIR" "$OCI_COLLECTOR_CONTROL_DIR"
-chmod 0777 "$OCI_AUDIT_DIR" "$OCI_EXTERNAL_DIR" "$OCI_COLLECTOR_CONTROL_DIR"
-read -r -a QUALIFICATION_JAVA_OPTIONS <<<"$VIGILANT_QUALIFICATION_JAVA_OPTIONS"
-"$VIGILANT_QUALIFICATION_JAVA" \
-    "${QUALIFICATION_JAVA_OPTIONS[@]}" \
-    -cp "$VIGILANT_QUALIFICATION_CLASSPATH" \
-    io.vigilant.durability.DurabilityQualificationUpstreamMain \
-    0 \
-    "$UPSTREAM_CONTROL_DIR" \
-    "$TMP_DIR/request.json" \
-    >"$TMP_DIR/upstream.log" 2>&1 &
-UPSTREAM_PID="$!"
-
-await_path "$UPSTREAM_CONTROL_DIR/upstream.port" nonempty 40
-UPSTREAM_PORT="$(<"$UPSTREAM_CONTROL_DIR/upstream.port")"
-await_http_ok "http://127.0.0.1:$UPSTREAM_PORT/healthz" 40
+smoke_write_detected_request "$TMP_DIR/request.json" "oci-secret@example.com"
 
 docker build --tag "$IMAGE_TAG" .
-IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$IMAGE_TAG")"
+smoke_start_armeria_upstream "$PROJECT_DIR" "$UPSTREAM_PORT" "$TMP_DIR/upstream.log"
+UPSTREAM_PID="$SMOKE_STARTED_PROCESS_PID"
 
 CONTAINER_UID="$(docker run --rm --entrypoint /usr/bin/id "$IMAGE_TAG" -u)"
 if [[ "$CONTAINER_UID" == "0" ]]; then
     echo "OCI image must not run as root" >&2
     exit 1
 fi
+if [[ "$(docker image inspect --format '{{json .Config.Volumes}}' "$IMAGE_TAG")" != "null" ]]; then
+    echo "OCI image must not declare a persistent volume" >&2
+    exit 1
+fi
+if docker image inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$IMAGE_TAG" |
+    grep -q '^VIGILANT_AUDIT_'; then
+    echo "OCI image must not declare durable-audit environment settings" >&2
+    exit 1
+fi
+docker run --rm --entrypoint /bin/sh "$IMAGE_TAG" -c 'test ! -e /var/lib/vigilant/audit'
 
 CONTAINER_ID="$(
     docker run --detach \
         --name "$CONTAINER_NAME" \
         --add-host host.docker.internal:host-gateway \
         --env "VIGILANT_UPSTREAM_URL=http://host.docker.internal:$UPSTREAM_PORT" \
-        "${RUNTIME_ARGS[@]}" \
-        "${POLICY_CONFIG_ARGS[@]}" \
-        --mount "type=bind,src=$OCI_AUDIT_DIR,dst=/var/lib/vigilant/audit" \
+        --env VIGILANT_ENVIRONMENT=test \
+        --env VIGILANT_IDENTITY_MODE=DUMMY \
+        --env VIGILANT_IDENTITY_DUMMY_USER=oci-user \
+        --env VIGILANT_OTLP_ENABLED=false \
+        --env VIGILANT_POLITICS_CONFIG=/etc/vigilant/politics.conf \
+        --mount "type=bind,src=$TMP_DIR/politics.conf,dst=/etc/vigilant/politics.conf,readonly" \
         --publish 127.0.0.1::8080 \
         "$IMAGE_TAG"
 )"
 GATEWAY_PORT="$(docker port "$CONTAINER_ID" 8080/tcp | sed -E 's/.*:([0-9]+)$/\1/' | head -n 1)"
 
-await_gateway "$GATEWAY_PORT"
-POLICY_MOUNT_RW="$(
-    docker inspect --format \
-        '{{range .Mounts}}{{if eq .Destination "/etc/vigilant/politics.conf"}}{{.RW}}{{end}}{{end}}' \
-        "$CONTAINER_ID"
-)"
-if [[ "$POLICY_MOUNT_RW" != "false" ]]; then
-    echo "policy configuration mount must be read-only" >&2
-    exit 1
-fi
-assert_shadow_exchange "$CONTAINER_ID" "$GATEWAY_PORT" "$TMP_DIR/env-container.log" "$TMP_DIR/env-response.json"
+smoke_await_http "" "http://127.0.0.1:$GATEWAY_PORT/healthz" "" "OCI gateway health"
+smoke_await_http "" "http://127.0.0.1:$GATEWAY_PORT/readyz" "" "OCI gateway readiness"
+smoke_proxy_exact_request \
+    "http://127.0.0.1:$GATEWAY_PORT" \
+    "$TMP_DIR/request.json" \
+    "$TMP_DIR/response.json" \
+    "oci-dummy-token" \
+    "oci-smoke" \
+    "proxied OCI"
+smoke_await_stdout_audit \
+    "$TMP_DIR/container.log" \
+    "oci-secret@example.com" \
+    "OCI gateway" \
+    refresh_container_log
 
 docker stop --timeout 35 "$CONTAINER_ID" >/dev/null
 STOP_EXIT_CODE="$(docker inspect --format '{{.State.ExitCode}}' "$CONTAINER_ID")"
 if [[ "$STOP_EXIT_CODE" != "0" && "$STOP_EXIT_CODE" != "143" ]]; then
-    echo "gateway stopped with unexpected exit code $STOP_EXIT_CODE; expected 0 or SIGTERM code 143" >&2
+    echo "gateway stopped with unexpected exit code $STOP_EXIT_CODE" >&2
     exit 1
 fi
 docker rm "$CONTAINER_ID" >/dev/null
 CONTAINER_ID=""
 
-RECOVERY_CONTAINER_ID="$(
-    docker run --detach \
-        --name "$RECOVERY_CONTAINER_NAME" \
-        --add-host host.docker.internal:host-gateway \
-        --env "VIGILANT_UPSTREAM_URL=http://host.docker.internal:$UPSTREAM_PORT" \
-        "${RUNTIME_ARGS[@]}" \
-        "${POLICY_CONFIG_ARGS[@]}" \
-        --mount "type=bind,src=$OCI_AUDIT_DIR,dst=/var/lib/vigilant/audit" \
-        --publish 127.0.0.1::8080 \
-        "$IMAGE_TAG"
-)"
-RECOVERY_GATEWAY_PORT="$(
-    docker port "$RECOVERY_CONTAINER_ID" 8080/tcp | sed -E 's/.*:([0-9]+)$/\1/' | head -n 1
-)"
-await_gateway "$RECOVERY_GATEWAY_PORT"
-RECOVERED_WAL_COUNT="$(
-    docker exec "$RECOVERY_CONTAINER_ID" \
-        /bin/sh -c 'find /var/lib/vigilant/audit -maxdepth 1 -type f -name "*.wal" | wc -l' \
-        | tr -d '[:space:]'
-)"
-if [[ "$RECOVERED_WAL_COUNT" -lt 1 ]]; then
-    echo "OCI restart did not recover the persistent WAL segment" >&2
-    exit 1
-fi
-"$VIGILANT_QUALIFICATION_JAVA" \
-    "${QUALIFICATION_JAVA_OPTIONS[@]}" \
-    -cp "$VIGILANT_QUALIFICATION_CLASSPATH" \
-    io.vigilant.durability.DurabilityFakeCollectorMain \
-    "$OCI_AUDIT_DIR" \
-    "$OCI_EXTERNAL_DIR" \
-    "$OCI_COLLECTOR_CONTROL_DIR" \
-    1 \
-    >"$TMP_DIR/oci-collector.log" 2>&1 &
-COLLECTOR_PID="$!"
-await_path "$OCI_COLLECTOR_CONTROL_DIR/stored-1" present 120
-printf '%s' continue >"$OCI_COLLECTOR_CONTROL_DIR/allow-ack-1"
-await_path "$OCI_COLLECTOR_CONTROL_DIR/acked-1" present 120
-wait "$COLLECTOR_PID"
-COLLECTOR_PID=""
-docker stop --timeout 35 "$RECOVERY_CONTAINER_ID" >/dev/null
-docker rm "$RECOVERY_CONTAINER_ID" >/dev/null
-RECOVERY_CONTAINER_ID=""
-
-printf '%s\n' \
-    'vigilant {' \
-    "  upstream-url = \"http://host.docker.internal:$UPSTREAM_PORT\"" \
-    '  environment = "test"' \
-    '  identity-mode = "DUMMY"' \
-    '  identity-dummy-user = "oci-user"' \
-    '  port = 8080' \
-    '}' \
-    >"$TMP_DIR/vigilant.conf"
-chmod 0444 "$TMP_DIR/vigilant.conf"
-
-CONFIG_CONTAINER_ID="$(
-    docker run --detach \
-        --name "$CONFIG_CONTAINER_NAME" \
-        --add-host host.docker.internal:host-gateway \
-        "${RUNTIME_ARGS[@]}" \
-        --mount "type=bind,src=$TMP_DIR/vigilant.conf,dst=/etc/vigilant/vigilant.conf,readonly" \
-        "${POLICY_CONFIG_ARGS[@]}" \
-        --publish 127.0.0.1::8080 \
-        "$IMAGE_TAG"
-)"
-CONFIG_MOUNT_RW="$(
-    docker inspect --format \
-        '{{range .Mounts}}{{if eq .Destination "/etc/vigilant/vigilant.conf"}}{{.RW}}{{end}}{{end}}' \
-        "$CONFIG_CONTAINER_ID"
-)"
-if [[ "$CONFIG_MOUNT_RW" != "false" ]]; then
-    echo "configuration file mount must be read-only" >&2
-    exit 1
-fi
-CONFIG_GATEWAY_PORT="$(
-    docker port "$CONFIG_CONTAINER_ID" 8080/tcp | sed -E 's/.*:([0-9]+)$/\1/' | head -n 1
-)"
-await_gateway "$CONFIG_GATEWAY_PORT"
-assert_shadow_exchange \
-    "$CONFIG_CONTAINER_ID" \
-    "$CONFIG_GATEWAY_PORT" \
-    "$TMP_DIR/file-container.log" \
-    "$TMP_DIR/file-response.json"
-docker stop --timeout 35 "$CONFIG_CONTAINER_ID" >/dev/null
-docker rm --volumes "$CONFIG_CONTAINER_ID" >/dev/null
-CONFIG_CONTAINER_ID=""
-
-set +e
-docker run --name "$INVALID_CONTAINER_NAME" \
-    --env VIGILANT_UPSTREAM_URL=ftp://invalid.example \
-    "${RUNTIME_ARGS[@]}" \
-    "${POLICY_CONFIG_ARGS[@]}" \
-    "$IMAGE_TAG" >"$TMP_DIR/invalid-config.log" 2>&1
-INVALID_CONFIG_EXIT="$?"
-set -e
-if [[ "$INVALID_CONFIG_EXIT" != "2" ]]; then
-    echo "invalid application configuration exited with $INVALID_CONFIG_EXIT instead of 2" >&2
-    sed -n '1,80p' "$TMP_DIR/invalid-config.log" >&2
-    exit 1
-fi
-if grep -q 'invalid.example' "$TMP_DIR/invalid-config.log"; then
-    echo "invalid application configuration leaked its raw value" >&2
-    exit 1
-fi
-docker rm --volumes "$INVALID_CONTAINER_NAME" >/dev/null
-
-sed 's/id = "default-request-pii"/id = "secret-policy-value"/; s/disposition = "ALLOW"/disposition = "BLOCK"/' \
-    politics.conf.example >"$TMP_DIR/invalid-politics.conf"
-chmod 0444 "$TMP_DIR/invalid-politics.conf"
-set +e
-docker run --name "$INVALID_POLICY_CONTAINER_NAME" \
-    --env "VIGILANT_UPSTREAM_URL=http://host.docker.internal:$UPSTREAM_PORT" \
-    "${RUNTIME_ARGS[@]}" \
-    --env VIGILANT_POLITICS_CONFIG=/etc/vigilant/politics.conf \
-    --mount "type=bind,src=$TMP_DIR/invalid-politics.conf,dst=/etc/vigilant/politics.conf,readonly" \
-    "$IMAGE_TAG" >"$TMP_DIR/invalid-policy.log" 2>&1
-INVALID_POLICY_EXIT="$?"
-set -e
-if [[ "$INVALID_POLICY_EXIT" != "2" ]]; then
-    echo "invalid policy configuration exited with $INVALID_POLICY_EXIT instead of 2" >&2
-    sed -n '1,80p' "$TMP_DIR/invalid-policy.log" >&2
-    exit 1
-fi
-if grep -q 'secret-policy-value' "$TMP_DIR/invalid-policy.log"; then
-    echo "invalid policy configuration leaked its sensitive policy ID" >&2
-    exit 1
-fi
-docker rm --volumes "$INVALID_POLICY_CONTAINER_NAME" >/dev/null
-
-echo "OCI_IMAGE_ID=$IMAGE_ID"
-echo "OCI_LAUNCHED=true"
-echo "OCI_FIXED_JVM_SETTINGS=true"
-echo "OCI_PERSISTENT_RESTART=true"
-echo "OCI_REAL_ARMERIA_UPSTREAM=true"
-echo "OCI_SEPARATE_COLLECTOR_PROCESS=true"
-echo "OCI smoke passed: artifact, fixed JVM, persistent audit restart, real Armeria upstream, separate Collector, env/file config, read-only policy, health/readiness, exact shadow forwarding, JSONL audit, non-root, invalid config, SIGTERM"
+echo "OCI smoke test passed: stateless startup, readiness, exact proxy handoff, stdout audit, and shutdown verified"

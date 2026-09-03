@@ -24,11 +24,9 @@
   цикл.
 - [Контракт исполнения](runtime-contract.md) - результаты HTTP-запросов,
   тайм-ауты, проверки состояния и завершение работы.
-- [Развёртывание](deployment.md) - дистрибутив, OCI и постоянный том аудита.
+- [Развёртывание](deployment.md) - дистрибутив, stateless OCI и lifecycle.
 - [Наблюдаемость](observability.md) - JSON Lines, трассировка, метрики и
   безопасный аудит.
-- [Файловая передача в Audit Collector](audit-collector-file-handoff.md) -
-  независимый от поставщика протокол ready/ack.
 - [Разработка](development.md) - сборка, тесты, контроль качества и CI.
 
 ## Требования и архитектурные схемы
@@ -51,7 +49,7 @@
 
 - [Результат нагрузочного теста проверки](inspection-load-result.md);
 - [Квалификация ресурсов проверки](inspection-resource-qualification-2026-08-30.md);
-- [Квалификация долговечности](durability-qualification-2026-08-31.md);
+- [Superseded историческая квалификация долговечности](durability-qualification-2026-08-31.md);
 - [Методика PERF-01](perf-01-load-test.md) и [результаты](perf-01-result.md);
 - [Архитектурное ревью от 2026-08-29](architecture-review-2026-08-29.md);
 - [Историческое ревью v0 от 2026-08-23](architecture-review-2026-08-23.md).

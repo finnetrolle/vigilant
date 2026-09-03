@@ -30,6 +30,15 @@ response contracts.
 - Identity documentation после решения VIG-35.
 - Response terminology после VIG-20-04.
 
+## Результат завершённой зависимости VIG-32-02
+
+VIG-32-02 удалил durable-audit runtime и его прямые current configuration,
+packaging, qualification, documentation и UML consumers. Completed EPIC-21/22,
+исторический durable contract и versioned qualification report сохранены со
+superseded pointers и не являются current runtime navigation. VIG-36 не должен
+повторно удалять или менять их прошлый `Done` status/evidence; его более широкий
+inventory остаётся заблокирован VIG-20-04 и VIG-35.
+
 ## Правило сохранения истории
 
 - Completed epic/issue files не удаляются и не переписываются так, будто их

@@ -20,7 +20,7 @@
 | `MVP-03` | Не реализовано | Runtime разрешает только `ALLOW`; `MASK` и `BLOCK` transport enforcement отсутствуют. |
 | `MVP-04` | Частично | Startup policy snapshot и group matching существуют, но новая direction/group contract и startup policy logging отсутствуют. |
 | `MVP-05` | Не реализовано | Есть Dummy и offline JWT extractors; external Bearer lookup и cache отсутствуют. |
-| `MVP-06` | Частично | REQUEST analysis публикует safe best-effort started/completed pair через existing non-blocking stdout без durable acknowledgement; RESPONSE pair остаётся future EPIC-20 behavior, а transitional WAL удаляется в VIG-32-02. |
+| `MVP-06` | Частично | REQUEST analysis публикует safe best-effort started/completed pair через existing non-blocking stdout без application-owned persistence; RESPONSE pair остаётся future EPIC-20 behavior. |
 | `MVP-07` | Частично | Поддержан только Chat Completions request path; response inspection и enforcement отсутствуют. |
 
 ## Нефункциональные требования MVP

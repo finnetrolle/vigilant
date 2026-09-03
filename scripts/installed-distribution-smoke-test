@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$PROJECT_DIR/scripts/lib/packaged-smoke-helpers"
+VIGILANT_BIN="$PROJECT_DIR/build/install/vigilant/bin/vigilant"
+TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/vigilant-installed-smoke.XXXXXX")"
+GATEWAY_PORT_ENV=18180
+GATEWAY_PORT_HOCON=18182
+UPSTREAM_PORT=18181
+UPSTREAM_PID=""
+GATEWAY_PID=""
+
+cleanup() {
+    if [[ -n "$GATEWAY_PID" ]]; then
+        smoke_stop_process "$GATEWAY_PID" "installed gateway" "$TMP_DIR/cleanup-gateway.log" || true
+    fi
+    if [[ -n "$UPSTREAM_PID" ]]; then
+        smoke_stop_process "$UPSTREAM_PID" "Armeria smoke upstream" "$TMP_DIR/upstream.log" || true
+    fi
+    rm -rf "$TMP_DIR"
+}
+
+trap cleanup EXIT
+
+for COMMAND in curl java python3; do
+    if ! command -v "$COMMAND" >/dev/null 2>&1; then
+        echo "$COMMAND is required for the installed-distribution smoke test" >&2
+        exit 1
+    fi
+done
+if [[ ! -x "$VIGILANT_BIN" ]]; then
+    echo "installDist output is missing: run ./gradlew installDist first" >&2
+    exit 1
+fi
+smoke_require_available_non_ephemeral_port "$GATEWAY_PORT_ENV" "installed env gateway"
+smoke_require_available_non_ephemeral_port "$GATEWAY_PORT_HOCON" "installed HOCON gateway"
+smoke_require_available_non_ephemeral_port "$UPSTREAM_PORT" "Armeria smoke upstream"
+
+run_case() {
+    local mode="$1"
+    local gateway_port="$GATEWAY_PORT_ENV"
+    if [[ "$mode" == "hocon" ]]; then
+        gateway_port="$GATEWAY_PORT_HOCON"
+    fi
+    local log_file="$TMP_DIR/$mode.log"
+    local response_file="$TMP_DIR/$mode-response.json"
+
+    if [[ "$mode" == "env" ]]; then
+        (
+            cd "$TMP_DIR"
+            VIGILANT_UPSTREAM_URL="http://127.0.0.1:$UPSTREAM_PORT" \
+            VIGILANT_PORT="$gateway_port" \
+            VIGILANT_ENVIRONMENT=test \
+            VIGILANT_IDENTITY_MODE=DUMMY \
+            VIGILANT_IDENTITY_DUMMY_USER=installed-user \
+            VIGILANT_OTLP_ENABLED=false \
+            VIGILANT_POLITICS_CONFIG="$PROJECT_DIR/politics.conf.example" \
+            "$VIGILANT_BIN"
+        ) >"$log_file" 2>&1 &
+    else
+        local config_file="$TMP_DIR/vigilant.conf"
+        printf '%s\n' \
+            'vigilant {' \
+            "  upstream-url = \"http://127.0.0.1:$UPSTREAM_PORT\"" \
+            "  port = $gateway_port" \
+            '  environment = "test"' \
+            '  identity-mode = "DUMMY"' \
+            '  identity-dummy-user = "installed-user"' \
+            '  otlp-enabled = false' \
+            '}' >"$config_file"
+        (
+            cd "$TMP_DIR"
+            VIGILANT_CONFIG="$config_file" \
+            VIGILANT_POLITICS_CONFIG="$PROJECT_DIR/politics.conf.example" \
+            "$VIGILANT_BIN"
+        ) >"$log_file" 2>&1 &
+    fi
+    GATEWAY_PID="$!"
+
+    smoke_await_http \
+        "$GATEWAY_PID" \
+        "http://127.0.0.1:$gateway_port/readyz" \
+        "$log_file" \
+        "installed $mode gateway"
+    smoke_proxy_exact_request \
+        "http://127.0.0.1:$gateway_port" \
+        "$TMP_DIR/request.json" \
+        "$response_file" \
+        "installed-dummy-token" \
+        "installed-$mode" \
+        "$mode installed-distribution"
+    smoke_await_stdout_audit \
+        "$log_file" \
+        "installed-secret@example.com" \
+        "installed $mode gateway"
+
+    smoke_stop_process "$GATEWAY_PID" "installed $mode gateway" "$log_file"
+    local exit_code="$SMOKE_STOPPED_PROCESS_EXIT_CODE"
+    GATEWAY_PID=""
+    if [[ "$exit_code" != "0" && "$exit_code" != "143" ]]; then
+        echo "$mode installed gateway stopped with unexpected exit code $exit_code" >&2
+        exit 1
+    fi
+}
+
+smoke_write_detected_request "$TMP_DIR/request.json" "installed-secret@example.com"
+smoke_start_armeria_upstream "$PROJECT_DIR" "$UPSTREAM_PORT" "$TMP_DIR/upstream.log"
+UPSTREAM_PID="$SMOKE_STARTED_PROCESS_PID"
+
+run_case env
+run_case hocon
+
+echo "Installed distribution smoke test passed: env-only and HOCON stateless startup verified"

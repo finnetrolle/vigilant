@@ -1,5 +1,10 @@
 # Minimum durable audit trail contract
 
+> Superseded historical contract. [EPIC-32](epics/epic_32_best_effort_stdout_audit.md)
+> replaced this application-owned durability model with best-effort stdout audit,
+> and VIG-32-02 removed its runtime implementation. This document is preserved as
+> completed decision history, not as a current runtime contract.
+
 Этот документ является единственным нормативным источником detailed lifecycle,
 schema, resource и failure semantics минимального обязательного audit trail.
 EPIC-22 владеет delivery outcome и декомпозицией, а дочерние issues владеют

@@ -60,20 +60,22 @@ final class RoadmapFrontierContractTest {
                 () -> assertTrue(exclusions.contains("offline JWT Bearer identity")));
     }
 
-    /** Separates the current stdout pair from the transitional historical durable subsystem. */
+    /** Separates the current stdout pair from the superseded historical durable subsystem. */
     @Test
-    void distinguishesStdoutPairFromTransitionalAuditSubsystem() throws IOException {
+    void distinguishesStdoutPairFromHistoricalAuditSubsystem() throws IOException {
         String roadmap = Files.readString(ROADMAP);
         String observability = Files.readString(OBSERVABILITY);
         String architecture = Files.readString(ARCHITECTURE);
 
         assertAll(
                 () -> assertTrue(roadmap.contains("### Safe request analysis pair")),
-                () -> assertTrue(roadmap.contains("### Transitional durable subsystem")),
+                () -> assertTrue(roadmap.contains("### Historical durable subsystem")),
+                () -> assertFalse(roadmap.contains("### Transitional durable subsystem")),
                 () -> assertTrue(observability.contains("## Safe request analysis pair")),
-                () -> assertTrue(observability.contains("## Transitional durable subsystem")),
+                () -> assertFalse(observability.contains("## Transitional durable subsystem")),
                 () -> assertTrue(architecture.contains("request-analysis records")),
-                () -> assertTrue(observability.contains("VIG-32-01 отключил")),
+                () -> assertTrue(roadmap.contains("VIG-32-01 отключил")),
+                () -> assertTrue(roadmap.contains("VIG-32-02")),
                 () -> assertTrue(roadmap.contains("EPIC-22")));
     }
 

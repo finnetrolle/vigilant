@@ -11,8 +11,6 @@
   исполняемой системы и внешние границы;
 - [request-inspection-sequence.puml](request-inspection-sequence.puml) -
   последовательность обработки поддержанного запроса;
-- [audit-lifecycle-state.puml](audit-lifecycle-state.puml) - состояния
-  обязательной долговечной записи аудита;
 - [policy-selection-activity.puml](policy-selection-activity.puml) -
   сопоставление, переопределения и вычисление неизменяемого снимка политик;
 - [tracing-sequence.puml](tracing-sequence.puml) - происхождение трасс и

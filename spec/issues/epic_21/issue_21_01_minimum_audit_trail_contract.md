@@ -1,6 +1,9 @@
 # VIG-21-01: Контракт минимального обязательного audit trail
 
 **Статус:** Done
+
+> Историческое решение superseded [EPIC-32](../../epics/epic_32_best_effort_stdout_audit.md).
+> Этот `Done` work item и его прошлое evidence сохранены без изменения статуса.
 **Epic:** [EPIC-21](../../epics/epic_21_post_milestone_architecture_closure.md)
 **Ветка:** Audit governance > minimum mandatory audit trail
 **Зависит от:** нет

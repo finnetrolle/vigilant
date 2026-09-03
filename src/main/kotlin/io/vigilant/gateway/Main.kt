@@ -11,9 +11,8 @@ import kotlin.system.exitProcess
  * configuration, registers a shutdown hook for graceful stop, and blocks until
  * the server closes. The shutdown hook first marks readiness as draining, so
  * `GET /readyz` answers `503` while the server is still closing, then stops the
- * server, drains and seals the durable audit store, and finally closes inspection,
- * upstream and OpenTelemetry resources in ownership order. Telemetry is written
- * to stdout as OTLP JSON Lines.
+ * server, and finally closes inspection, upstream and OpenTelemetry resources in ownership
+ * order. Telemetry and best-effort request audit are written to stdout as JSON Lines.
  */
 fun main() {
     val graph = try {
@@ -22,7 +21,6 @@ fun main() {
         graph.policyProvider
         graph.server
         graph.readinessService
-        graph.auditStore
         graph.upstreamClientResources
         graph.inspectionResources
         graph.sdkTracerProvider
@@ -38,28 +36,23 @@ fun main() {
     Runtime.getRuntime().addShutdownHook(
         Thread({
             readiness.markNotReady()
-            graph.auditStore.stopAdmissions()
             try {
                 server.stop().join()
             } finally {
                 try {
-                    graph.auditStore.close()
+                    graph.inspectionResources.close()
                 } finally {
                     try {
-                        graph.inspectionResources.close()
+                        graph.upstreamClientResources.close()
                     } finally {
                         try {
-                            graph.upstreamClientResources.close()
+                            graph.sdkTracerProvider.forceFlush()
+                                .join(TELEMETRY_FLUSH_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                            graph.sdkMeterProvider.forceFlush()
+                                .join(TELEMETRY_FLUSH_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                            graph.sdkTracerProvider.close()
                         } finally {
-                            try {
-                                graph.sdkTracerProvider.forceFlush()
-                                    .join(TELEMETRY_FLUSH_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-                                graph.sdkMeterProvider.forceFlush()
-                                    .join(TELEMETRY_FLUSH_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-                                graph.sdkTracerProvider.close()
-                            } finally {
-                                graph.sdkMeterProvider.close()
-                            }
+                            graph.sdkMeterProvider.close()
                         }
                     }
                 }

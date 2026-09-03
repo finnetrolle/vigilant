@@ -732,6 +732,35 @@ class PiiShadowProxyServiceTest {
         assertTrue(bodyDemanded.get())
     }
 
+    /** Executor admission loss uses the existing inspection-capacity response without body demand. */
+    @Test
+    fun `request executor rejection is independent of removed audit availability`() {
+        val bodyDemanded = AtomicBoolean()
+        val upstreamRequests = AtomicInteger()
+        val upstream = fixture.startServer {
+            upstreamRequests.incrementAndGet()
+            HttpResponse.of(HttpStatus.OK)
+        }
+        val unavailableExecutor = Executors.newSingleThreadExecutor().apply { shutdown() }
+        val gateway =
+            startShadowGateway(
+                upstreamUri = fixture.serverUri(upstream),
+                requestBodyDemandObserved = bodyDemanded,
+                inspectionExecutor = unavailableExecutor,
+            )
+
+        val response =
+            WebClient.of(fixture.serverUri(gateway))
+                .execute(chatCompletionsRequest("executor-rejected"))
+                .aggregate()
+                .join()
+
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, response.status())
+        assertEquals("""{"error":"inspection_capacity_exhausted"}""", response.contentUtf8())
+        assertFalse(bodyDemanded.get())
+        assertEquals(0, upstreamRequests.get())
+    }
+
     /** Valid JWT identity selects policy and preserves the original Authorization exactly. */
     @Test
     @Suppress("LongMethod")

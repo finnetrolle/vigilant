@@ -10,10 +10,6 @@ import io.opentelemetry.api.trace.Tracer
 import io.opentelemetry.api.metrics.Meter
 import io.opentelemetry.sdk.metrics.SdkMeterProvider
 import io.opentelemetry.sdk.trace.SdkTracerProvider
-import io.vigilant.audit.AuditComponentReference
-import io.vigilant.audit.AuditStore
-import io.vigilant.audit.LocalAuditStore
-import io.vigilant.audit.validateAuditSchemaCapacity
 import io.vigilant.gateway.config.AppConfig
 import io.vigilant.gateway.config.DEFAULT_SHUTDOWN_FORCE_TIMEOUT
 import io.vigilant.gateway.config.DEFAULT_SHUTDOWN_QUIET_PERIOD
@@ -62,9 +58,6 @@ interface AppComponent {
     val server: Server
     val readinessService: ReadinessService
 
-    /** Exposes the process-exclusive durable store for admission and ordered shutdown. */
-    val auditStore: AuditStore
-
     /** Exposes application-owned upstream resources for ordered shutdown after server drain. */
     val upstreamClientResources: UpstreamClientResources
 
@@ -95,21 +88,11 @@ interface AppComponent {
         fun identityExtractor(appConfig: AppConfig): BearerIdentityExtractor =
             identityExtractorBinding(appConfig.identity)
 
-        /** Opens, locks, and recovers the application-owned durable audit store once. */
-        @Provides
-        @SingleIn(AppScope::class)
-        fun auditStore(appConfig: AppConfig): AuditStore = LocalAuditStore.open(appConfig.audit)
-
         /** Loads and validates the required startup policy snapshot exactly once. */
         @Provides
         @SingleIn(AppScope::class)
-        fun policyProviderBinding(appConfig: AppConfig): PolicyProvider {
+        fun policyProviderBinding(): PolicyProvider {
             val snapshot = loadPolicySnapshot(availableDetectorIds = STARTUP_DETECTOR_IDS)
-            val auditReferences =
-                snapshot.map { policy ->
-                    AuditComponentReference(policy.reference.id.value, policy.reference.version.value)
-                }
-            validateAuditSchemaCapacity(auditReferences, appConfig.audit.maxEventBytes)
             return DummyPolicyProvider(snapshot)
         }
 

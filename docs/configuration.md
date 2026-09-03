@@ -28,13 +28,6 @@ vigilant {
   upstream-url = "http://127.0.0.1:18081"
   port = 8080
 
-  audit-directory = "/var/lib/vigilant/audit"
-  audit-max-event-bytes = 65536
-  audit-max-pending-events = 128
-  audit-max-retained-bytes = 1073741824
-  audit-max-segment-bytes = 16777216
-  audit-max-segment-age = 5s
-
   upstream-connect-timeout = 10s
   upstream-write-timeout = 30s
   upstream-response-timeout = 5m
@@ -86,12 +79,6 @@ variable `VIGILANT_SOME_SETTING`.
 | `VIGILANT_ENVIRONMENT` | Runtime profile: `development`, `test` или `production` | обязательна |
 | `VIGILANT_UPSTREAM_URL` | Абсолютный HTTP(S) URL upstream | обязательна |
 | `VIGILANT_PORT` | HTTP port gateway | `8080` |
-| `VIGILANT_AUDIT_DIRECTORY` | Existing persistent directory, exclusively locked by one process | обязательна |
-| `VIGILANT_AUDIT_MAX_EVENT_BYTES` | Максимальный framed audit record | `65536` |
-| `VIGILANT_AUDIT_MAX_PENDING_EVENTS` | Максимум pending audit reservations | `128` |
-| `VIGILANT_AUDIT_MAX_RETAINED_BYTES` | Максимум locally retained WAL + ready manifest bytes | `1073741824` |
-| `VIGILANT_AUDIT_MAX_SEGMENT_BYTES` | Максимальный WAL segment | `16777216` |
-| `VIGILANT_AUDIT_MAX_SEGMENT_AGE` | Максимальный возраст non-empty active segment | `5s` |
 | `VIGILANT_UPSTREAM_CONNECT_TIMEOUT` | Установка соединения с upstream | `10s` |
 | `VIGILANT_UPSTREAM_WRITE_TIMEOUT` | Запись запроса в upstream | `30s` |
 | `VIGILANT_UPSTREAM_RESPONSE_TIMEOUT` | Первый response object и максимальная пауза между objects | `5m` |
@@ -126,17 +113,8 @@ Complex `VIGILANT_IDENTITY_JWT_JWKS` задаётся strict JSON array с по�
 - `upstream-url` должен быть абсолютным HTTP(S) URL без user info, query и
   fragment.
 - `port` должен находиться в диапазоне `1..65535`.
-- `audit-directory` обязателен, должен существовать, быть directory и иметь
-  единственного process owner. Missing, unavailable или locked directory
-  останавливает startup с code `2` без вывода raw path.
-- Audit bounds положительны, `max-event-bytes <= 65536` и соблюдают
-  `max-event-bytes <= max-segment-bytes <= max-retained-bytes`.
-- Admission резервирует worst-case framed record и bounded ready manifest.
-  Active segment учитывает будущий manifest reserve; ready segment учитывает
-  exact WAL и manifest bytes до valid contiguous Collector ack.
-- Packaged [qualification 2026-08-31](durability-qualification-2026-08-31.md)
-  подтвердила exact bounds, retained-capacity fail-closed response и recovery
-  admission после valid Collector ack/reclaim.
+- Удалённые `audit-*` HOCON keys и `VIGILANT_AUDIT_*` environment variables не
+  имеют aliases или compatibility path и отклоняются strict loader-ом.
 - Duration принимает значения вида `300ms`, `10s`, `5m` или `PT5M`.
 - Duration должен быть положительным и помещаться в signed nanosecond scheduler
   bound, кроме
@@ -168,10 +146,8 @@ Complex `VIGILANT_IDENTITY_JWT_JWKS` задаётся strict JSON array с по�
 `VIGILANT_OTLP_ENABLED=false` отключает только вывод OTLP/JSON traces и metrics.
 Создание trace context, request-scoped JSON logs и сбор метрик внутри процесса
 продолжаются. Настройки Collector endpoint нет: Vigilant не открывает к нему
-сетевое соединение.
-External audit delivery использует только общий filesystem adapter из
-[Collector handoff contract](audit-collector-file-handoff.md); credentials и
-destination configuration принадлежат внешнему Collector.
+сетевое соединение. Захват, retention, rotation и delivery stdout принадлежат
+container runtime и deployment.
 
 ## Снимок политик
 
@@ -193,12 +169,9 @@ HOCON, сопоставление, одновременные переопред
 - значение `ALLOW` без преобразований для всех реакций.
 
 Пустой, отключённый, полностью переопределённый снимок или снимок с
-принудительными реакциями отклоняется до запуска сервера. Набор идентификаторов
-и версий политик также должен помещаться в безопасную запись аудита наихудшего
-размера при настроенном ограничении события; проверка выполняется до начала
-приёма запросов.
+принудительными реакциями отклоняется до запуска сервера.
 
 ## Ошибки startup
 
-Недопустимая или неполная application/policy/audit configuration выводит
+Недопустимая или неполная application/policy configuration выводит
 безопасное сообщение в stderr и завершает процесс с кодом `2`.

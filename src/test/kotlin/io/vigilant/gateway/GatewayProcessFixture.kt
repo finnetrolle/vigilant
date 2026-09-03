@@ -5,7 +5,6 @@ import com.linecorp.armeria.common.HttpStatus
 import java.io.IOException
 import java.net.ServerSocket
 import java.net.URI
-import java.nio.file.Path
 import java.time.Duration
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
@@ -19,8 +18,6 @@ import kotlin.random.Random
 internal class GatewayProcessFixture private constructor(
     val process: Process,
     val port: Int,
-    /** Process-exclusive persistent audit directory available to lifecycle assertions. */
-    val auditDirectory: Path,
     private val outputBuffer: StringBuilder,
     /** Signals each appended child-output line to deterministic observers. */
     private val outputSignal: Semaphore,
@@ -91,7 +88,6 @@ internal class GatewayProcessFixture private constructor(
             environment: Map<String, String> = emptyMap(),
         ): GatewayProcessFixture {
             val port = reserveNonEphemeralPort()
-            val auditDirectory = Path.of(newTestAuditDirectory())
             val command = buildList {
                 add("${System.getProperty("java.home")}/bin/java")
                 addAll(jvmArguments)
@@ -101,7 +97,7 @@ internal class GatewayProcessFixture private constructor(
             }
             val process = ProcessBuilder(command)
                 .redirectErrorStream(true)
-                .withTestRuntimeConfiguration(auditDirectory.toString())
+                .withTestRuntimeConfiguration()
                 .apply {
                     environment().apply {
                         put("VIGILANT_UPSTREAM_URL", upstream.toString())
@@ -117,7 +113,7 @@ internal class GatewayProcessFixture private constructor(
                     outputSignal.release()
                 }
             }
-            return GatewayProcessFixture(process, port, auditDirectory, output, outputSignal, outputReader)
+            return GatewayProcessFixture(process, port, output, outputSignal, outputReader)
         }
 
         /**

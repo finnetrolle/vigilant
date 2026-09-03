@@ -9,7 +9,6 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -45,13 +44,8 @@ public final class PerformanceProcessSupport {
             .redirectOutput(logFile.toFile());
     }
 
-    /** Adds process-exclusive audit storage and the complete permitted test identity configuration. */
-    public static void configureAuditDirectory(ProcessBuilder builder, Path projectDirectory, String runName)
-        throws IOException {
-        Path parent = projectDirectory.resolve("build/perf-audit");
-        Files.createDirectories(parent);
-        Path directory = Files.createTempDirectory(parent, runName + "-");
-        builder.environment().put("VIGILANT_AUDIT_DIRECTORY", directory.toString());
+    /** Adds the complete permitted test identity configuration to a packaged gateway. */
+    public static void configureTestIdentity(ProcessBuilder builder) {
         builder.environment().put("VIGILANT_ENVIRONMENT", "test");
         builder.environment().put("VIGILANT_IDENTITY_MODE", "DUMMY");
         builder.environment().put("VIGILANT_IDENTITY_DUMMY_USER", "performance-user");

@@ -1,6 +1,6 @@
 # VIG-32-02: Durable audit removal
 
-**Статус:** Ready for implementation
+**Статус:** Done
 **Epic:** [EPIC-32](../../epics/epic_32_best_effort_stdout_audit.md)
 **Ветка:** Contract old durable subsystem > remove all current consumers
 **Зависит от:** [VIG-32-01](issue_32_01_stdout_request_audit_migration.md)
@@ -61,36 +61,89 @@ and documentation contracts; [EPIC-32](../../epics/epic_32_best_effort_stdout_au
 
 ## Критерии готовности
 
-- [ ] `src/main` не содержит `AuditStore`, `LocalAuditStore`, durable record
+- [x] `src/main` не содержит `AuditStore`, `LocalAuditStore`, durable record
   codec, WAL/segment/recovery/manifest/ack/Collector file I/O или
   reservation/force-backed acknowledgement path. Request stdout audit остается
   единственным application-owned audit behavior.
-- [ ] Real-Armeria request matrix подтверждает, что clean/detected/gap/error
+- [x] Real-Armeria request matrix подтверждает, что clean/detected/gap/error
   outcomes и upstream handoff не зависят от audit capacity, filesystem, force
   или Collector. `audit_unavailable` больше не является runtime response.
-- [ ] `/readyz` отражает только remaining readiness contract и shutdown, а не
+- [x] `/readyz` отражает только remaining readiness contract и shutdown, а не
   audit directory/capacity/health. Graceful shutdown не останавливает audit
   admissions, не ждёт append/force/seal/reclaim и не управляет Collector
   lifecycle.
-- [ ] Env-only, HOCON, installed-distribution и OCI startup работают без audit
+- [x] Env-only, HOCON, installed-distribution и OCI startup работают без audit
   directory и `VIGILANT_AUDIT_*`; неизвестные legacy settings не создают
   compatibility mode. Shared launch fixtures больше не создают audit paths.
-- [ ] Dockerfile/image не объявляет persistent audit directory или volume.
+- [x] Dockerfile/image не объявляет persistent audit directory или volume.
   Build не содержит durability qualification source set/task, audit-only test
   task или fake Collector; обычные current verification tasks сохраняются.
-- [ ] Current docs и UML sources описывают stdout-only audit и stateless
+- [x] Current docs и UML sources описывают stdout-only audit и stateless
   replica. Collector file handoff и durability qualification удалены из current
   navigation; historical contract/work items/report сохранены и явно помечены
   superseded без изменения их `Done` status или прошлого evidence.
-- [ ] Repository-wide search подтверждает отсутствие active references на
+- [x] Repository-wide search подтверждает отсутствие active references на
   removed symbols, settings, `audit_unavailable`, persistent audit volume,
   Collector handoff и durability task вне явно historical artifacts.
-- [ ] Нет нового sink, queue, worker, exporter, retry, metric, alert,
+- [x] Нет нового sink, queue, worker, exporter, retry, metric, alert,
   compatibility setting или unrelated policy/identity/enforcement behavior.
-- [ ] Все добавленные и изменённые Kotlin/Java declarations, lifecycle helpers
+- [x] Все добавленные и изменённые Kotlin/Java declarations, lifecycle helpers
   и test methods имеют актуальный KDoc/Javadoc. Зафиксированы expected RED,
   focused GREEN, affected startup/readiness/shutdown/process/OCI suites,
   `./gradlew validateWorkItems` и `./gradlew build`.
+
+## Evidence
+
+Evidence зафиксирован 2026-09-03 через public process, real Armeria и packaged
+distribution seams:
+
+- Expected RED: `rtk proxy ./gradlew test --tests
+  'io.vigilant.gateway.PiiShadowProxyProcessTest.MainKt starts and forwards
+  without durable audit configuration'` завершился `FAILED`, потому что process
+  вышел до readiness с `VIGILANT_AUDIT_DIRECTORY is required`.
+- Focused GREEN: тот же process test прошёл после удаления audit configuration,
+  graph и lifecycle dependency. `AppConfigLoadingTest` также подтвердил, что
+  legacy HOCON/env audit settings являются unknown, а не compatibility mode.
+- Expected RED для оставшегося runtime response: real-Armeria test
+  `request executor rejection is independent of removed audit availability`
+  завершился exact mismatch `audit_unavailable` против
+  `inspection_capacity_exhausted`; focused GREEN прошёл после удаления старого
+  response code. Полный `PiiShadowProxyServiceTest` прошёл.
+- Affected suite `AppConfigLoadingTest`, `MainTest`, `HealthEndpointsTest`,
+  `ShutdownLifecycleTest`, `PiiShadowProxyProcessTest` и
+  `PiiShadowProxyServiceTest` прошёл (`BUILD SUCCESSFUL`). Он покрывает
+  clean/detected/gap/error, upstream handoff, startup, readiness и shutdown.
+- `rtk proxy ./gradlew compileGatlingJava perfContractTest` и
+  `rtk proxy ./gradlew installDist` прошли. Новый
+  `rtk proxy ./scripts/installed-distribution-smoke-test` запустил env-only и
+  HOCON cases без audit settings против separate-process real Armeria upstream,
+  проверил readiness, exact digest-validated replay, stdout pair и SIGTERM.
+- `rtk proxy ./gradlew ociArtifact` и
+  `rtk proxy env VIGILANT_SKIP_OCI_ARTIFACT=1 ./scripts/oci-smoke-test` прошли.
+  Smoke test подтвердил non-root image, отсутствие declared volume, audit
+  environment и `/var/lib/vigilant/audit`, затем readiness, exact proxy handoff
+  к тому же real Armeria upstream, stdout pair и graceful stop.
+- Verification fix pass: два focused `PackagedSmokeContractTest` сначала дали
+  RED на случайном released port и Python `ThreadingHTTPServer`, затем GREEN на
+  отдельных validated non-ephemeral gateway ports и canonical
+  `InspectionQualificationUpstreamMain`. Общие readiness, digest/curl и stdout
+  assertions вынесены в один packaged-smoke helper. Два следующих focused RED
+  зафиксировали неограниченные individual network calls и child `wait`; GREEN
+  добавил per-call timeouts и bounded graceful-to-forcible process stop. Ещё
+  один focused RED/GREEN закрыл readiness-failure path: helper освобождает
+  Armeria child до возврата ошибки, если caller ещё не получил PID ownership.
+  Installed и OCI runtime smoke повторно прошли после bounded-wait change;
+  installed smoke также прошёл после финального ownership fix.
+- Первый `rtk proxy ./gradlew build` выявил expected stale documentation
+  contract в `RoadmapFrontierContractTest`; focused GREEN подтвердил
+  historical/current distinction. Повторный `rtk proxy ./gradlew build` прошёл.
+  Final `rtk proxy ./gradlew clean build installDist ociArtifact` выполнил все
+  18 tasks успешно, а `rtk proxy ./gradlew validateWorkItems` сообщил
+  `Work-item graph is valid.`
+- Repository-wide `rtk proxy rg` не нашёл removed symbols/settings/tasks/paths
+  в `src/main`, current Gatling/perf source, `build.gradle.kts`, `Dockerfile` и
+  example config. Полный поиск оставил только negative guards, removal-owner
+  prose и явно historical contract/work-item/versioned-report artifacts.
 
 ## Не входит
 

@@ -87,7 +87,7 @@ class PiiShadowProxyService internal constructor(
         } catch (_: java.util.concurrent.RejectedExecutionException) {
             inspectionSpan?.setStatus(StatusCode.ERROR)
             inspectionSpan?.end()
-            completion.complete(stableProxyError(HttpStatus.SERVICE_UNAVAILABLE, "audit_unavailable"))
+            completion.complete(stableProxyError(HttpStatus.SERVICE_UNAVAILABLE, "inspection_capacity_exhausted"))
         }
         return HttpResponse.of(completion)
     }

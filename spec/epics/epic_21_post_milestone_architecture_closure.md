@@ -3,6 +3,10 @@
 **ID:** `EPIC-21`
 **Тип:** Epic
 **Статус:** Done
+
+> Историческая audit-governance ветка этого completed epic superseded
+> [EPIC-32](epic_32_best_effort_stdout_audit.md). Остальные completion evidence
+> EPIC-21 и его `Done` status не изменены.
 **Приоритет:** High
 **Суммарная оценка:** 0 дней осталось; 9-15 завершены
 **Связанные требования:** `MVP-18`, `MVP-19`, `CONC-01`, `CONC-03`, `PROXY-01`, production milestone safety gates

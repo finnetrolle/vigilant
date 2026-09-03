@@ -111,14 +111,15 @@ Existing Logback `AsyncAppender` с `neverBlock=true` остаётся един�
 queue. Request path не ждёт logging delivery, stdout write или durable
 acknowledgement. RESPONSE pair остаётся future behavior owning leaves EPIC-20.
 
-### Transitional durable subsystem
+### Historical durable subsystem
 
 Исторический нормативный [contract](MINIMUM_AUDIT_TRAIL_CONTRACT.md) и completed
 [EPIC-22](epics/epic_22_durable_minimum_audit_trail.md) фиксируют прежний
-application-owned WAL, Collector handoff и qualification. VIG-32-01 отключает
-request analysis от record reservation/submission/acknowledgement. Сама подсистема,
-её readiness/startup/shutdown и packaging consumers остаются transitional до
-removal в VIG-32-02.
+application-owned WAL, Collector handoff и qualification. VIG-32-01 отключил
+request analysis от record reservation/submission/acknowledgement, а VIG-32-02
+удалил подсистему и её readiness/startup/shutdown/packaging consumers из
+current runtime. Historical work items и versioned evidence сохраняются только
+как запись прежнего контракта.
 
 ## Discovery map
 
@@ -408,10 +409,10 @@ acknowledged Collector handoff
 VIG-01A, EPIC-10 и VIG-10-08 имеют status `Done` и не входят в current
 frontier.
 
-EPIC-32 мигрирует current audit на best-effort stdout. VIG-32-01 имеет
-status `Done`: REQUEST lifecycle pair публикуется без durable acknowledgement.
-VIG-32-02 теперь является следующим removal leaf для WAL,
-Collector, audit-driven readiness/configuration и packaging consumers.
+EPIC-32 завершил миграцию current audit на best-effort stdout. VIG-32-01
+публикует REQUEST lifecycle pair без durable acknowledgement; VIG-32-02 удалил
+WAL, Collector handoff, audit-driven readiness/configuration и packaging
+consumers.
 
 ## Не входит в первый production increment
 

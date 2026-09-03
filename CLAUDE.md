@@ -40,12 +40,10 @@ implementation-ready issue explicitly requires it.
 ./gradlew installDist           # build distributable into build/install/vigilant/
 ./gradlew ociArtifact           # reproducible versioned tar consumed by the Dockerfile
 
-# Run env-only (upstream and an existing persistent audit directory are required)
-mkdir -p .vigilant-audit
-VIGILANT_UPSTREAM_URL=http://127.0.0.1:18081 VIGILANT_AUDIT_DIRECTORY="$PWD/.vigilant-audit" VIGILANT_ENVIRONMENT=development VIGILANT_IDENTITY_MODE=DUMMY VIGILANT_IDENTITY_DUMMY_USER=local-user VIGILANT_PORT=18080 ./build/install/vigilant/bin/vigilant
+# Run env-only (upstream, identity and policy configuration are required)
+VIGILANT_UPSTREAM_URL=http://127.0.0.1:18081 VIGILANT_ENVIRONMENT=development VIGILANT_IDENTITY_MODE=DUMMY VIGILANT_IDENTITY_DUMMY_USER=local-user VIGILANT_PORT=18080 ./build/install/vigilant/bin/vigilant
 
 # Run with a HOCON config file (see vigilant.conf.example); env vars still override file values
-mkdir -p .vigilant-audit
 VIGILANT_CONFIG=./vigilant.conf.example ./build/install/vigilant/bin/vigilant
 
 # Quality tools (beyond SonarQube + JaCoCo)
@@ -58,8 +56,8 @@ VIGILANT_CONFIG=./vigilant.conf.example ./build/install/vigilant/bin/vigilant
 ./gradlew installGitHooks        # one-time after clone: installs pre-push hook from config/git/hooks/
 ```
 
-Copy `politics.conf.example` to `politics.conf` and create the configured audit
-directory before local application runs. Both are mandatory;
+Copy `politics.conf.example` to `politics.conf` before local application runs;
+the policy snapshot is mandatory and
 `VIGILANT_POLITICS_CONFIG` overrides the default `./politics.conf` path.
 
 Invalid or missing config prints a message to stderr and exits with code 2.
@@ -124,20 +122,20 @@ Key gateway and policy files under `src/main/kotlin/io/vigilant/`:
 
 - `gateway/proxy/PiiShadowProxyService.kt` - thin production HTTP inspection boundary. It validates the supported Chat Completions descriptor, ingests into a quota-controlled source, schedules complete-source workflow execution, maps typed rejects to stable responses, and performs the one-shot handoff to `BypassProxyService` after best-effort terminal audit submission without durable reservation or acknowledgement.
 - `gateway/proxy/ShadowInspectionWorkflow.kt` / `gateway/proxy/ReplayReadyRequest.kt` - gateway-specific complete-source application workflow and one-shot transport ownership boundary. The workflow parses one normalized view, assembles context, evaluates fragments, publishes one safe started/completed pair through the existing non-blocking logger, and returns typed `Forward` or `Reject`. `ReplayReadyRequest` retains owner responsibility until transport accepts exact replay, then terminal replay owns cleanup.
-- `audit/*` - transitional application-owned segmented WAL, immutable safe record schema, one-shot reservation API, checksum framing, exclusive lock, persistent sequence, force-backed local acknowledgement/recovery, atomic ready manifests and contiguous external Collector ack/reclaim. Request analysis no longer creates or waits for these records; full subsystem removal belongs to VIG-32-02. File I/O belongs only to its blocking-safe worker; the public adapter is `docs/audit-collector-file-handoff.md`.
+- `gateway/proxy/ShadowAuditLogger.kt` - safe request analysis lifecycle events published best-effort through the existing non-blocking Logback stdout pipeline. The application owns no audit persistence or delivery subsystem.
 - `gateway/identity/DummyIdentityExtractor.kt` / `gateway/identity/OfflineJwtIdentityExtractor.kt` / `context/PolicyContextHandoff.kt` - common single-Bearer boundary with a development/test-only configured Dummy implementation and the production offline RS256 implementation. JWT verifies pinned `kid`, signature, issuer, audience, expiry and not-before before normalizing `sub`/`groups`; request identity validation runs off the Armeria event loop. Raw tokens are never retained, and accepted Authorization is preserved upstream.
 - `source/BoundedRequestSource.kt` - process-wide owner/byte/segment quota plus one-request lifecycle. It receives the request with backpressure, exposes one sequential parser view and one demand-driven exact replay lease, and releases every reservation on completion or cancellation.
 - `protocol/openai/ChatCompletionsRequestParser.kt` - schema-tolerant parser for model-visible Chat Completions content. It preserves unknown fields by never rebuilding the original body, records recognized non-text inspection gaps, and fails closed for malformed or ambiguous content-bearing shapes.
 - `policy/engine/PolicyEngine.kt` / `policy/selection/PolicySelector.kt` / `policy/execution/DetectorExecutionCoordinator.kt` - deterministic policy matching, simultaneous overrides, deduplicated detector execution, per-policy deadlines, fail-fast blocking semantics in the domain layer, and complete decision explanations. Runtime startup currently restricts all configured reactions to shadow-only `ALLOW`.
 - `detectors/pii/fast/FastPiiDetector.kt` / `windowing/WindowedInspectionExecutor.kt` / `windowing/WindowedFastPiiExecutor.kt` - built-in deterministic detector, PII-free UTF-8-safe generic windowing core, and the thin Fast PII contract adapter. CPU work runs on the bounded pool owned by `InspectionResources`.
 - `gateway/proxy/BypassProxyService.kt` - transport stage after inspection. Rewrites request headers (upstream scheme/authority/path and hop-by-hop stripping), strips hop-by-hop response headers, preserves exact request replay and streaming responses, and maps upstream failures to stable proxy errors.
-- `gateway/config/AppConfig.kt` - config loading via Hoplite: optional HOCON file (`VIGILANT_CONFIG`, else `./vigilant.conf`, else `/etc/vigilant/vigilant.conf`) with `VIGILANT_*` env overrides on top (env > file > defaults), then post-decode validation including mandatory audit directory and exact WAL bounds. Unit-tested directly without a running server.
+- `gateway/config/AppConfig.kt` - config loading via Hoplite: optional HOCON file (`VIGILANT_CONFIG`, else `./vigilant.conf`, else `/etc/vigilant/vigilant.conf`) with `VIGILANT_*` env overrides on top (env > file > defaults), then strict post-decode validation. Unit-tested directly without a running server.
 - `policy/config/PolicyConfiguration.kt` - resolves mandatory `politics.conf` (`VIGILANT_POLITICS_CONFIG`, else `./politics.conf`), reads it once, and composes the strict parser with semantic validation into an immutable startup snapshot.
 - `policy/provider/PolicyProvider.kt` - suspend provider contract and `DummyPolicyProvider`, which retains one complete immutable startup snapshot without I/O, filtering, or hot reload.
 - `policy/selection/PolicySelector.kt` - pure context matcher and simultaneous override resolver; returns immutable policy lists sorted by policy ID without provider I/O or detector execution.
 - `gateway/AppComponent.kt` - Metro `@DependencyGraph(AppScope::class)`. Providers live in the companion object; the graph also assembles the Armeria `Server`. New injectable classes use `dev.zacsweers.metro.Inject` / `@SingleIn(AppScope::class)` (not `javax.inject` - Metro does not ship it, and `dev.zacsweers.metro.Singleton` does not exist).
-- `gateway/health/LivenessService.kt` / `gateway/health/ReadinessService.kt` - gateway-owned probes never proxied upstream: `/healthz` answers `200` while the server accepts connections; `/readyz` also requires current audit admission capacity/health and becomes `503` during shutdown.
-- `gateway/Main.kt` - builds the graph, eagerly opens the audit store, and shuts down in order: not-ready/stop audit admissions, server drain, audit force/seal/close, inspection, upstream, telemetry.
+- `gateway/health/LivenessService.kt` / `gateway/health/ReadinessService.kt` - gateway-owned probes never proxied upstream: `/healthz` answers `200` while the server accepts connections; `/readyz` follows lifecycle readiness and becomes `503` during shutdown.
+- `gateway/Main.kt` - builds the graph and shuts down in order: not-ready, server drain, inspection, upstream, telemetry.
 
 Tests spin up real Armeria servers on ephemeral ports (`http(0)`) and proxy through them - keep this E2E style for proxy behavior changes.
 

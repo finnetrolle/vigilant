@@ -1,5 +1,10 @@
 # Packaged durability qualification
 
+> Superseded historical evidence for completed EPIC-22. EPIC-32 replaced the
+> qualified durable subsystem with best-effort stdout audit and VIG-32-02 removed
+> its runtime and qualification task. The original result below is preserved
+> unchanged as evidence of the former contract.
+
 - Work item: [VIG-22-04](../spec/issues/epic_22/issue_22_04_packaged_durability_qualification.md)
 - Remediation: [VIG-22-05](../spec/issues/epic_22/issue_22_05_audit_exhaustion_admission_mapping.md)
 - Started (UTC): 2026-08-31T16:28:13.457559Z

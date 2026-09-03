@@ -227,7 +227,6 @@ class AppConfigLoadingTest {
         val base =
             mapOf(
                 "VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081",
-                "VIGILANT_AUDIT_DIRECTORY" to TEST_AUDIT_DIRECTORY.toString(),
                 "VIGILANT_ENVIRONMENT" to "test",
                 "VIGILANT_IDENTITY_MODE" to "DUMMY",
                 "VIGILANT_IDENTITY_DUMMY_USER" to "local-user",
@@ -273,7 +272,6 @@ class AppConfigLoadingTest {
             """
             vigilant {
               upstream-url = "http://127.0.0.1:18081"
-              audit-directory = "$TEST_AUDIT_DIRECTORY"
               environment = "production"
               identity-mode = "JWT"
               identity-jwt-issuer = "https://keycloak.example/realms/platform"
@@ -344,7 +342,6 @@ class AppConfigLoadingTest {
             """
             vigilant {
               upstream-url = "http://127.0.0.1:18081"
-              audit-directory = "$TEST_AUDIT_DIRECTORY"
               environment = "production"
               identity-mode = "JWT"
               identity-jwt-issuer = "https://keycloak.example/realms/platform"
@@ -1013,23 +1010,76 @@ class AppConfigLoadingTest {
         return Base64.getUrlEncoder().withoutPadding().encodeToString(unsigned)
     }
 
-    /** Loads exact supplied identity fields while adding only the unrelated audit prerequisite. */
+    /** Rejects removed durable-audit keys instead of silently enabling a compatibility mode. */
+    @Test
+    fun `legacy durable audit settings are unknown in environment and hocon`() {
+        val environmentSettings =
+            mapOf(
+                "VIGILANT_AUDIT_DIRECTORY" to "/legacy/audit",
+                "VIGILANT_AUDIT_MAX_EVENT_BYTES" to "65536",
+                "VIGILANT_AUDIT_MAX_PENDING_EVENTS" to "128",
+                "VIGILANT_AUDIT_MAX_RETAINED_BYTES" to "1073741824",
+                "VIGILANT_AUDIT_MAX_SEGMENT_BYTES" to "16777216",
+                "VIGILANT_AUDIT_MAX_SEGMENT_AGE" to "5s",
+            )
+        val hoconSettings =
+            mapOf(
+                "audit-directory" to "\"/legacy/audit\"",
+                "audit-max-event-bytes" to "65536",
+                "audit-max-pending-events" to "128",
+                "audit-max-retained-bytes" to "1073741824",
+                "audit-max-segment-bytes" to "16777216",
+                "audit-max-segment-age" to "5s",
+            )
+
+        environmentSettings.forEach { (key, value) ->
+            val failure = assertFailsWith<IllegalArgumentException>(key) {
+                loadAppConfig(
+                    env =
+                        mapOf(
+                            "VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081",
+                            key to value,
+                        ),
+                    defaultConfigPaths = emptyList(),
+                )
+            }
+            assertTrue(failure.message.orEmpty().contains("audit", ignoreCase = true), key)
+        }
+        hoconSettings.forEach { (key, value) ->
+            val file =
+                writeConfig(
+                    """
+                    vigilant {
+                      upstream-url = "http://127.0.0.1:18081"
+                      $key = $value
+                    }
+                    """.trimIndent(),
+                )
+            val failure = assertFailsWith<IllegalArgumentException>(key) {
+                loadAppConfig(
+                    env = mapOf("VIGILANT_CONFIG" to file.toString()),
+                    defaultConfigPaths = emptyList(),
+                )
+            }
+            assertTrue(failure.message.orEmpty().contains("audit", ignoreCase = true), key)
+        }
+    }
+
+    /** Loads exact supplied identity fields without adding unrelated startup settings. */
     private fun loadAppConfigWithoutIdentityDefaults(env: Map<String, String>): AppConfig =
         io.vigilant.gateway.config.loadAppConfig(
-            env = env + ("VIGILANT_AUDIT_DIRECTORY" to TEST_AUDIT_DIRECTORY.toString()),
+            env = env,
             defaultConfigPaths = emptyList(),
         )
 
-    /** Supplies the unrelated mandatory audit input to legacy configuration cases. */
+    /** Supplies the valid identity prerequisite to configuration cases. */
     private fun loadAppConfig(env: Map<String, String>, defaultConfigPaths: List<Path>): AppConfig =
         io.vigilant.gateway.config.loadAppConfig(
-            env = VALID_DUMMY_ENV + env + ("VIGILANT_AUDIT_DIRECTORY" to TEST_AUDIT_DIRECTORY.toString()),
+            env = VALID_DUMMY_ENV + env,
             defaultConfigPaths = defaultConfigPaths,
         )
 
     private companion object {
-        /** Shared persistent prerequisite for configuration-only tests. */
-        private val TEST_AUDIT_DIRECTORY: Path = Files.createTempDirectory("vigilant-config-audit")
         /** Complete valid identity prerequisite overridden only by the behavior under test. */
         private val VALID_DUMMY_ENV =
             mapOf(

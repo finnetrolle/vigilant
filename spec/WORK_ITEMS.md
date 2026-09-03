@@ -122,7 +122,7 @@ Issue является листом mind map, если:
 | [VIG-29: OpenAI-compatible error contract for enforcement](issues/issue_29_openai_error_contract.md) | `Ready for implementation` | status/body matrix определена | не оценено |
 | [VIG-30: External Bearer identity extractor](issues/issue_30_external_identity_extractor.md) | `Draft` | внешний identity contract не определён | не оценено |
 | [VIG-31: Cache external identity lookup](issues/issue_31_identity_lookup_cache.md) | `Draft` | cache semantics не определены | не оценено |
-| [EPIC-32: Best-effort stdout audit migration](epics/epic_32_best_effort_stdout_audit.md) | `In progress` | 1/2 | 4-5 дней |
+| [EPIC-32: Best-effort stdout audit migration](epics/epic_32_best_effort_stdout_audit.md) | `Done` | 2/2 | 0 дней осталось |
 | [VIG-33: Availability SLO and operational evidence](issues/issue_33_availability_slo_and_operations.md) | `Draft` | production SLO не определён | не оценено |
 | [VIG-34: Request-side PII enforcement](issues/issue_34_request_pii_enforcement.md) | `Draft` | reaction, rewrite и lifecycle contract требуют диалога | не оценено |
 | [VIG-35: Выбор production identity mode](issues/issue_35_production_identity_mode.md) | `Draft` | external-only или dual production mode не выбран | не оценено |
@@ -164,12 +164,12 @@ Issue является листом mind map, если:
 
 - [x] Реализовать и закрыть
   [VIG-32-01](issues/epic_32/issue_32_01_stdout_request_audit_migration.md).
-- [ ] Реализовать и закрыть
+- [x] Реализовать и закрыть
   [VIG-32-02](issues/epic_32/issue_32_02_durable_audit_removal.md): WAL, segments, recovery,
   Collector handoff, reservation/acknowledgement, audit-driven
   admission/readiness, audit configuration, Docker volume, durability Gradle
   tasks/tests и current runtime docs.
-- [ ] Подтвердить, что logging failure больше не влияет на HTTP outcome,
+- [x] Подтвердить, что logging failure больше не влияет на HTTP outcome,
   readiness или upstream handoff.
 
 ### Phase 2: закрыть готовый standalone frontier
@@ -224,8 +224,8 @@ Issue является листом mind map, если:
 - [ ] После стабилизации identity, enforcement и observability уточнить
   [VIG-33](issues/issue_33_availability_slo_and_operations.md).
 
-Текущий следующий шаг: реализация VIG-32-02. VIG-32-01 завершил
-stdout request migration и снял hard dependency с durable-audit removal.
+Текущий следующий шаг: реализация VIG-29. EPIC-32 завершён: stdout request
+migration работает, а durable-audit runtime и его consumers удалены.
 
 ## Как закрывать work item
 

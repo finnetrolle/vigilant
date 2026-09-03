@@ -22,8 +22,7 @@ Vigilant - OpenAI-совместимый guardrails gateway для платфо�
 - Streaming pass-through ответа upstream, включая SSE.
 - Stable fail-closed ошибки для неподдерживаемой или неоднозначной request
   schema и при исчерпании inspection capacity.
-- Force-backed local audit WAL до первого upstream byte или normal
-  supported-request response.
+- Safe best-effort stdout audit pair вокруг реально начатого request analysis.
 - JSONL-логи, correlation/trace ID, OTLP traces и metrics, health/readiness
   endpoints и non-root OCI image.
 
@@ -40,10 +39,8 @@ Gradle Wrapper.
 ~~~bash
 ./gradlew installDist
 cp politics.conf.example politics.conf
-mkdir -p .vigilant-audit
 
 VIGILANT_UPSTREAM_URL=https://api.openai.com \
-  VIGILANT_AUDIT_DIRECTORY="$PWD/.vigilant-audit" \
   VIGILANT_ENVIRONMENT=development \
   VIGILANT_IDENTITY_MODE=DUMMY \
   VIGILANT_IDENTITY_DUMMY_USER=local-user \
@@ -66,19 +63,19 @@ curl --fail-with-body http://127.0.0.1:8080/v1/chat/completions \
   --data "{\"model\":\"$OPENAI_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Contact alice@example.com\"}]}"
 ~~~
 
-Vigilant проверит видимый модели текст, запишет безопасное агрегированное
-событие `policy.shadow_decision` и отправит исходный JSON вышестоящему серверу
-без пересериализации. В теневом режиме найденный адрес электронной почты не
-блокирует запрос.
+Vigilant проверит видимый модели текст, best-effort запишет безопасную пару
+`policy.analysis_started`/`policy.analysis_completed` в stdout и отправит
+исходный JSON вышестоящему серверу без пересериализации. В теневом режиме
+найденный адрес электронной почты не блокирует запрос.
 
 ## Как проходит запрос
 
-Для поддержанного запроса сначала резервируется место в долговечном аудите,
-затем выполняются извлечение настроенного идентификатора, ограниченный приём
-данных, разбор протокола и вычисление политик. Первый байт передаётся
-вышестоящему серверу только после фиксации безопасной записи аудита вызовом
-`force(true)`. Затем исходный источник одноразово передаётся транспорту во
-владение и воспроизводится без изменения байтов.
+Для поддержанного запроса выполняются извлечение настроенного идентификатора,
+ограниченный приём данных, разбор протокола и вычисление политик. Вокруг реально
+начатого detector execution публикуется best-effort stdout pair, после чего
+исходный источник одноразово передаётся транспорту во владение и
+воспроизводится без изменения байтов. Logging delivery не участвует в traffic
+outcome или upstream handoff.
 
 - [Диаграмма последовательности обработки запроса UML 2.0](docs/diagrams/request-inspection-sequence.puml)
 - [Диаграмма компонентов исполняемой системы UML 2.0](docs/diagrams/runtime-components.puml)
@@ -99,8 +96,6 @@ Application configuration загружается с приоритетом
 `environment > HOCON file > defaults`. Для запуска обязательны:
 
 - `VIGILANT_UPSTREAM_URL` или `vigilant.upstream-url` в HOCON;
-- существующий persistent `VIGILANT_AUDIT_DIRECTORY` или
-  `vigilant.audit-directory` в HOCON;
 - `VIGILANT_ENVIRONMENT`, `VIGILANT_IDENTITY_MODE=DUMMY` и
   `VIGILANT_IDENTITY_DUMMY_USER` для временного development/test extractor;
 - валидный `politics.conf`, по умолчанию из текущей директории;
@@ -131,7 +126,6 @@ docker run --rm --name vigilant \
   --env VIGILANT_IDENTITY_DUMMY_USER=local-user \
   --env VIGILANT_POLITICS_CONFIG=/etc/vigilant/politics.conf \
   --mount type=bind,src="$PWD/politics.conf",dst=/etc/vigilant/politics.conf,readonly \
-  --mount type=volume,src=vigilant-audit,dst=/var/lib/vigilant/audit \
   vigilant:0.1.0-SNAPSHOT
 ~~~
 
@@ -158,11 +152,11 @@ Smoke-тест требует `curl`, Docker и Python 3. Он запускае�
   передаются upstream.
 - Application JSON logs, OTLP/JSON traces и OTLP/JSON metrics пишутся только в
   stdout. Приложение не подключается к OpenTelemetry Collector.
-- Local segmented WAL durably сохраняет safe aggregate record до forwarding;
-  `policy.shadow_decision` остаётся только best-effort stdout projection.
+- Application-owned audit persistence отсутствует: retention, rotation и
+  delivery stdout принадлежат container runtime и deployment.
 - Prometheus scrape endpoint отсутствует.
 
-Имена метрик, JSONL schema, audit events, настройка Collector и правила
+Имена метрик, JSONL schema, audit events, внешний stdout pipeline и правила
 безопасности приведены в [observability reference](docs/observability.md).
 
 ## Проверки

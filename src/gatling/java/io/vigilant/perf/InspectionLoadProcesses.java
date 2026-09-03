@@ -92,7 +92,7 @@ final class InspectionLoadProcesses implements AutoCloseable {
         return PerformanceProcessSupport.process(command, profile.projectDirectory(), logFile).start();
     }
 
-    /** Launches the packaged production entry point with real policy and INFO audit output. */
+    /** Launches the packaged production entry point with real policy and INFO stdout audit. */
     private Process startGateway(Path logFile) throws IOException {
         List<String> command = PerformanceProcessSupport.javaCommand();
         command.add("-Xms" + profile.gatewayHeapMib() + "m");
@@ -102,11 +102,7 @@ final class InspectionLoadProcesses implements AutoCloseable {
         command.add(profile.projectDirectory().resolve("build/install/vigilant/lib/*").toString());
         command.add("io.vigilant.gateway.MainKt");
         ProcessBuilder builder = PerformanceProcessSupport.process(command, profile.projectDirectory(), logFile);
-        PerformanceProcessSupport.configureAuditDirectory(
-            builder,
-            profile.projectDirectory(),
-            "inspection-load-" + profile.gatewayPort()
-        );
+        PerformanceProcessSupport.configureTestIdentity(builder);
         builder.environment().put("VIGILANT_UPSTREAM_URL", profile.upstreamBaseUrl());
         builder.environment().put("VIGILANT_PORT", Integer.toString(profile.gatewayPort()));
         builder.environment().put(

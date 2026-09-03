@@ -82,46 +82,8 @@ propagation values. Policy/detector references остаются stdout-only.
 
 Пара не является durable acceptance. Existing Logback `AsyncAppender` с
 `neverBlock=true` остаётся единственной queue и может отбросить оба INFO event.
-Request path не ждёт queue delivery, stdout write, WAL или `force(true)`;
+Request path не ждёт queue delivery, stdout write или external delivery;
 logging overload/failure не меняет HTTP outcome и upstream handoff.
-
-## Transitional durable subsystem
-
-Исторический [minimum audit trail contract](../spec/MINIMUM_AUDIT_TRAIL_CONTRACT.md)
-описывает прежнее разделение creation, store ownership, durable retention и
-external delivery. VIG-32-01 отключил создание и ожидание WAL record в request
-analysis. Полное удаление подсистемы принадлежит VIG-32-02.
-
-Оставшаяся transitional подсистема реализует стадии `RESERVED`, `DECISION_CREATED`,
-`STORE_OWNED`, `DURABLY_RETAINED` и `EXTERNALLY_DELIVERED`.
-Application-owned segmented WAL использует
-versioned JSON, length/checksum frame, persistent sequence, exclusive directory
-lock и `force(true)` для принятых store records, но request analysis больше не
-создаёт и не ждёт их. Directory и bounds перечислены в
-[configuration reference](configuration.md).
-
-Граница долговечности на диаграмме состояний UML 2.0:
-[audit-lifecycle-state.puml](diagrams/audit-lifecycle-state.puml).
-
-`CAPACITY_EXHAUSTED`, `EVENT_TOO_LARGE`, `IO_FAILURE` и `CLOSED` всё ещё могут
-перевести transitional composite readiness в `503`, пока store не восстановил
-admission. External Collector асинхронно читает immutable ready
-segments по [file handoff contract](audit-collector-file-handoff.md). Exact
-contiguous ack force-backed переводит segment в `EXTERNALLY_DELIVERED` и
-разрешает reclaim; Collector outage оставляет records локально до retained
-bound и не добавляет synchronous delivery в request path.
-
-Packaged [qualification report](durability-qualification-2026-08-31.md)
-подтверждает exact retained-capacity `503 audit_unavailable` и отсутствие
-payload, identity, session, credentials, locators и reversible hashes в WAL,
-manifests, acks, stdout, errors и самом report.
-
-Rejected acknowledgement пишет один bounded WARN
-`event.name=audit.collector_ack_rejected` только со stable `error.code`:
-`MALFORMED_ACK`, `UNKNOWN_SEGMENT`, `DUPLICATE_ACK`, `OUT_OF_ORDER_ACK`,
-`MISSING_SEGMENT`, `TERMINAL_SEQUENCE_MISMATCH`, `DIGEST_MISMATCH` или
-`SEGMENT_INTEGRITY_MISMATCH`. Event не содержит filename, path, manifest/ack
-contents, record fields или raw exception.
 
 ## Upstream failure event
 

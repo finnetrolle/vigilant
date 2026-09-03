@@ -1,0 +1,265 @@
+#!/usr/bin/env bash
+
+# Shared deterministic process and assertion helpers for packaged smoke tests.
+
+SMOKE_CONNECT_TIMEOUT_SECONDS=2
+SMOKE_HEALTH_TIMEOUT_SECONDS=2
+SMOKE_REQUEST_TIMEOUT_SECONDS=10
+SMOKE_PROCESS_STOP_ATTEMPTS=140
+SMOKE_PROCESS_KILL_ATTEMPTS=20
+
+smoke_require_available_non_ephemeral_port() {
+    local port="$1"
+    local owner="$2"
+    python3 - "$port" "$owner" <<'PY'
+import pathlib
+import socket
+import subprocess
+import sys
+
+port = int(sys.argv[1])
+owner = sys.argv[2]
+
+linux_range = pathlib.Path("/proc/sys/net/ipv4/ip_local_port_range")
+if linux_range.is_file():
+    first, last = map(int, linux_range.read_text().split())
+elif sys.platform == "darwin":
+    first = int(subprocess.check_output(
+        ["sysctl", "-n", "net.inet.ip.portrange.first"],
+        text=True,
+    ).strip())
+    last = int(subprocess.check_output(
+        ["sysctl", "-n", "net.inet.ip.portrange.last"],
+        text=True,
+    ).strip())
+else:
+    first, last = 49152, 65535
+
+if not 1 <= port <= 65535:
+    raise SystemExit(f"{owner} port {port} is outside 1..65535")
+if first <= port <= last:
+    raise SystemExit(
+        f"{owner} port {port} overlaps the OS ephemeral range {first}..{last}"
+    )
+
+candidate = socket.socket()
+try:
+    candidate.bind(("0.0.0.0", port))
+except OSError as failure:
+    raise SystemExit(f"{owner} port {port} is unavailable: {failure}") from failure
+finally:
+    candidate.close()
+PY
+}
+
+smoke_stop_process() {
+    local process_id="$1"
+    local owner="$2"
+    local log_file="$3"
+    if [[ -z "$process_id" ]]; then
+        SMOKE_STOPPED_PROCESS_EXIT_CODE=0
+        return
+    fi
+
+    if kill -0 "$process_id" >/dev/null 2>&1; then
+        kill "$process_id" >/dev/null 2>&1 || true
+        for ((attempt = 0; attempt < SMOKE_PROCESS_STOP_ATTEMPTS; attempt++)); do
+            if ! kill -0 "$process_id" >/dev/null 2>&1; then
+                break
+            fi
+            sleep 0.25
+        done
+    fi
+    if kill -0 "$process_id" >/dev/null 2>&1; then
+        kill -KILL "$process_id" >/dev/null 2>&1 || true
+        for ((attempt = 0; attempt < SMOKE_PROCESS_KILL_ATTEMPTS; attempt++)); do
+            if ! kill -0 "$process_id" >/dev/null 2>&1; then
+                break
+            fi
+            sleep 0.25
+        done
+    fi
+    if kill -0 "$process_id" >/dev/null 2>&1; then
+        echo "$owner survived the bounded forcible shutdown deadline" >&2
+        if [[ -f "$log_file" ]]; then
+            sed -n '1,160p' "$log_file" >&2
+        fi
+        return 1
+    fi
+
+    set +e
+    wait "$process_id" 2>/dev/null
+    SMOKE_STOPPED_PROCESS_EXIT_CODE="$?"
+    set -e
+}
+
+smoke_await_http() {
+    local process_id="$1"
+    local endpoint="$2"
+    local log_file="$3"
+    local owner="$4"
+    for _ in {1..120}; do
+        if [[ -n "$process_id" ]] && ! kill -0 "$process_id" >/dev/null 2>&1; then
+            echo "$owner exited before readiness" >&2
+            if [[ -f "$log_file" ]]; then
+                sed -n '1,160p' "$log_file" >&2
+            fi
+            return 1
+        fi
+        if curl \
+            --fail \
+            --silent \
+            --connect-timeout "$SMOKE_CONNECT_TIMEOUT_SECONDS" \
+            --max-time "$SMOKE_HEALTH_TIMEOUT_SECONDS" \
+            "$endpoint" >/dev/null; then
+            return
+        fi
+        sleep 0.25
+    done
+    echo "$owner did not become ready at $endpoint" >&2
+    if [[ -f "$log_file" ]]; then
+        sed -n '1,160p' "$log_file" >&2
+    fi
+    return 1
+}
+
+smoke_start_armeria_upstream() {
+    local project_dir="$1"
+    local port="$2"
+    local log_file="$3"
+    local upstream_class="$project_dir/build/classes/java/gatling/io/vigilant/perf/InspectionQualificationUpstreamMain.class"
+    if [[ ! -f "$upstream_class" ]]; then
+        echo "Armeria smoke upstream is missing: run ./gradlew compileGatlingJava installDist" >&2
+        return 1
+    fi
+
+    java \
+        -Xms64m \
+        -Xmx128m \
+        --enable-native-access=ALL-UNNAMED \
+        -cp "$project_dir/build/classes/java/gatling:$project_dir/build/install/vigilant/lib/*" \
+        io.vigilant.perf.InspectionQualificationUpstreamMain \
+        "$port" >"$log_file" 2>&1 &
+    SMOKE_STARTED_PROCESS_PID="$!"
+    if ! smoke_await_http \
+        "$SMOKE_STARTED_PROCESS_PID" \
+        "http://127.0.0.1:$port/healthz" \
+        "$log_file" \
+        "Armeria smoke upstream"; then
+        smoke_stop_process "$SMOKE_STARTED_PROCESS_PID" "Armeria smoke upstream" "$log_file" || true
+        SMOKE_STARTED_PROCESS_PID=""
+        return 1
+    fi
+}
+
+smoke_write_detected_request() {
+    local request_file="$1"
+    local sentinel="$2"
+    printf '%s' \
+        "{ \"model\":\"gpt-test\", \"messages\":[{\"role\":\"user\",\"content\":\"contact $sentinel\"}], \"unknown\":{\"keep\":true} }" \
+        >"$request_file"
+}
+
+smoke_request_sha256() {
+    local request_file="$1"
+    python3 - "$request_file" <<'PY'
+import hashlib
+import pathlib
+import sys
+
+print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
+PY
+}
+
+smoke_proxy_exact_request() {
+    local gateway_url="$1"
+    local request_file="$2"
+    local response_file="$3"
+    local bearer_token="$4"
+    local session_id="$5"
+    local owner="$6"
+    local request_sha256
+    request_sha256="$(smoke_request_sha256 "$request_file")"
+
+    curl --fail --silent --show-error \
+        --connect-timeout "$SMOKE_CONNECT_TIMEOUT_SECONDS" \
+        --max-time "$SMOKE_REQUEST_TIMEOUT_SECONDS" \
+        --request POST \
+        --header 'content-type: application/json' \
+        --header "authorization: Bearer $bearer_token" \
+        --header "x-session-id: $session_id" \
+        --header "x-vigilant-benchmark-body-sha256: $request_sha256" \
+        --data-binary "@$request_file" \
+        --output "$response_file" \
+        "$gateway_url/v1/chat/completions"
+    if [[ "$(<"$response_file")" != 'qualification-ok' ]]; then
+        echo "unexpected $owner response" >&2
+        return 1
+    fi
+}
+
+smoke_stdout_audit_is_valid() {
+    local log_file="$1"
+    local sentinel="$2"
+    python3 - "$log_file" "$sentinel" <<'PY'
+import json
+import pathlib
+import sys
+
+text = pathlib.Path(sys.argv[1]).read_text(errors="replace")
+if sys.argv[2] in text:
+    raise SystemExit("sensitive request content appeared in gateway logs")
+
+events = []
+for line in text.splitlines():
+    try:
+        node = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    values = {key: str(value) for pair in node.get("kvpList", []) for key, value in pair.items()}
+    if values.get("event.name", "").startswith("policy.analysis_"):
+        events.append(values)
+
+if [event.get("event.name") for event in events] != [
+    "policy.analysis_started",
+    "policy.analysis_completed",
+]:
+    raise SystemExit("expected one ordered stdout request-audit pair")
+completed = events[1]
+expected = {
+    "protocol": "openai.chat_completions",
+    "phase": "REQUEST",
+    "outcome": "DETECTED",
+    "reaction": "ALLOW",
+    "coverage": "FULLY_INSPECTABLE",
+    "detector.id": "fast-pii",
+    "detector.version": "fast-pii@1",
+    "findings.by_type": "EMAIL_ADDRESS:1",
+}
+mismatches = {
+    key: (expected_value, completed.get(key))
+    for key, expected_value in expected.items()
+    if completed.get(key) != expected_value
+}
+if mismatches:
+    raise SystemExit(f"unexpected stdout audit fields: {mismatches}")
+PY
+}
+
+smoke_await_stdout_audit() {
+    local log_file="$1"
+    local sentinel="$2"
+    local owner="$3"
+    local refresh_function="${4:-}"
+    for _ in {1..40}; do
+        if [[ -n "$refresh_function" ]]; then
+            "$refresh_function"
+        fi
+        if smoke_stdout_audit_is_valid "$log_file" "$sentinel" 2>/dev/null; then
+            return
+        fi
+        sleep 0.25
+    done
+    echo "$owner did not publish the expected stdout request-audit pair" >&2
+    smoke_stdout_audit_is_valid "$log_file" "$sentinel"
+}
