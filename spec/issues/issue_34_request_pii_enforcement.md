@@ -30,6 +30,9 @@ Issue остаётся Draft до отдельного диалога с вла�
   согласованному protocol rewrite contract.
 - `BLOCK` и technical failure используют VIG-29 safe OpenAI-compatible errors
   и не начинают upstream handoff.
+- Dependency VIG-29 завершена: закрытая production matrix уже предоставляет
+  request `BLOCK` и request inspection failure без optional details. Эта issue
+  владеет только выбором этих outcomes из будущей reaction/lifecycle logic.
 - Реально начатый request analysis публикует stdout pair по contract
   VIG-32-01.
 

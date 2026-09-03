@@ -77,20 +77,20 @@ content-bearing structure обрабатываются fail-closed и не до�
 
 ## Request-side errors
 
-| Ситуация | HTTP status | JSON body |
-|---|---:|---|
-| Некорректный configured session ID | `400` | `{"error":"invalid_session_id"}` |
-| Неподдерживаемые method, path, content type или schema | `400` | `{"error":"unsupported_schema"}` |
-| Malformed supported message | `400` | `{"error":"malformed_message"}` |
-| Ambiguous content | `400` | `{"error":"ambiguous_content"}` |
-| External или unresolved context | `400` | `{"error":"unresolved_context"}` |
-| Duplicate, malformed или invalid JWT identity | `400` | `{"error":"invalid_identity"}` |
-| Missing или non-Bearer Authorization | `401` | `{"error":"authentication_required"}` + Bearer challenge |
-| Некорректный request source, включая несовпадение `Content-Length` | `400` | `{"error":"invalid_request_source"}` |
-| Per-request byte limit | `413` | `{"error":"request_too_large"}` |
-| Owner/global retained capacity | `503` | `{"error":"inspection_capacity_exhausted"}` |
-| Inspection executor admission failure | `503` | `{"error":"inspection_capacity_exhausted"}` |
-| Непредвиденный inspection failure | `500` | `{"error":"inspection_failed"}` |
+| Ситуация | HTTP status | `Retry-After` | JSON body |
+|---|---:|---:|---|
+| Некорректный configured session ID | `400` | нет | `{"error":"invalid_session_id"}` |
+| Неподдерживаемые method, path, content type или schema | `400` | нет | `{"error":"unsupported_schema"}` |
+| Malformed supported message | `400` | нет | `{"error":"malformed_message"}` |
+| Ambiguous content | `400` | нет | `{"error":"ambiguous_content"}` |
+| External или unresolved context | `400` | нет | `{"error":"unresolved_context"}` |
+| Duplicate, malformed или invalid JWT identity | `400` | нет | `{"error":"invalid_identity"}` |
+| Missing или non-Bearer Authorization | `401` | нет | `{"error":"authentication_required"}` + Bearer challenge |
+| Некорректный request source, включая несовпадение `Content-Length` | `400` | нет | `{"error":"invalid_request_source"}` |
+| Per-request byte limit | `413` | нет | `{"error":"request_too_large"}` |
+| Owner/global retained capacity | `503` | `1` | `{"error":{"message":"Request inspection unavailable.","type":"server_error","code":"request_inspection_unavailable"}}` |
+| Inspection executor admission failure | `503` | `1` | `{"error":{"message":"Request inspection unavailable.","type":"server_error","code":"request_inspection_unavailable"}}` |
+| Request source или orchestration failure | `503` | `1` | `{"error":{"message":"Request inspection unavailable.","type":"server_error","code":"request_inspection_unavailable"}}` |
 
 Descriptor проверяется до identity и body demand. Некорректный session ID
 отклоняется ещё раньше, в tracing decorator. Identity, source, parser, context,
@@ -109,14 +109,38 @@ Policy deadline или typed detector error отражается как outcome 
 stable `error.code` и без reaction. Current shadow policy не блокирует request,
 поэтому при завершённой orchestration исходный body всё равно отправляется
 upstream.
-`500 inspection_failed` предназначен для непредвиденного сбоя самой
-orchestration или context assembly.
+Непредвиденный сбой request source, orchestration или context assembly
+возвращает закрытый VIG-29 `503 request_inspection_unavailable` до upstream
+handoff и не раскрывает внутреннюю причину.
 
 Client cancellation до analysis отменяет ingest/inspection, освобождает
 source и не публикует пару. Cancellation после start best-effort
 публикует terminal `ERROR` с `error.code=ANALYSIS_CANCELLED`; новый
 upstream handoff запрещён. Отменённому соединению delivery HTTP error не
 гарантируется.
+
+## Закрытая матрица VIG-29
+
+Production encoder фиксирует пять исчерпывающих OpenAI-compatible errors из
+[VIG-29](../spec/issues/issue_29_openai_error_contract.md):
+
+| Outcome | HTTP status | `Retry-After` | Exact JSON body |
+|---|---:|---:|---|
+| Request `BLOCK` | `403` | нет | `{"error":{"message":"Request blocked: PII detected.","type":"policy_violation","code":"policy_blocked"}}` |
+| Response `BLOCK` | `403` | нет | `{"error":{"message":"Response blocked: PII detected.","type":"policy_violation","code":"policy_blocked"}}` |
+| Request inspection unavailable | `503` | `1` | `{"error":{"message":"Request inspection unavailable.","type":"server_error","code":"request_inspection_unavailable"}}` |
+| Response inspection unavailable | `503` | `1` | `{"error":{"message":"Response inspection unavailable.","type":"server_error","code":"response_inspection_unavailable"}}` |
+| Invalid upstream response | `502` | нет | `{"error":{"message":"Invalid upstream response.","type":"upstream_error","code":"invalid_upstream_response"}}` |
+
+Encoder принимает только закрытый outcome и не принимает body, headers,
+credentials, identity, policy references или внутренние причины. Поэтому JSON
+имеет ровно поле `error`, а оно ровно три string fields: `message`, `type`,
+`code`.
+
+В текущем shadow runtime подключён только request technical outcome для
+capacity, executor, source и orchestration failures. `BLOCK`, response
+inspection failure и invalid inspected upstream response не являются
+доступными runtime outcomes до реализации VIG-34 и owning leaves EPIC-20.
 
 ## Upstream errors
 

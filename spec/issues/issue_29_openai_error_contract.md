@@ -2,7 +2,7 @@
 
 - **ID:** `VIG-29`
 - **Тип:** Issue
-- **Статус:** Ready for implementation
+- **Статус:** Done
 - **Приоритет:** High
 - **Зависит от:** нет
 - **Блокирует:** [VIG-20-02](epic_20/issue_20_02_response_inspection_enforcement.md), [VIG-34](issue_34_request_pii_enforcement.md)
@@ -86,13 +86,13 @@ headers/status/body. `503` request не начинает upstream handoff; `503`
 
 ## Критерии готовности
 
-- [ ] Реализация возвращает в точности указанную matrix: HTTP status, наличие и
+- [x] Реализация возвращает в точности указанную matrix: HTTP status, наличие и
   значение `Retry-After`, JSON fields и их значения.
-- [ ] Контрактные HTTP tests покрывают все пять строк matrix и доказывают
+- [x] Контрактные HTTP tests покрывают все пять строк matrix и доказывают
   отсутствие optional/internal/payload-derived полей.
-- [ ] Tests доказывают, что `BLOCK` не раскрывает upstream response, а request
+- [x] Tests доказывают, что `BLOCK` не раскрывает upstream response, а request
   technical failure не начинает upstream handoff.
-- [ ] Изменённые Kotlin declarations/test methods имеют KDoc; focused tests и
+- [x] Изменённые Kotlin declarations/test methods имеют KDoc; focused tests и
   `./gradlew build` проходят.
 
 ## Ambiguity Report

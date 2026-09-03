@@ -44,6 +44,10 @@ cross-chunk masking, audit и полный lifecycle, сохранён на но
   content-bearing shape дают VIG-29 safe `502 invalid_upstream_response`.
 - Detector/policy timeout или failure дают VIG-29 safe `503` с
   `Retry-After: 1` и `response_inspection_unavailable` без partial disclosure.
+- Dependency VIG-29 завершена: закрытая production matrix уже предоставляет
+  response `BLOCK`, response inspection failure и invalid upstream outcomes без
+  optional details. Эта issue владеет только выбором этих outcomes после
+  будущего response analysis.
 - `analysis_started` публикуется после parse, context assembly и policy
   selection непосредственно перед detector execution. `analysis_completed`
   публикуется после final outcome и содержит только safe aggregate fields.

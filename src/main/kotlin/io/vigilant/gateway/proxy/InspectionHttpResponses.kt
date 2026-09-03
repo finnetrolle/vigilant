@@ -38,8 +38,10 @@ internal object InspectionHttpResponses {
             RequestSourceOutcomeCode.REQUEST_TOO_LARGE ->
                 stableProxyError(HttpStatus.REQUEST_ENTITY_TOO_LARGE, "request_too_large")
 
-            RequestSourceOutcomeCode.INSPECTION_CAPACITY_EXHAUSTED ->
-                stableProxyError(HttpStatus.SERVICE_UNAVAILABLE, "inspection_capacity_exhausted")
+            RequestSourceOutcomeCode.INSPECTION_CAPACITY_EXHAUSTED,
+            RequestSourceOutcomeCode.SOURCE_ERROR,
+            ->
+                OpenAiErrorResponses.of(OpenAiErrorOutcome.REQUEST_INSPECTION_UNAVAILABLE)
 
             else -> stableProxyError(HttpStatus.BAD_REQUEST, "invalid_request_source")
         }

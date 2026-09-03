@@ -119,7 +119,7 @@ Issue является листом mind map, если:
 | [VIG-26: Универсальное ядро windowed inspection](issues/issue_26_generic_windowing_core.md) | `Done` | завершена | 0 дней осталось |
 | [VIG-27: Dummy Bearer identity extractor](issues/issue_27_dummy_identity_extractor.md) | `Done` | завершена | 0 дней осталось |
 | [VIG-28: Offline trusted JWT Bearer identity extractor](issues/issue_28_keycloak_jwt_identity_extractor.md) | `Done` | завершена | 0 дней осталось |
-| [VIG-29: OpenAI-compatible error contract for enforcement](issues/issue_29_openai_error_contract.md) | `Ready for implementation` | status/body matrix определена | не оценено |
+| [VIG-29: OpenAI-compatible error contract for enforcement](issues/issue_29_openai_error_contract.md) | `Done` | завершена | 0 дней осталось |
 | [VIG-30: External Bearer identity extractor](issues/issue_30_external_identity_extractor.md) | `Draft` | внешний identity contract не определён | не оценено |
 | [VIG-31: Cache external identity lookup](issues/issue_31_identity_lookup_cache.md) | `Draft` | cache semantics не определены | не оценено |
 | [EPIC-32: Best-effort stdout audit migration](epics/epic_32_best_effort_stdout_audit.md) | `Done` | 2/2 | 0 дней осталось |
@@ -174,7 +174,7 @@ Issue является листом mind map, если:
 
 ### Phase 2: закрыть готовый standalone frontier
 
-- [ ] Реализовать [VIG-29](issues/issue_29_openai_error_contract.md): exact
+- [x] Реализовать [VIG-29](issues/issue_29_openai_error_contract.md): exact
   OpenAI-compatible status/body matrix, `Retry-After` и отсутствие upstream или
   payload disclosure.
 
@@ -224,8 +224,9 @@ Issue является листом mind map, если:
 - [ ] После стабилизации identity, enforcement и observability уточнить
   [VIG-33](issues/issue_33_availability_slo_and_operations.md).
 
-Текущий следующий шаг: реализация VIG-29. EPIC-32 завершён: stdout request
-migration работает, а durable-audit runtime и его consumers удалены.
+Текущий следующий шаг: завершить декомпозицию EPIC-20, назначив owner
+response parser contracts и опубликовав bounded SSE leaves. VIG-29 завершён:
+exact error matrix реализована без подключения enforcement.
 
 ## Как закрывать work item
 

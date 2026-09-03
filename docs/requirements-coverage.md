@@ -17,7 +17,7 @@
 |---|---|---|
 | `MVP-01` | Частично | Request Chat Completions полностью принимается и проверяется до upstream, но только shadow mode; response enforcement отсутствует. |
 | `MVP-02` | Частично | `fast-pii` реализован с указанным detector set и windowing, но request-only integration. |
-| `MVP-03` | Не реализовано | Runtime разрешает только `ALLOW`; `MASK` и `BLOCK` transport enforcement отсутствуют. |
+| `MVP-03` | Не реализовано | Runtime разрешает только `ALLOW`; `MASK` и `BLOCK` transport enforcement отсутствуют. Закрытый VIG-29 encoder уже фиксирует safe `BLOCK` HTTP contract, но не выполняет enforcement. |
 | `MVP-04` | Частично | Startup policy snapshot и group matching существуют, но новая direction/group contract и startup policy logging отсутствуют. |
 | `MVP-05` | Не реализовано | Есть Dummy и offline JWT extractors; external Bearer lookup и cache отсутствуют. |
 | `MVP-06` | Частично | REQUEST analysis публикует safe best-effort started/completed pair через existing non-blocking stdout без application-owned persistence; RESPONSE pair остаётся future EPIC-20 behavior. |
@@ -36,9 +36,9 @@
 | `CONC-04` | Частично | Request cancellation и graceful shutdown реализованы; response enforcement lifecycle отсутствует. |
 | `PROXY-01` | Не реализовано | Response/SSE currently pass through; bounded hold-before-release enforcement отсутствует. |
 | `PROXY-02` | Не реализовано | Exact-span JSON mutation отсутствует. |
-| `PROXY-03` | Частично | Capacity errors существуют, но новый `503`/`Retry-After` matrix и policy `BLOCK` contract принадлежат VIG-29. |
+| `PROXY-03` | Частично | Все пять VIG-29 status/body/header rows зафиксированы закрытым production encoder; current request capacity/source/orchestration failures используют exact `503` с `Retry-After: 1`, но `BLOCK` и response outcomes ещё не подключены. |
 | `OBS-01` | Частично | Base metrics/tracing и REQUEST stdout outcome pair существуют; response outcome и identity metrics отсутствуют. Audit-drop metrics intentionally не требуются. |
-| `OBS-02` | Частично | REQUEST pair и errors исключают payload, PII values/spans, credentials, identity/session и raw inbound propagation values. Ordinary request logs/traces сохраняют разрешённые tracing identifiers, configured session и accepted W3C propagation metadata по tracing contract; RESPONSE audit пока отсутствует. |
+| `OBS-02` | Частично | REQUEST pair и VIG-29 errors исключают payload, PII values/spans, credentials, identity/session, policy references, upstream details и raw inbound propagation values. Ordinary request logs/traces сохраняют разрешённые tracing identifiers, configured session и accepted W3C propagation metadata по tracing contract; RESPONSE audit пока отсутствует. |
 
 ## Stage 1 и non-goals
 

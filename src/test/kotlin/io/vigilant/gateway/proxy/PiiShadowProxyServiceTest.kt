@@ -5,6 +5,7 @@ import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.AppenderBase
 import com.linecorp.armeria.client.WebClient
+import com.linecorp.armeria.common.AggregatedHttpResponse
 import com.linecorp.armeria.common.HttpData
 import com.linecorp.armeria.common.HttpMethod
 import com.linecorp.armeria.common.HttpObject
@@ -94,6 +95,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import org.reactivestreams.Publisher
 import org.reactivestreams.Subscriber
 import org.reactivestreams.Subscription
 import org.slf4j.LoggerFactory
@@ -732,9 +734,9 @@ class PiiShadowProxyServiceTest {
         assertTrue(bodyDemanded.get())
     }
 
-    /** Executor admission loss uses the existing inspection-capacity response without body demand. */
+    /** Executor admission loss uses the VIG-29 request failure without body demand or handoff. */
     @Test
-    fun `request executor rejection is independent of removed audit availability`() {
+    fun `request executor rejection returns inspection unavailable without demand or handoff`() {
         val bodyDemanded = AtomicBoolean()
         val upstreamRequests = AtomicInteger()
         val upstream = fixture.startServer {
@@ -755,8 +757,7 @@ class PiiShadowProxyServiceTest {
                 .aggregate()
                 .join()
 
-        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, response.status())
-        assertEquals("""{"error":"inspection_capacity_exhausted"}""", response.contentUtf8())
+        assertRequestInspectionUnavailable(response)
         assertFalse(bodyDemanded.get())
         assertEquals(0, upstreamRequests.get())
     }
@@ -1158,7 +1159,7 @@ class PiiShadowProxyServiceTest {
         assertTrue(events.analysisEventNames().isEmpty(), "streamed source failure started analysis")
     }
 
-    /** Verifies process-wide retained-byte rejection without upstream disclosure. */
+    /** Process-wide retained-byte rejection uses VIG-29 without upstream handoff. */
     @Test
     fun `global retained byte exhaustion returns stable 503 without upstream disclosure`() {
         val upstreamRequests = AtomicInteger()
@@ -1190,8 +1191,7 @@ class PiiShadowProxyServiceTest {
         val response =
             client.execute(chatCompletionsRequest("x")).aggregate().join()
 
-        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, response.status())
-        assertEquals("""{"error":"inspection_capacity_exhausted"}""", response.contentUtf8())
+        assertRequestInspectionUnavailable(response)
         assertEquals(0, upstreamRequests.get())
         assertEquals(1, quota.activeOwners)
         assertEquals(96, quota.retainedBytes)
@@ -1199,6 +1199,37 @@ class PiiShadowProxyServiceTest {
         assertEquals(0, quota.activeOwners)
         assertEquals(0, quota.retainedBytes)
         assertTrue(events.analysisEventNames().isEmpty(), "global source admission failure started analysis")
+    }
+
+    /** Request-body infrastructure failure uses VIG-29 without leaking its cause or handing off. */
+    @Test
+    fun `request body failure returns inspection unavailable without upstream handoff`() {
+        val sentinel = "private-request-body-failure-6D2A"
+        val upstreamRequests = AtomicInteger()
+        val upstream =
+            fixture.startServer {
+                upstreamRequests.incrementAndGet()
+                HttpResponse.of(HttpStatus.OK)
+            }
+        val quota = RequestSourceQuota()
+        val gateway =
+            startShadowGateway(
+                upstreamUri = fixture.serverUri(upstream),
+                quota = quota,
+                requestTransform = { request ->
+                    HttpRequest.of(request.headers(), failingBodyPublisher(IllegalStateException(sentinel)))
+                },
+            )
+
+        val response =
+            WebClient.of(fixture.serverUri(gateway))
+                .execute(chatCompletionsRequest("body failure"))
+                .aggregate().join()
+
+        assertRequestInspectionUnavailable(response)
+        assertFalse(response.contentUtf8().contains(sentinel), "request body failure leaked its cause")
+        assertEquals(0, upstreamRequests.get())
+        assertSourceReservationsReleased(quota, "request body failure")
     }
 
     /** Verifies cancellation interrupts inspection and releases source plus context handoff. */
@@ -1488,7 +1519,7 @@ class PiiShadowProxyServiceTest {
         )
     }
 
-    /** Policy-provider failure before detector execution emits no pair and remains undisclosed. */
+    /** Policy-provider failure uses VIG-29 before handoff and emits no analysis pair. */
     @Test
     fun `unexpected policy failure returns safe inspection error before analysis`() {
         val sentinel = "policy provider sentinel"
@@ -1513,8 +1544,7 @@ class PiiShadowProxyServiceTest {
                 .aggregate().join()
 
         val completedResponse = response
-        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, completedResponse.status())
-        assertEquals("""{"error":"inspection_failed"}""", completedResponse.contentUtf8())
+        assertRequestInspectionUnavailable(completedResponse)
         assertEquals(0, upstreamRequests.get())
         assertTrue(proxyEvents.analysisEventNames().isEmpty(), "provider failure started analysis")
         assertSourceReservationsReleased(quota, "unexpected policy failure")
@@ -1665,6 +1695,7 @@ class PiiShadowProxyServiceTest {
      * @param policyProvider policy snapshot source used by the real orchestration boundary.
      * @param identityExtractor selected Bearer implementation; defaults to the established Dummy fixture.
      * @param inspectionExecutor optional deterministic executor supplied by lifecycle tests.
+     * @param requestTransform optional server-side request replacement for transport-failure tests.
      * @param configureServer optional Armeria settings for lifecycle scenarios.
      */
     @Suppress("LongParameterList")
@@ -1681,6 +1712,7 @@ class PiiShadowProxyServiceTest {
         requestBodyDemandObserved: AtomicBoolean? = null,
         policyProvider: PolicyProvider = DummyPolicyProvider(listOf(shadowPolicy(policyDeadline))),
         inspectionExecutor: ExecutorService? = null,
+        requestTransform: ((HttpRequest) -> HttpRequest)? = null,
         configureServer: ServerBuilder.() -> Unit = {},
     ): com.linecorp.armeria.server.Server {
         val requestExecutor =
@@ -1722,6 +1754,7 @@ class PiiShadowProxyServiceTest {
                 responseContexts,
                 serviceContexts,
                 requestBodyDemandObserved,
+                requestTransform,
             )
         return fixture.startServer(
             TracingService(observedService, tracerProvider.get("io.vigilant.gateway.test")),
@@ -1736,22 +1769,30 @@ class PiiShadowProxyServiceTest {
      * @param responseContexts optional response-phase handoff sink.
      * @param serviceContexts optional request-scope sink.
      * @param requestBodyDemandObserved optional inspection demand observer.
+     * @param requestTransform optional server-side request replacement for transport-failure tests.
      */
     private fun observeShadowService(
         shadowService: PiiShadowProxyService,
         responseContexts: MutableList<PolicyContext>?,
         serviceContexts: MutableList<ServiceRequestContext>?,
         requestBodyDemandObserved: AtomicBoolean?,
+        requestTransform: ((HttpRequest) -> HttpRequest)?,
     ): HttpService {
-        if (responseContexts == null && serviceContexts == null && requestBodyDemandObserved == null) {
+        val noObservations =
+            responseContexts == null && serviceContexts == null && requestBodyDemandObserved == null
+        if (noObservations && requestTransform == null) {
             return shadowService
         }
         return HttpService { ctx, request ->
             serviceContexts?.add(ctx)
+            val transformedRequest = requestTransform?.invoke(request) ?: request
             val observedRequest =
                 requestBodyDemandObserved?.let { observed ->
-                    HttpRequest.of(request.headers(), DemandObservingPublisher(request, observed))
-                } ?: request
+                    HttpRequest.of(
+                        transformedRequest.headers(),
+                        DemandObservingPublisher(transformedRequest, observed),
+                    )
+                } ?: transformedRequest
             val response = shadowService.serve(ctx, observedRequest)
             if (responseContexts == null) {
                 response
@@ -1763,6 +1804,34 @@ class PiiShadowProxyServiceTest {
                 }
             }
         }
+    }
+
+    /** Publishes only a controlled terminal body failure after the first positive demand. */
+    private fun failingBodyPublisher(failure: Throwable): Publisher<HttpData> =
+        Publisher { subscriber ->
+            val terminated = AtomicBoolean()
+            subscriber.onSubscribe(
+                object : Subscription {
+                    /** Delivers the controlled failure once after valid downstream demand. */
+                    override fun request(elements: Long) {
+                        if (elements > 0 && terminated.compareAndSet(false, true)) {
+                            subscriber.onError(failure)
+                        }
+                    }
+
+                    /** Prevents later failure delivery after downstream cancellation. */
+                    override fun cancel() {
+                        terminated.set(true)
+                    }
+                },
+            )
+        }
+
+    /** Asserts the canonical VIG-29 request inspection failure HTTP contract. */
+    private fun assertRequestInspectionUnavailable(response: AggregatedHttpResponse) {
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, response.status())
+        assertEquals("1", response.headers().get("retry-after"))
+        assertEquals(REQUEST_INSPECTION_UNAVAILABLE_BODY, response.contentUtf8())
     }
 
     /**
@@ -1897,6 +1966,11 @@ class PiiShadowProxyServiceTest {
                 "exception",
                 "event.id",
             )
+
+        /** Exact VIG-29 request technical-failure body shared by real HTTP cases. */
+        const val REQUEST_INSPECTION_UNAVAILABLE_BODY =
+            """{"error":{"message":"Request inspection unavailable.","type":"server_error",""" +
+                """"code":"request_inspection_unavailable"}}"""
 
     }
 

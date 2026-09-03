@@ -87,7 +87,7 @@ class PiiShadowProxyService internal constructor(
         } catch (_: java.util.concurrent.RejectedExecutionException) {
             inspectionSpan?.setStatus(StatusCode.ERROR)
             inspectionSpan?.end()
-            completion.complete(stableProxyError(HttpStatus.SERVICE_UNAVAILABLE, "inspection_capacity_exhausted"))
+            completion.complete(OpenAiErrorResponses.of(OpenAiErrorOutcome.REQUEST_INSPECTION_UNAVAILABLE))
         }
         return HttpResponse.of(completion)
     }
@@ -143,7 +143,7 @@ class PiiShadowProxyService internal constructor(
                             )
                         } else {
                             CompletableFuture.completedFuture(
-                                stableProxyError(HttpStatus.INTERNAL_SERVER_ERROR, "inspection_failed"),
+                                OpenAiErrorResponses.of(OpenAiErrorOutcome.REQUEST_INSPECTION_UNAVAILABLE),
                             )
                         }
                     }
@@ -167,7 +167,7 @@ class PiiShadowProxyService internal constructor(
 
                     else ->
                         CompletableFuture.completedFuture(
-                            stableProxyError(HttpStatus.INTERNAL_SERVER_ERROR, "inspection_failed"),
+                            OpenAiErrorResponses.of(OpenAiErrorOutcome.REQUEST_INSPECTION_UNAVAILABLE),
                         )
                 }
             }.thenCompose { stage -> stage }
@@ -255,7 +255,7 @@ class PiiShadowProxyService internal constructor(
 
             is ShadowInspectionRejection.Source -> InspectionHttpResponses.sourceError(rejection.code)
             is ShadowInspectionRejection.Inspection ->
-                stableProxyError(HttpStatus.INTERNAL_SERVER_ERROR, "inspection_failed")
+                OpenAiErrorResponses.of(OpenAiErrorOutcome.REQUEST_INSPECTION_UNAVAILABLE)
         }
 
     private companion object {
