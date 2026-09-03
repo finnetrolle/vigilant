@@ -1,10 +1,10 @@
 # VIG-20-04: Retained in-memory response contract
 
-**Статус:** Ready for implementation
-**Epic:** [EPIC-20](../../epics/epic_20_response_spooling_secure_spill.md)
+**Статус:** Done
+**Epic:** [EPIC-20](../../epics/epic_20_atomic_in_memory_response_analysis.md)
 **Ветка:** Response memory > terminology and deployment boundary
 **Зависит от:** нет
-**Блокирует:** [VIG-20-01](issue_20_01_bounded_memory_response_source.md)
+**Блокирует:** [VIG-20-01](issue_20_01_retained_memory_response_source.md)
 **Оценка:** 1 инженерный день; confidence High
 
 ## Цель
@@ -44,15 +44,28 @@ heap sizing и runtime OOM policy.
 
 ## Критерии готовности
 
-- [ ] `MVP_FUNCTIONS.md` и `MVP_NON_FUNCTIONAL_REQUIREMENTS.md` используют
+- [x] `MVP_FUNCTIONS.md` и `MVP_NON_FUNCTIONAL_REQUIREMENTS.md` используют
   `retained in-memory response source` и не называют его bounded.
-- [ ] EPIC-20 и VIG-20-01 одинаково фиксируют отсутствие application-level
+- [x] EPIC-20 и VIG-20-01 одинаково фиксируют отсутствие application-level
   response limit/quota и deployment-owned heap/OOM boundary.
-- [ ] `docs/requirements-coverage.md` не обещает bounded response memory при
+- [x] `docs/requirements-coverage.md` не обещает bounded response memory при
   отсутствии application-level bound.
-- [ ] Поиск по активным MVP, epic, issue и coverage documents не находит
+- [x] Поиск по активным MVP, epic, issue и coverage documents не находит
   противоречивого `bounded response` claim.
-- [ ] `./gradlew validateWorkItems` и `git diff --check` проходят.
+- [x] `./gradlew validateWorkItems` и `git diff --check` проходят.
+
+## Evidence
+
+Evidence зафиксирован 2026-09-03 через нормативные документы и work-item graph:
+
+- Repository-wide поиск по активным MVP, epic, issue и coverage documents не
+  нашёл `bounded response` claim. Оставшиеся совпадения описывают исправленное
+  противоречие в этой issue, датированные review и закрытые historical records,
+  explicit out-of-scope spill, `unbounded queue` и действительно bounded
+  deadlines.
+- `rtk proxy ./gradlew validateWorkItems` завершился `BUILD SUCCESSFUL` и
+  сообщил `Work-item graph is valid.`.
+- `rtk proxy git diff --check` завершился без ошибок.
 
 ## Ambiguity Report
 

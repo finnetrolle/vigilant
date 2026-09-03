@@ -10,7 +10,9 @@ Vigilant MVP является traffic guardrail для LLM. Он анализи�
 
 Vigilant синхронно проверяет OpenAI Chat Completions request до передачи
 upstream и response до передачи клиенту. Для streaming response он удерживает
-весь ответ в bounded spool до terminal event и решения policy.
+весь ответ в retained in-memory response source до terminal event и решения
+policy. Response source не имеет application-level limit или shared quota;
+heap sizing и runtime OOM policy принадлежат deployment.
 
 ## MVP-02. Fast PII
 

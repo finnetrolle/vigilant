@@ -63,11 +63,12 @@ Client cancellation прекращает inspection, spool и upstream work, е�
 
 ## Proxy и protocol
 
-### PROXY-01. Bounded response enforcement
+### PROXY-01. Retained in-memory response enforcement
 
-Request и response, включая SSE, удерживаются до policy decision в bounded
-spool. Клиент не получает response byte до `ALLOW` или `MASK`; при `BLOCK` body
-upstream не раскрывается.
+Request удерживается в bounded request source, а response, включая SSE, - в
+retained in-memory response source до policy decision. Response source не имеет
+application-level limit или shared quota. Клиент не получает response byte до
+`ALLOW` или `MASK`; при `BLOCK` body upstream не раскрывается.
 
 ### PROXY-02. Lossless forwarding and mutation
 

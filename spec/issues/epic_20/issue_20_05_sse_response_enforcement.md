@@ -1,9 +1,9 @@
 # VIG-20-05: SSE response inspection and enforcement
 
 **Статус:** Ready for implementation
-**Epic:** [EPIC-20](../../epics/epic_20_response_spooling_secure_spill.md)
+**Epic:** [EPIC-20](../../epics/epic_20_atomic_in_memory_response_analysis.md)
 **Ветка:** Response enforcement > SSE Chat Completions
-**Зависит от:** [VIG-06-03](../epic_06/issue_06_03_chat_completions_response_parser.md), [VIG-20-01](issue_20_01_bounded_memory_response_source.md), [VIG-20-02](issue_20_02_response_inspection_enforcement.md), [VIG-20-03](issue_20_03_reusable_text_masker.md), [VIG-29](../issue_29_openai_error_contract.md), [VIG-32-01](../epic_32/issue_32_01_stdout_request_audit_migration.md)
+**Зависит от:** [VIG-06-03](../epic_06/issue_06_03_chat_completions_response_parser.md), [VIG-20-01](issue_20_01_retained_memory_response_source.md), [VIG-20-02](issue_20_02_response_inspection_enforcement.md), [VIG-20-03](issue_20_03_reusable_text_masker.md), [VIG-29](../issue_29_openai_error_contract.md), [VIG-32-01](../epic_32/issue_32_01_stdout_request_audit_migration.md)
 **Блокирует:** нет
 **Оценка:** 4-5 инженерных дней
 **Уверенность:** Medium

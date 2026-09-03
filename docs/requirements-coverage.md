@@ -30,11 +30,11 @@
 | `PERF-01` | Не реализовано | Есть bypass/shadow benchmark, но нет отдельного request/response enforcement latency evidence с новым profile. |
 | `PERF-02` | Частично | Existing reports фиксируют warmup и hardware; новый non-streaming profile и warm/mock identity setup отсутствуют. |
 | `PERF-03` | Частично | Current policies имеют deadline, но новый per-policy aggregation/fail-closed contract не реализован. |
-| `CONC-01` | Частично | Request source и windowing bounded; required response in-memory lifecycle и cleanup пока отсутствуют. Response quota intentionally не требуется. |
+| `CONC-01` | Частично | Request source и windowing bounded; required retained in-memory response source lifecycle и cleanup пока отсутствуют. Response source не имеет application-level limit или shared quota; heap sizing и runtime OOM policy принадлежат deployment. |
 | `CONC-02` | Частично | Existing request capacity gives typed failure; response capacity intentionally не резервируется до будущего in-memory response lifecycle. |
 | `CONC-03` | Частично | CPU inspection isolation реализована; external identity integration отсутствует. |
 | `CONC-04` | Частично | Request cancellation и graceful shutdown реализованы; response enforcement lifecycle отсутствует. |
-| `PROXY-01` | Не реализовано | Response/SSE currently pass through; bounded hold-before-release enforcement отсутствует. |
+| `PROXY-01` | Не реализовано | Response/SSE currently pass through; retained in-memory hold-before-release enforcement отсутствует. |
 | `PROXY-02` | Не реализовано | Exact-span JSON mutation отсутствует. |
 | `PROXY-03` | Частично | Все пять VIG-29 status/body/header rows зафиксированы закрытым production encoder; current request capacity/source/orchestration failures используют exact `503` с `Retry-After: 1`, но `BLOCK` и response outcomes ещё не подключены. |
 | `OBS-01` | Частично | Base metrics/tracing и REQUEST stdout outcome pair существуют; response outcome и identity metrics отсутствуют. Audit-drop metrics intentionally не требуются. |

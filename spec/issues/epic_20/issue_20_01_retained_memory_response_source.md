@@ -1,7 +1,7 @@
 # VIG-20-01: In-memory response source
 
 **Статус:** Ready for implementation
-**Epic:** [EPIC-20](../../epics/epic_20_response_spooling_secure_spill.md)
+**Epic:** [EPIC-20](../../epics/epic_20_atomic_in_memory_response_analysis.md)
 **Ветка:** Response source > ordinary response and SSE lifecycle
 **Зависит от:** [VIG-06-03](../epic_06/issue_06_03_chat_completions_response_parser.md), [VIG-20-04](issue_20_04_retained_memory_response_contract.md)
 **Блокирует:** [VIG-20-02](issue_20_02_response_inspection_enforcement.md) и будущий SSE enforcement leaf EPIC-20
@@ -9,9 +9,9 @@
 
 ## Цель
 
-Добавить временный bounded in-memory source для upstream Chat Completions
-response, включая SSE. Guardrail-enabled response не раскрывается клиенту до
-получения complete source и последующего policy decision.
+Добавить временный retained in-memory response source для upstream Chat
+Completions response, включая SSE. Guardrail-enabled response не раскрывается
+клиенту до получения complete source и последующего policy decision.
 
 Source не является audit storage и не сохраняет payload после terminal cleanup.
 Он существует только чтобы MVP мог реально анализировать response до client
@@ -24,7 +24,8 @@ disclosure.
 - Application-level raw/text byte limit и shared response capacity отсутствуют.
   Response source может использовать доступный JVM heap. После каждого
   terminal outcome он освобождает все owned buffers и references; дальнейшее
-  освобождение памяти принадлежит JVM GC.
+  освобождение памяти принадлежит JVM GC. Heap sizing и runtime OOM policy
+  принадлежат deployment и не являются application memory safety guarantee.
 - Ordinary response и SSE удерживаются полностью. Для SSE клиент не получает
   status, headers или event byte до terminal event и policy decision.
 - Supported OpenAI Chat Completions SSE считается complete только после
@@ -45,7 +46,7 @@ disclosure.
   starts no new response analysis and cancels active source after drain
   deadline, releasing every response buffer/reference.
 - Source сохраняет exact original bytes для `ALLOW` replay. Ownership cleanup
-  обязателен при success, limit rejection, parse/error, cancellation, upstream
+  обязателен при success, policy rejection, parse/error, cancellation, upstream
   failure и shutdown.
 - Payload, preview, temporary object identity, path и derived hash не попадают
   в stdout, metrics, traces или errors.
@@ -75,8 +76,8 @@ gateway не вводит свой response quota или admission rejection.
   `invalid_upstream_response` without partial disclosure.
 - [ ] Source uses no audit file, disk spill, temporary file, application-level
   response quota or shared response capacity admission.
-- [ ] Every terminal path — `ALLOW`, `MASK`, `BLOCK`, cancellation, upstream
-  interruption and shutdown — releases all source-owned buffers/references;
+- [ ] Every terminal path, including `ALLOW`, `MASK`, `BLOCK`, cancellation,
+  upstream interruption and shutdown, releases all source-owned buffers/references;
   no `analysis_completed` is emitted before a final analysis outcome.
 - [ ] New and modified Kotlin declarations/test methods have current KDoc;
   focused E2E suite and `./gradlew build` pass.

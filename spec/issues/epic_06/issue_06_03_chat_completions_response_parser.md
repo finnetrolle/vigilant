@@ -4,7 +4,7 @@
 **Epic:** [EPIC-06](../../epics/epic_06_llm_message_parsing.md)
 **Ветка:** OpenAI Chat Completions > JSON and SSE response
 **Зависит от:** [VIG-06-02](issue_06_02_chat_completions_request_parser.md)
-**Блокирует:** [VIG-20-01](../epic_20/issue_20_01_bounded_memory_response_source.md), [VIG-20-02](../epic_20/issue_20_02_response_inspection_enforcement.md)
+**Блокирует:** [VIG-20-01](../epic_20/issue_20_01_retained_memory_response_source.md), [VIG-20-02](../epic_20/issue_20_02_response_inspection_enforcement.md)
 **Оценка:** 4-5 инженерных дней
 **Уверенность:** Medium
 

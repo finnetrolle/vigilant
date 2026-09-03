@@ -1,7 +1,7 @@
 # VIG-20-03: Reusable text masker
 
 **Статус:** Ready for implementation
-**Epic:** [EPIC-20](../../epics/epic_20_response_spooling_secure_spill.md)
+**Epic:** [EPIC-20](../../epics/epic_20_atomic_in_memory_response_analysis.md)
 **Ветка:** Response enforcement > transport-neutral masking
 **Зависит от:** нет
 **Блокирует:** [VIG-20-02](issue_20_02_response_inspection_enforcement.md) и будущий SSE enforcement leaf EPIC-20

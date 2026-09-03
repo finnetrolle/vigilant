@@ -2,9 +2,9 @@
 
 **ID:** `EPIC-20`
 **Тип:** Epic
-**Статус:** Ready for implementation
+**Статус:** In progress
 **Приоритет:** High
-**Предварительная оценка:** 13-19 инженерных дней; 0/5 issues завершено
+**Предварительная оценка:** 13-19 инженерных дней; 1/5 issues завершена
 **Связанные требования:** `PROXY-01`, `PROXY-02`, `CONC-01`, `CONC-02`, `CONC-03`
 
 ## Контекст
@@ -19,11 +19,12 @@ source в завершённом [EPIC-08](epic_08_message_spooling_replay.md). 
 
 ## Целевой результат
 
-Guardrail-enabled response полностью удерживается в in-memory source до
-terminal event и итогового policy decision. При `ALLOW` exact original
-response раскрывается клиенту с backpressure, при `BLOCK` клиент не получает
-upstream status, headers или body. Для MVP source использует доступный JVM heap
-и не имеет quota, disk spill path или persistent storage.
+Guardrail-enabled response полностью удерживается в retained in-memory response
+source до terminal event и итогового policy decision. При `ALLOW` exact
+original response раскрывается клиенту с backpressure, при `BLOCK` клиент не
+получает upstream status, headers или body. Для MVP source использует доступный
+JVM heap и не имеет application-level limit, shared quota, disk spill path или
+persistent storage. Heap sizing и runtime OOM policy принадлежат deployment.
 
 ## Подтверждённые решения
 
@@ -47,11 +48,11 @@ upstream status, headers или body. Для MVP source использует д�
 
 ```text
 EPIC-20 Atomic in-memory response analysis
-├── response memory contract (Ready)
+├── response memory contract (Done)
 │   ├── retained in-memory terminology
 │   ├── no application-level response quota
 │   └── deployment-owned heap sizing and OOM policy
-├── response source contract (Ready after memory contract)
+├── response source contract (Ready)
 │   ├── ordinary response lifecycle
 │   ├── status/header disclosure boundary
 │   └── cancellation and upstream failure
@@ -74,15 +75,15 @@ EPIC-20 Atomic in-memory response analysis
 
 ## Дочерние issues
 
-- [ ] [VIG-20-04: Retained in-memory response contract](../issues/epic_20/issue_20_04_retained_memory_response_contract.md) - `Ready for implementation`
-- [ ] [VIG-20-01: In-memory response source](../issues/epic_20/issue_20_01_bounded_memory_response_source.md) - `Ready for implementation`
+- [x] [VIG-20-04: Retained in-memory response contract](../issues/epic_20/issue_20_04_retained_memory_response_contract.md) - `Done`
+- [ ] [VIG-20-01: In-memory response source](../issues/epic_20/issue_20_01_retained_memory_response_source.md) - `Ready for implementation`
 - [ ] [VIG-20-03: Reusable text masker](../issues/epic_20/issue_20_03_reusable_text_masker.md) - `Ready for implementation`
 - [ ] [VIG-20-02: Non-stream response inspection and enforcement](../issues/epic_20/issue_20_02_response_inspection_enforcement.md) - `Ready for implementation`
 - [ ] [VIG-20-05: SSE response inspection and enforcement](../issues/epic_20/issue_20_05_sse_response_enforcement.md) - `Ready for implementation`
 
 VIG-20-02 является первым узким enforcement leaf. Его прежний полный
 response/SSE contract поднят в этот epic. VIG-20-05 публикует отдельный ready
-bounded SSE enforcement leaf; framing и terminal parsing завершены в
+SSE enforcement leaf; framing и terminal parsing завершены в
 [VIG-06-03](../issues/epic_06/issue_06_03_chat_completions_response_parser.md).
 
 ## Нормативный future scope
@@ -173,8 +174,8 @@ bounded SSE enforcement leaf; framing и terminal parsing завершены в
 - Temporary source недоступен через logs/errors и освобождается после lifecycle.
 - SSE replay начинается только после terminal event и полного `ALLOW`; любой
   `BLOCK` оставляет upstream SSE полностью нераскрытым клиенту.
-- Non-stream JSON и SSE protocol/enforcement доказаны отдельными bounded
-  leaves, каждый с одним основным E2E или public parser seam.
+- Non-stream JSON и SSE protocol/enforcement доказаны отдельными узкими leaves,
+  каждый с одним основным E2E или public parser seam.
 - Каждый реально проанализированный response публикует одну safe stdout audit
   pair по VIG-32-01 без влияния logging failure на HTTP outcome.
 - Для добавленных и изменённых Kotlin declarations написан KDoc.

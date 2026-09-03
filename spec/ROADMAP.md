@@ -199,9 +199,10 @@ parent epics содержат normative decisions, а implementation leaves оп
    deduplication, cancellation и error aggregation.
 4. [VIG-08-01](issues/epic_08/issue_08_01_spool_contract.md) зафиксировал
    request-only in-memory source, quotas, replay, backpressure и
-   cleanup. Response/SSE storage и disk spill перенесены в future
-   [EPIC-20](epics/epic_20_response_spooling_secure_spill.md) со статусом
-   `Draft`.
+   cleanup. Retained in-memory response source lifecycle для ordinary и SSE
+   responses перенесён в
+   [EPIC-20](epics/epic_20_atomic_in_memory_response_analysis.md), который
+   сейчас имеет статус `In progress`.
 
 Contract issues обязаны опубликовать implementation leaves с estimate не более
 пяти инженерных дней, отдельным observable result и pre-agreed public seam.
@@ -393,9 +394,10 @@ SERVER, INTERNAL и CLIENT spans; application и OTLP JSON records переда�
 Post-milestone evidence также синхронизировано: VIG-21-03 и VIG-21-04 имеют
 status `Done`; upstream-error и streaming tests используют bounded causal
 observation seams. Их исторические issue records и reports сохраняют
-исходные dates и evidence. EPIC-20 остаётся единственным owner
-response/SSE spooling и secure spill decisions, а EPIC-06 владеет protocol
-parsing; EPIC-21 закрыт без дублирующего future scope.
+исходные dates и evidence. EPIC-20 остаётся единственным owner retained
+in-memory response source lifecycle и enforcement для ordinary и SSE
+responses, а EPIC-06 владеет protocol parsing; EPIC-21 закрыт без
+дублирующего future scope.
 
 Post-milestone closure EPIC-21 завершён. В EPIC-22 local durable store
 [VIG-22-01](issues/epic_22/issue_22_01_local_durable_audit_store.md), mandatory
@@ -419,9 +421,9 @@ consumers.
 ## Не входит в первый production increment
 
 - OpenAI Responses API, Realtime и Batch.
-- Response content inspection, atomic SSE buffering и secure response spill,
-  принадлежащие future
-  [EPIC-20](epics/epic_20_response_spooling_secure_spill.md).
+- Response content inspection и atomic retained in-memory response source
+  lifecycle для SSE, принадлежащие future
+  [EPIC-20](epics/epic_20_atomic_in_memory_response_analysis.md).
 - `BLOCK`, `MASK`, `REMOVE` и изменение protocol source.
 - historical scope первого milestone не включал user/group identity
   extraction и trusted ingress model. Это temporal boundary, а не current
@@ -442,8 +444,8 @@ consumers.
 - DTO reconstruction отклонён: unmodified forwarding обязан использовать
   original source.
 - Fixed `1 MiB` rejection отклонён: detector limit закрывается windowing.
-- Disk spill отложен в EPIC-20: bounded in-memory path быстрее даёт безопасный
-  первый increment без сохранения raw PII на disk.
+- Disk spill отклонён для MVP в EPIC-20: retained in-memory response source не
+  сохраняет raw PII на disk.
 - Hardcoded default policy отклонён: operator обязан явно предоставить
   validated global coverage policy.
 - Прямой OTLP network exporter из Vigilant отклонён: application logs и

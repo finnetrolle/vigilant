@@ -223,9 +223,9 @@ upstream status, headers или body до terminal event и итогового p
 decision. Это решение не активно в первом production increment, где response
 остаётся streaming pass-through без inspection.
 
-Атомарное удержание response source, bounded spill, replay, cleanup и
+Атомарное удержание retained in-memory response source, replay, cleanup и
 backpressure принадлежат
-[EPIC-20](epic_20_response_spooling_secure_spill.md). Sliding window решает
+[EPIC-20](epic_20_atomic_in_memory_response_analysis.md). Sliding window решает
 detector payload limit, но само по себе не разрешает ранний forwarding.
 Incremental release до итогового decision не входит в MVP.
 
@@ -341,7 +341,8 @@ Normalized structured view не используется для пересбор
 Original body и normalized parse result имеют разное ownership:
 
 - transport/integration layer владеет точной исходной последовательностью
-  bytes или events и сохраняет её через bounded spool/tee;
+  bytes или events и сохраняет request в bounded source, а response - в
+  retained in-memory response source;
 - parser читает source в read-only режиме и строит normalized result;
 - parse result не содержит копию raw body и не возвращает reconstructed body;
 - forwarding без modifications использует только original source;
@@ -350,9 +351,9 @@ Original body и normalized parse result имеют разное ownership:
 
 Spooling, replay, cleanup и forwarding lifecycle не входят в EPIC-06.
 Завершённый bounded in-memory request source описан в
-[EPIC-08](epic_08_message_spooling_replay.md), а future response/SSE source и
-secure temporary storage принадлежат
-[EPIC-20](epic_20_response_spooling_secure_spill.md).
+[EPIC-08](epic_08_message_spooling_replay.md), а future retained in-memory
+response source для ordinary и SSE responses принадлежит
+[EPIC-20](epic_20_atomic_in_memory_response_analysis.md).
 
 Detector payload limit не является максимальной длиной LLM exchange. Несколько
 messages уже представлены несколькими независимыми fragments и не
@@ -442,8 +443,9 @@ OpenAI formats.
   логи и safe error messages.
 - Полная агрегация обычного или streaming body допускается только при явно
   обоснованной необходимости. Для guardrail-enabled SSE такой необходимостью
-  является принятая атомарная policy-транзакция; bounded spool, backpressure,
-  cancellation и увеличенный time-to-first-byte учитываются EPIC-20.
+  является принятая атомарная policy-транзакция; retained in-memory response
+  source, backpressure, cancellation и увеличенный time-to-first-byte
+  учитываются EPIC-20.
 
 ## Предварительная граница ответственности
 
@@ -483,8 +485,8 @@ OpenAI formats.
   fragment.
 - [EPIC-08](epic_08_message_spooling_replay.md) владеет bounded in-memory
   request source, replay, cleanup и request forwarding lifecycle.
-- [EPIC-20](epic_20_response_spooling_secure_spill.md) владеет future atomic
-  response/SSE source lifecycle и secure disk spill.
+- [EPIC-20](epic_20_atomic_in_memory_response_analysis.md) владеет future atomic
+  retained in-memory response source lifecycle для ordinary и SSE responses.
 
 ## Нормативные protocol sources
 

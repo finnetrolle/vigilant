@@ -15,9 +15,10 @@ DTO. Отдельная request-source capability сохраняет точну�
 bytes и предоставляет lossless replay после policy decision.
 
 Первый production increment использует только bounded in-memory storage.
-Response/SSE source lifecycle и secure disk spill вынесены в отдельный future
-[EPIC-20](epic_20_response_spooling_secure_spill.md), чтобы завершённый request
-increment не зависел от ещё не активного response-inspection scope.
+Retained in-memory response source lifecycle для ordinary и SSE responses
+вынесен в отдельный future
+[EPIC-20](epic_20_atomic_in_memory_response_analysis.md), чтобы завершённый
+request increment не зависел от ещё не активного response-inspection scope.
 
 ## Карта декомпозиции
 
@@ -161,8 +162,8 @@ state descriptions и metrics не содержат bytes, preview, filename, me
   decoded fragments, но не хранит original encoded message.
 - [EPIC-04](epic_04_policy_engine.md) возвращает policy decision, после
   которого integration выбирает replay или reject.
-- [EPIC-20](epic_20_response_spooling_secure_spill.md) владеет future
-  response/SSE source lifecycle и secure disk spill.
+- [EPIC-20](epic_20_atomic_in_memory_response_analysis.md) владеет future
+  retained in-memory response source lifecycle для ordinary и SSE responses.
 
 ## Не входит в epic
 

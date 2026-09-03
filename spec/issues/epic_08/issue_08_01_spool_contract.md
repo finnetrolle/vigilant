@@ -13,7 +13,7 @@ Request source ownership, in-memory lifecycle, replay semantics и resource
 boundaries определены настолько точно, что первый implementation leaf можно
 выполнить независимо. Response/SSE source и disk spill не получили скрытых
 defaults и после завершения request increment перенесены в future
-[EPIC-20](../../epics/epic_20_response_spooling_secure_spill.md).
+[EPIC-20](../../epics/epic_20_atomic_in_memory_response_analysis.md).
 
 Это documentation-only issue. Production spool и integration не добавляются.
 

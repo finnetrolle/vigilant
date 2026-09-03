@@ -1,9 +1,9 @@
 # VIG-20-02: Non-stream response inspection and enforcement
 
 **Статус:** Ready for implementation
-**Epic:** [EPIC-20](../../epics/epic_20_response_spooling_secure_spill.md)
+**Epic:** [EPIC-20](../../epics/epic_20_atomic_in_memory_response_analysis.md)
 **Ветка:** Response enforcement > non-stream Chat Completions
-**Зависит от:** [VIG-06-03](../epic_06/issue_06_03_chat_completions_response_parser.md), [VIG-20-01](issue_20_01_bounded_memory_response_source.md), [VIG-20-03](issue_20_03_reusable_text_masker.md), [VIG-29](../issue_29_openai_error_contract.md), [VIG-32-01](../epic_32/issue_32_01_stdout_request_audit_migration.md)
+**Зависит от:** [VIG-06-03](../epic_06/issue_06_03_chat_completions_response_parser.md), [VIG-20-01](issue_20_01_retained_memory_response_source.md), [VIG-20-03](issue_20_03_reusable_text_masker.md), [VIG-29](../issue_29_openai_error_contract.md), [VIG-32-01](../epic_32/issue_32_01_stdout_request_audit_migration.md)
 **Блокирует:** [VIG-20-05](issue_20_05_sse_response_enforcement.md)
 **Оценка:** 3-5 инженерных дней; confidence Medium
 
@@ -19,8 +19,8 @@ response analysis.
 
 Прежний scope VIG-20-02, включавший одновременно non-stream JSON, SSE framing,
 cross-chunk masking, audit и полный lifecycle, сохранён на нормативном уровне
-[EPIC-20](../../epics/epic_20_response_spooling_secure_spill.md). SSE framing
-завершён в VIG-06-03; SSE enforcement опубликован как отдельный ready bounded
+[EPIC-20](../../epics/epic_20_atomic_in_memory_response_analysis.md). SSE framing
+завершён в VIG-06-03; SSE enforcement опубликован как отдельный ready узкий
 leaf VIG-20-05.
 
 ## Принятые решения
