@@ -21,7 +21,7 @@
 | `MVP-04` | Частично | Startup policy snapshot и group matching существуют, но новая direction/group contract и startup policy logging отсутствуют. |
 | `MVP-05` | Не реализовано | Есть Dummy и offline JWT extractors; external Bearer lookup и cache отсутствуют. |
 | `MVP-06` | Частично | REQUEST analysis публикует safe best-effort started/completed pair через existing non-blocking stdout без application-owned persistence; RESPONSE pair остаётся future EPIC-20 behavior. |
-| `MVP-07` | Частично | Поддержан только Chat Completions request path; response inspection и enforcement отсутствуют. |
+| `MVP-07` | Частично | Chat Completions request и response JSON/SSE parser contracts реализованы; runtime response inspection и enforcement отсутствуют. |
 
 ## Нефункциональные требования MVP
 

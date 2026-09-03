@@ -3,6 +3,7 @@ package io.vigilant.protocol.openai
 import io.vigilant.protocol.NormalizedProtocolAttributes
 import java.io.ByteArrayInputStream
 import java.io.InputStream
+import java.io.SequenceInputStream
 import java.util.Collections
 
 /** Complete immutable byte source that can open independent read-only streams. */
@@ -13,9 +14,16 @@ fun interface CompleteByteSource {
     /** Factories for standalone immutable sources. */
     companion object {
         /** Creates a source backed by a defensive copy of [bytes]. */
-        fun copyOf(bytes: ByteArray): CompleteByteSource {
-            val snapshot = bytes.copyOf()
-            return CompleteByteSource { ByteArrayInputStream(snapshot) }
+        fun copyOf(bytes: ByteArray): CompleteByteSource = copyOf(listOf(bytes))
+
+        /** Creates a source backed by defensive copies of ordered [segments]. */
+        fun copyOf(segments: Collection<ByteArray>): CompleteByteSource {
+            val snapshot = segments.map(ByteArray::copyOf)
+            return CompleteByteSource {
+                SequenceInputStream(
+                    Collections.enumeration(snapshot.map(::ByteArrayInputStream)),
+                )
+            }
         }
     }
 }
@@ -45,6 +53,9 @@ enum class ProtocolDirection {
 enum class ProtocolTransport {
     /** One complete JSON document. */
     JSON,
+
+    /** Server-Sent Events stream. */
+    SSE,
 }
 
 /** Explicit routing descriptor chosen before parsing a protocol body. */
@@ -57,7 +68,7 @@ data class OpenAiOperationDescriptor(
     val method: String,
     /** Exact normalized request path. */
     val normalizedPath: String,
-    /** Request media type, optionally including parameters. */
+    /** Source media type for the selected direction, optionally including parameters. */
     val mediaType: String,
     /** Logical parse direction. */
     val direction: ProtocolDirection,
@@ -79,6 +90,26 @@ data class OpenAiOperationDescriptor(
                 direction = ProtocolDirection.REQUEST,
                 transport = ProtocolTransport.JSON,
                 contract = "openai-chat-completions-request@2026-08-26",
+            )
+
+        /** Pinned OpenAI Chat Completions ordinary JSON response descriptor. */
+        val CHAT_COMPLETIONS_JSON_RESPONSE =
+            OpenAiOperationDescriptor(
+                family = ProtocolFamily.OPENAI,
+                operation = ProtocolOperation.CHAT_COMPLETIONS,
+                method = "POST",
+                normalizedPath = "/v1/chat/completions",
+                mediaType = "application/json",
+                direction = ProtocolDirection.RESPONSE,
+                transport = ProtocolTransport.JSON,
+                contract = "openai-chat-completions-response@2026-09-03",
+            )
+
+        /** Pinned OpenAI Chat Completions SSE response descriptor. */
+        val CHAT_COMPLETIONS_SSE_RESPONSE =
+            CHAT_COMPLETIONS_JSON_RESPONSE.copy(
+                mediaType = "text/event-stream",
+                transport = ProtocolTransport.SSE,
             )
     }
 }
@@ -207,7 +238,7 @@ data class InspectionGap(
     val locator: ProtocolLocator,
 )
 
-/** Completeness of text inspection for one successfully parsed request. */
+/** Completeness of text inspection for one successfully parsed protocol message. */
 enum class InspectionCoverage {
     /** All recognized content is represented by text fragments. */
     FULLY_INSPECTABLE,
@@ -216,7 +247,27 @@ enum class InspectionCoverage {
     PARTIALLY_INSPECTABLE,
 
     /** Recognized content exists but no non-empty text fragment is inspectable. */
-    UNINSPECTABLE,
+    UNINSPECTABLE;
+
+    /** Derives coverage from the presence of normalized text and recognized gaps. */
+    companion object {
+        /**
+         * Returns the canonical terminal coverage for one normalized parse result.
+         *
+         * @param hasTextFragments whether at least one non-empty text fragment was produced.
+         * @param hasInspectionGaps whether at least one recognized gap was produced.
+         * @return coverage shared by every protocol direction and transport.
+         */
+        internal fun derive(
+            hasTextFragments: Boolean,
+            hasInspectionGaps: Boolean,
+        ): InspectionCoverage =
+            when {
+                !hasInspectionGaps -> FULLY_INSPECTABLE
+                !hasTextFragments -> UNINSPECTABLE
+                else -> PARTIALLY_INSPECTABLE
+            }
+    }
 }
 
 /** Immutable normalized Chat Completions request. */

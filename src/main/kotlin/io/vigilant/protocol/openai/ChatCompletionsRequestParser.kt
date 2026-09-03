@@ -84,7 +84,11 @@ object ChatCompletionsRequestParser {
                 attributes = NormalizedProtocolAttributes(model),
                 fragments = collector.fragments,
                 inspectionGaps = collector.inspectionGaps,
-                coverage = collector.coverage(),
+                coverage =
+                    InspectionCoverage.derive(
+                        hasTextFragments = collector.fragments.isNotEmpty(),
+                        hasInspectionGaps = collector.inspectionGaps.isNotEmpty(),
+                    ),
             ),
         )
     }
@@ -97,14 +101,6 @@ object ChatCompletionsRequestParser {
 
         /** Recognized non-text content in original semantic value order. */
         val inspectionGaps = ArrayList<InspectionGap>()
-
-        /** Derives explicit coverage from the collected semantic result. */
-        fun coverage(): InspectionCoverage =
-            when {
-                inspectionGaps.isEmpty() -> InspectionCoverage.FULLY_INSPECTABLE
-                fragments.isEmpty() -> InspectionCoverage.UNINSPECTABLE
-                else -> InspectionCoverage.PARTIALLY_INSPECTABLE
-            }
 
         /** Collects the required non-empty message array. */
         fun collectMessages(value: JsonNode) {

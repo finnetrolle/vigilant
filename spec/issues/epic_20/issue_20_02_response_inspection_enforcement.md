@@ -3,7 +3,7 @@
 **Статус:** Draft
 **Epic:** [EPIC-20](../../epics/epic_20_response_spooling_secure_spill.md)
 **Ветка:** Response enforcement > non-stream Chat Completions
-**Зависит от:** [VIG-20-01](issue_20_01_bounded_memory_response_source.md), [VIG-20-03](issue_20_03_reusable_text_masker.md), [VIG-29](../issue_29_openai_error_contract.md), [VIG-32-01](../epic_32/issue_32_01_stdout_request_audit_migration.md)
+**Зависит от:** [VIG-06-03](../epic_06/issue_06_03_chat_completions_response_parser.md), [VIG-20-01](issue_20_01_bounded_memory_response_source.md), [VIG-20-03](issue_20_03_reusable_text_masker.md), [VIG-29](../issue_29_openai_error_contract.md), [VIG-32-01](../epic_32/issue_32_01_stdout_request_audit_migration.md)
 **Блокирует:** нет
 **Оценка:** 3-5 инженерных дней; confidence Medium
 
@@ -19,13 +19,15 @@ response analysis.
 
 Прежний scope VIG-20-02, включавший одновременно non-stream JSON, SSE framing,
 cross-chunk masking, audit и полный lifecycle, сохранён на нормативном уровне
-[EPIC-20](../../epics/epic_20_response_spooling_secure_spill.md). SSE будет
-опубликован отдельными bounded leaves.
+[EPIC-20](../../epics/epic_20_response_spooling_secure_spill.md). SSE framing
+завершён в VIG-06-03; SSE enforcement будет опубликован отдельным bounded leaf.
 
 ## Принятые решения
 
 - Response enforcement является обязательной частью MVP, а не shadow-only
   observability.
+- Response JSON/SSE parsing использует единственный public contract VIG-06-03;
+  EPIC-20 не создаёт competing parser API.
 - Каждый string `choices[].message.content` является независимым inspection
   fragment. Findings не пересекают границы choices.
 - `ALLOW` раскрывает exact original response byte-for-byte.
@@ -56,8 +58,6 @@ cross-chunk masking, audit и полный lifecycle, сохранён на но
 
 ## Открытые решения
 
-- Какой epic владеет public response JSON parser contract: EPIC-06 или
-  EPIC-20. Реализация не должна создавать два competing parser API.
 - Как существующие `PolicyReactions` и `ReactionPlan` предоставляют final
   `ALLOW`/`MASK`/`BLOCK` плюс canonical masking instructions без detector rerun.
 - Какая existing gateway boundary принимает retained source ownership и
@@ -75,9 +75,9 @@ cross-chunk masking, audit и полный lifecycle, сохранён на но
 
 ## Не входит
 
-- SSE framing, `data: [DONE]`, text assembly по `choice.index`, cross-chunk
-  findings или SSE response rewrite. Эти outcomes принадлежат будущим leaves
-  EPIC-20.
+- SSE framing, `data: [DONE]` и text assembly по `choice.index` завершены в
+  VIG-06-03; cross-chunk findings и SSE response rewrite принадлежат будущему
+  enforcement leaf EPIC-20.
 - Response source ownership и memory lifecycle: VIG-20-01.
 - Audit persistence, custom queue, WAL, file handoff или Collector.
 - Упрощение существующей policy model, новые detector types, policy hot reload,
@@ -85,7 +85,7 @@ cross-chunk masking, audit и полный lifecycle, сохранён на но
 
 ## Условия перехода в Ready
 
-- [ ] Назначен один owner и один public seam для non-stream response parser.
+- [x] EPIC-06 назначен owner единственного public response parser seam VIG-06-03.
 - [ ] Зафиксировано преобразование existing policy result в final reaction и
   canonical masking instructions без изменения policy scope.
 - [ ] Назван real-Armeria E2E seam для удержания response до decision и exact
@@ -110,8 +110,8 @@ cross-chunk masking, audit и полный lifecycle, сохранён на но
 ```text
 Goals:        0.0   non-stream enforcement outcome fixed
 Acceptance:   0.20  response matrix retained from the former broad issue
-Boundaries:   0.35  response parser ownership remains open
+Boundaries:   0.15  VIG-06-03 parser ownership fixed; integration seam open
 Alternatives: 0.20  integration seam with current policy needs confirmation
 Assumptions:  0.20  source handoff seam will reuse gateway ownership model
-Aggregate:    0.19  Draft: resolve parser and policy-result seams.
+Aggregate:    0.15  Draft: resolve policy-result and integration seams.
 ```

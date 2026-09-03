@@ -99,12 +99,12 @@ Issue является листом mind map, если:
 | [EPIC-03: Policy context extraction](epics/epic_03_policy_context_extraction.md) | `Done` | 7/7 | 0 дней осталось |
 | [EPIC-04: Policy engine](epics/epic_04_policy_engine.md) | `Done` | 11/11 | 0 дней осталось |
 | [EPIC-05: v0 hardening](epics/epic_05_v0_hardening.md) | `Done` | 9/9 | 0 дней осталось |
-| [EPIC-06: Разбор LLM-сообщений и извлечение payload](epics/epic_06_llm_message_parsing.md) | `In progress` | 2/2 | 0 дней до request parser; future response scope не оценён |
+| [EPIC-06: Разбор LLM-сообщений и извлечение payload](epics/epic_06_llm_message_parsing.md) | `In progress` | 3/3 | Published Chat Completions scope завершён; OpenAI Responses не оценён |
 | [EPIC-07: Windowed payload processing](epics/epic_07_windowed_payload_processing.md) | `Done` | 2/2 | 0 дней осталось |
 | [EPIC-08: Bounded in-memory request source and replay](epics/epic_08_message_spooling_replay.md) | `Done` | 2/2 | 0 дней осталось |
 | [EPIC-09: Закрытие архитектурных рисков v0](epics/epic_09_v0_architecture_closure.md) | `Done` | 9/9 | 0 дней осталось |
 | [EPIC-10: Повышение качества детерминированного PII-распознавания](epics/epic_10_pii_detection_quality.md) | `Done` | 8/8 | 0 дней осталось |
-| [EPIC-20: Atomic in-memory response analysis](epics/epic_20_response_spooling_secure_spill.md) | `Draft` | 0/4 | non-stream leaf сужен; SSE leaves и parser ownership ещё не определены |
+| [EPIC-20: Atomic in-memory response analysis](epics/epic_20_response_spooling_secure_spill.md) | `Draft` | 0/4 | non-stream leaf сужен; SSE enforcement leaf не опубликован; parser owner — EPIC-06 |
 | [EPIC-21: Post-milestone architecture closure](epics/epic_21_post_milestone_architecture_closure.md) | `Done` | 5/5 | 0 дней осталось |
 | [EPIC-22: Durable minimum audit trail](epics/epic_22_durable_minimum_audit_trail.md) | `Done` | 5/5 | 0 дней осталось |
 | [VIG-11: Fast PII policy adapter](issues/issue_11_fast_pii_policy_adapter.md) | `Done` | завершена | 0 дней осталось |
@@ -180,10 +180,10 @@ Issue является листом mind map, если:
 
 ### Phase 3: завершить декомпозицию EPIC-20
 
-- [ ] Назначить единственного owner response JSON/SSE parser contracts между
-  EPIC-06 и [EPIC-20](epics/epic_20_response_spooling_secure_spill.md).
-- [ ] Опубликовать отдельный bounded leaf для SSE framing и standalone
-  `data: [DONE]` terminal parsing.
+- [x] Назначить EPIC-06 единственным owner response JSON/SSE parser contracts.
+- [x] Опубликовать combined
+  [VIG-06-03](issues/epic_06/issue_06_03_chat_completions_response_parser.md)
+  для ordinary JSON, SSE framing и standalone `data: [DONE]` parsing.
 - [ ] Опубликовать отдельный bounded leaf для SSE inspection/enforcement.
 - [ ] Добавить estimates, confidence, hard dependencies, non-goals и один
   основной public test seam каждому leaf.
@@ -224,9 +224,9 @@ Issue является листом mind map, если:
 - [ ] После стабилизации identity, enforcement и observability уточнить
   [VIG-33](issues/issue_33_availability_slo_and_operations.md).
 
-Текущий следующий шаг: завершить декомпозицию EPIC-20, назначив owner
-response parser contracts и опубликовав bounded SSE leaves. VIG-29 завершён:
-exact error matrix реализована без подключения enforcement.
+Текущий следующий шаг: завершить декомпозицию EPIC-20, опубликовав bounded SSE
+inspection/enforcement leaf. VIG-29 завершён: exact error matrix реализована
+без подключения enforcement.
 
 ## Как закрывать work item
 

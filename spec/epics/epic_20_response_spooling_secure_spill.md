@@ -5,7 +5,7 @@
 **Статус:** Draft
 **Приоритет:** High
 **Предварительная оценка:** не оценён; 0/4 опубликованных issues завершено,
-SSE leaves ещё не опубликованы
+SSE enforcement leaf ещё не опубликован
 **Связанные требования:** `PROXY-01`, `PROXY-02`, `CONC-01`, `CONC-02`, `CONC-03`
 
 ## Контекст
@@ -59,9 +59,10 @@ EPIC-20 Atomic in-memory response analysis
 │   ├── byte-identical ALLOW replay
 │   ├── exact MASK rewrite
 │   └── zero-byte BLOCK disclosure plus response audit pair
-├── SSE response enforcement (Draft; leaves not published)
+├── SSE protocol parsing (Done: VIG-06-03)
 │   ├── framing and standalone terminal-event parser
-│   ├── text assembly by choice.index
+│   └── text assembly by choice.index
+├── SSE response enforcement (Draft; leaf not published)
 │   ├── cross-chunk MASK rewrite
 │   └── atomic ALLOW/BLOCK disclosure plus response audit pair
 └── reusable masking seam (Ready)
@@ -79,8 +80,9 @@ EPIC-20 Atomic in-memory response analysis
 
 VIG-20-02 сохранён как первый узкий enforcement leaf. Его прежний полный
 response/SSE contract поднят в этот epic. До перевода epic в
-`Ready for implementation` необходимо опубликовать отдельные bounded leaves
-для SSE framing/terminal parsing и SSE enforcement.
+`Ready for implementation` необходимо опубликовать отдельный bounded leaf
+для SSE enforcement; framing и terminal parsing завершены в
+[VIG-06-03](../issues/epic_06/issue_06_03_chat_completions_response_parser.md).
 
 ## Нормативный future scope
 
@@ -140,13 +142,13 @@ response/SSE contract поднят в этот epic. До перевода epic 
 ## Открытые решения
 
 - JVM heap sizing и runtime OOM policy deployment выбирает вне application.
-- Точные public seams и границы двух будущих SSE leaves.
-- Принадлежность response JSON/SSE parser contracts между EPIC-06 и EPIC-20.
+- Точный public seam и границы будущего SSE enforcement leaf.
 
 ## Связи с соседними epics
 
-- [EPIC-06](epic_06_llm_message_parsing.md) определяет future response и SSE
-  protocol adapters, terminal events и normalized fragments.
+- [EPIC-06](epic_06_llm_message_parsing.md) владеет response protocol parsing;
+  VIG-06-03 реализует Chat Completions JSON/SSE adapters, terminal events и
+  normalized fragments.
 - [EPIC-04](epic_04_policy_engine.md) возвращает итоговый policy decision до
   раскрытия response source.
 - [EPIC-08](epic_08_message_spooling_replay.md) предоставляет завершённый
@@ -187,9 +189,9 @@ response/SSE contract поднят в этот epic. До перевода epic 
 ```text
 Ambiguity Report:
   Goals:        0.0   atomic response outcome fixed
-  Acceptance:   0.35  SSE branches still need published leaves
-  Boundaries:   0.25  response parser ownership must be assigned
+  Acceptance:   0.25  SSE enforcement still needs a published leaf
+  Boundaries:   0.10  EPIC-06 parser and EPIC-20 enforcement ownership fixed
   Alternatives: 0.10  retained memory and no disk spill selected
   Assumptions:  0.20  deployment owns heap sizing and OOM policy
-  Aggregate:    0.18  Draft: publish bounded SSE leaves before implementation.
+  Aggregate:    0.13  Draft: publish bounded SSE enforcement leaf before implementation.
 ```

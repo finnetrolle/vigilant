@@ -3,8 +3,8 @@
 **Статус:** Ready for implementation
 **Epic:** [EPIC-20](../../epics/epic_20_response_spooling_secure_spill.md)
 **Ветка:** Response source > ordinary response and SSE lifecycle
-**Зависит от:** [VIG-20-04](issue_20_04_retained_memory_response_contract.md)
-**Блокирует:** [VIG-20-02](issue_20_02_response_inspection_enforcement.md) и будущие SSE enforcement leaves EPIC-20
+**Зависит от:** [VIG-06-03](../epic_06/issue_06_03_chat_completions_response_parser.md), [VIG-20-04](issue_20_04_retained_memory_response_contract.md)
+**Блокирует:** [VIG-20-02](issue_20_02_response_inspection_enforcement.md) и будущий SSE enforcement leaf EPIC-20
 **Оценка:** 3-5 инженерных дней; confidence Medium
 
 ## Цель
@@ -57,8 +57,8 @@ gateway не вводит свой response quota или admission rejection.
 
 ## Не входит
 
-- Response policy evaluation, `ALLOW`/`MASK`/`BLOCK` integration и response
-  protocol parser. Их владеет следующий leaf после source contract.
+- Response policy evaluation и `ALLOW`/`MASK`/`BLOCK` integration принадлежат
+  следующим enforcement leaves; response protocol parser завершён в VIG-06-03.
 - Исходящая `analysis_started`/`analysis_completed` audit pair; она использует
   VIG-32-01 stdout schema после появления real response analysis.
 - Audit persistence, WAL, file handoff, Collector protocol, disk spill или

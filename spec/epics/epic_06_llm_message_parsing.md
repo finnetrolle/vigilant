@@ -4,7 +4,7 @@
 **Тип:** Epic  
 **Статус:** In progress  
 **Приоритет:** High  
-**Предварительная оценка:** 0 дней до request parser первого increment; future response surfaces не оценены
+**Предварительная оценка:** опубликованный Chat Completions scope завершён; OpenAI Responses surfaces не оценены
 **Связанные требования:** `MVP-14`, `MVP-20`, `PROXY-01`, `PROXY-02`
 
 ## Подтверждённое решение
@@ -38,8 +38,9 @@ maps, terminal semantics, transport contracts и implementation issues.
 - любой другой method/path/media type получает stable `UNSUPPORTED_SCHEMA` и
   не проходит через молчаливый bypass guardrail-enabled route.
 
-Этот independently deliverable slice не объявляет response/Responses scope
-реализованным и не задаёт для него невыбранные terminal semantics.
+Runtime response inspection остаётся future EPIC-20 behavior. Pure Chat
+Completions JSON/SSE response parsing завершён в VIG-06-03; OpenAI Responses
+scope не реализован и не получает невыбранные terminal semantics.
 
 Парсер возвращает payload как упорядоченную immutable-коллекцию независимых
 текстовых фрагментов. Каждый фрагмент относится ровно к одному логическому
@@ -208,11 +209,12 @@ Terminal semantics streaming parser:
 - незавершённые buffers не создают fragment; уже завершённые fragments не
   изменяются задним числом.
 
-Выбор canonical value при повторении одного logical field в delta buffer,
-field-specific done event и последующих item/response snapshots осознанно
-отложен. Возможны как минимум canonical done event с validation snapshots,
-canonical terminal snapshot либо adapter-specific правило. До выбора parser
-не имеет default mismatch behavior, а SSE adapter issues остаются `Draft`.
+Для Chat Completions SSE canonical value одного logical field равен
+concatenation его `delta` values в event order независимо по `choice.index`.
+Final snapshot fields не переопределяют и не сверяют этот source. Standalone
+`data: [DONE]` завершает все buffers; EOF без него, malformed terminal или
+content после него дают typed failure без partial result. Иные canonical
+snapshot и mismatch rules остаются открыты только для OpenAI Responses API.
 
 В future response-inspection increment SSE является одной атомарной
 policy-транзакцией. Parser может возвращать завершённые fragments внутреннему
@@ -230,8 +232,8 @@ Incremental release до итогового decision не входит в MVP.
 Parser отвечает за protocol structure, но не за mapping upstream outcome в
 HTTP proxy error. Raw provider error message не попадает в parser logs.
 
-Полный future scope предусматривает независимые adapters для следующих пар
-family и transport:
+Полный future scope предусматривает adapters для следующих пар family и
+transport:
 
 ```text
 OpenAI Responses          + JSON
@@ -240,14 +242,15 @@ OpenAI Chat Completions   + JSON
 OpenAI Chat Completions   + SSE
 ```
 
-В первом production increment публикуется только adapter
-`OpenAI Chat Completions + JSON request`. Остальные пары не имеют
-implementation-ready issue и сохраняют draft status.
+Request adapter `OpenAI Chat Completions + JSON request` завершён. Combined
+leaf VIG-06-03 также завершён и публикует один public response parser contract с
+внутренними adapters для `OpenAI Chat Completions + JSON response` и
+`OpenAI Chat Completions + SSE`. OpenAI Responses пары не имеют
+implementation-ready issues и сохраняют future status.
 
-Полная future operation surface:
+Оставшаяся future operation surface:
 
 - `POST /v1/responses` с обычным JSON response или SSE при streaming;
-- `POST /v1/chat/completions` с обычным JSON response или SSE при streaming.
 
 Realtime events, WebSocket/WebRTC transport, SDP, RTP/audio frames, SIP
 signaling, Batch JSONL records и Batch Files/job lifecycle не являются input
@@ -375,11 +378,10 @@ EPIC-06 LLM message parsing
 ├── protocol contract and supported surface (Done)
 ├── first production increment
 │   └── Chat Completions JSON request parser (Done)
+├── response enforcement foundation
+│   └── Chat Completions JSON and SSE response parser (Done)
 ├── OpenAI Responses
 │   ├── request and non-streaming response (future Draft)
-│   └── SSE response stream (future Draft)
-├── OpenAI Chat Completions
-│   ├── non-streaming response (future Draft)
 │   └── SSE response stream (future Draft)
 ├── lossless and security behavior
 └── post-MVP placeholders
@@ -387,14 +389,15 @@ EPIC-06 LLM message parsing
     └── OpenAI Batch JSONL input and output
 ```
 
-Future leaves создаются после определения точной поверхности соответствующей
-protocol family и единицы payload, чтобы не закреплять неподтверждённую
+Оставшиеся OpenAI Responses leaves создаются после определения точной
+поверхности и единицы payload, чтобы не закреплять неподтверждённую
 архитектуру.
 
 ## Дочерние issues
 
 - [x] [VIG-06-01: Контракт разбора LLM-сообщений](../issues/epic_06/issue_06_01_protocol_contract.md) - `Done`
 - [x] [VIG-06-02: Chat Completions JSON request parser](../issues/epic_06/issue_06_02_chat_completions_request_parser.md) - `Done`
+- [x] [VIG-06-03: Chat Completions JSON and SSE response parser](../issues/epic_06/issue_06_03_chat_completions_response_parser.md) - `Done`
 
 ## Контекст
 
@@ -612,13 +615,11 @@ UTF-8 offsets не объявляются JSON byte offsets. Любой буду
 
 Эти решения не имеют default и не входят в готовый request slice:
 
-1. Точная карта request content fields для OpenAI Responses API.
-2. Точная карта response content fields для Responses и Chat Completions и
-   contract snapshot в соответствии с принятой semantic field selection.
-3. Точные result boundaries и terminal event names для Responses и Chat
-   Completions в non-streaming и SSE режимах, включая canonical source,
-   deduplication и mismatch result для повторных final snapshots.
-4. Контракт отдельного rewriter: как detector UTF-8 offsets в decoded fragment
+1. Точная карта request и response content fields для OpenAI Responses API.
+2. Точные result boundaries и terminal event names для OpenAI Responses в
+   non-streaming и SSE режимах, включая canonical source, deduplication и
+   mismatch result для повторных final snapshots.
+3. Контракт отдельного rewriter: как detector UTF-8 offsets в decoded fragment
    отображаются обратно в encoded original source при `MASK` или `REMOVE`.
 
 ## Предварительные критерии готовности epic
@@ -644,8 +645,9 @@ UTF-8 offsets не объявляются JSON byte offsets. Любой буду
   не изменяет response context.
 - Streaming deltas одного logical field дают один fragment только после
   protocol completion event; transport chunking не влияет на payload.
-- Canonical source и mismatch semantics для повторяющих field value SSE
-  events остаются open decision без default; SSE adapter issues не Ready.
+- Chat Completions SSE использует concatenated delta values по `choice.index`
+  как canonical source и standalone `data: [DONE]` как terminal event;
+  snapshot mismatch semantics остаётся open только для OpenAI Responses.
 - Cancellation, incomplete EOF и upstream outcome имеют разные terminal
   semantics; незавершённый buffer никогда не становится fragment.
 - Detector limit не приводит к blanket reject большого fragment: применяется
@@ -699,7 +701,7 @@ Ambiguity Report:
   Goals:        0.05  ✓ first request slice and future scope are explicit
   Acceptance:   0.15  ✓ pinned field map and stable outcomes are testable
   Boundaries:   0.05  ✓ parser, source, windowing and integration separated
-  Alternatives: 0.20  ✓ future SSE/rewriter decisions deliberately deferred
+  Alternatives: 0.10  ✓ combined Chat parser selected; Responses/rewriter deferred
   Assumptions:  0.20  ✓ upstream evolution is bounded by pinned snapshot
-  Aggregate:    0.13  ✓ below threshold (0.3 epic)
+  Aggregate:    0.11  ✓ below threshold (0.3 epic)
 ```

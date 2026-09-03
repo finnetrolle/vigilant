@@ -189,8 +189,9 @@ parent epics содержат normative decisions, а implementation leaves оп
 
 1. [VIG-06-01](issues/epic_06/issue_06_01_protocol_contract.md) зафиксировал
    versioned Chat Completions JSON request field map, inspectability results,
-   stable failures и boundary с spool/windowing. Response, SSE inspection и
-   Responses API implementation leaves остались future `Draft`.
+   stable failures и boundary с spool/windowing. Combined Chat Completions
+   JSON/SSE response parser реализован в VIG-06-03; OpenAI Responses API
+   implementation leaves остались future scope.
 2. [VIG-03-01](issues/epic_03/issue_03_01_context_contract.md) зафиксировал
    anonymous request context для global `ANY` policy без identity extraction.
 3. [VIG-07-01](issues/epic_07/issue_07_01_windowing_contract.md) зафиксировал
@@ -213,6 +214,7 @@ parent epics:
 | Parent | Work item | Observable result | Hard blockers | Estimate | Confidence |
 |---|---|---|---|---:|---|
 | EPIC-06 | [VIG-06-02: Chat Completions JSON request parser](issues/epic_06/issue_06_02_chat_completions_request_parser.md) | Original JSON даёт normalized model, ordered text fragments и coverage/failure result без reconstruction | VIG-06-01 Done | 3-5 дней | Medium |
+| EPIC-06 | [VIG-06-03: Chat Completions JSON/SSE response parser](issues/epic_06/issue_06_03_chat_completions_response_parser.md) | Immutable byte segments дают terminal normalized response либо safe typed outcome независимо от transport chunking | VIG-06-02 Done | 4-5 дней | Medium |
 | EPIC-07 | [VIG-07-02: Windowed fast PII execution](issues/epic_07/issue_07_02_windowed_fast_pii_execution.md) | Fragment до configured request limit проверяется без boundary false negatives и duplicate findings | VIG-07-01 Done, VIG-06-01 Done, EPIC-02 Done | 3-5 дней | Medium |
 | EPIC-08 | [VIG-08-02: Bounded in-memory request source](issues/epic_08/issue_08_02_bounded_request_source.md) | Client bytes принимаются с quotas/backpressure и replay-ятся byte-for-byte либо дают stable capacity error | VIG-08-01 Done, VIG-06-01 Done | 3-5 дней | Medium |
 | EPIC-03 | [VIG-03-07: Anonymous request PolicyContext](issues/epic_03/issue_03_07_anonymous_request_context.md) | Normalized path и parser model создают REQUEST context с subject `ANY` без raw body или identity | VIG-03-01 Done, VIG-03-02, VIG-06-02 | 2-3 дня | Medium |
@@ -348,7 +350,7 @@ horizontal logging subsystem.
 ## Тестовые seams
 
 - EPIC-06 parser: pure public parse result на versioned Chat Completions JSON
-  examples.
+  request и JSON/SSE response corpus.
 - EPIC-07 windowing: transport-neutral fragment inspection с exact original
   UTF-8 offsets и boundary corpus.
 - EPIC-08 spool: public source ingest/read/replay contract с controlled
@@ -370,7 +372,7 @@ horizontal logging subsystem.
 status `Done`, а project work-item validator входит в `check`. VIG-10-01 и
 VIG-10-02 также имеют status `Done`.
 
-Implementation issues Stage 2 закрыты: VIG-03-02, VIG-03-07, VIG-06-02,
+Implementation issues Stage 2 закрыты: VIG-03-02, VIG-03-07, VIG-06-02, VIG-06-03,
 VIG-07-02 и VIG-08-02 имеют status `Done`; независимые module seams готовы к
 integration. VIG-18 подтверждает только `64 KiB` single-fragment profile;
 VIG-21-02 отдельно подтверждает опубликованную max-shape matrix. EPIC-07 и
@@ -392,8 +394,8 @@ Post-milestone evidence также синхронизировано: VIG-21-03 �
 status `Done`; upstream-error и streaming tests используют bounded causal
 observation seams. Их исторические issue records и reports сохраняют
 исходные dates и evidence. EPIC-20 остаётся единственным owner
-response/SSE spooling и secure spill decisions; EPIC-21 закрыт без
-дублирующего future scope.
+response/SSE spooling и secure spill decisions, а EPIC-06 владеет protocol
+parsing; EPIC-21 закрыт без дублирующего future scope.
 
 Post-milestone closure EPIC-21 завершён. В EPIC-22 local durable store
 [VIG-22-01](issues/epic_22/issue_22_01_local_durable_audit_store.md), mandatory
