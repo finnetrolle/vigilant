@@ -4,8 +4,8 @@
 
 Vigilant - однопроцессный HTTP gateway на Kotlin и Armeria. Текущий
 production increment поддерживает request-side PII inspection для OpenAI Chat
-Completions в shadow mode. Он проверяет запрос и публикует безопасный audit
-event, но не блокирует и не изменяет payload.
+Completions в shadow mode. Он проверяет запрос и best-effort публикует
+безопасную audit lifecycle pair, но не блокирует и не изменяет payload.
 
 Поддерживаемый маршрут:
 
@@ -26,8 +26,8 @@ Response inspection, OpenAI Responses API и enforcement reactions пока не
   показывает границу процесса, внутренние компоненты, вышестоящий сервер,
   постоянный том аудита, Collector и внешнее хранилище;
 - [последовательность проверки запроса](diagrams/request-inspection-sequence.puml)
-  показывает ошибки дескриптора и аудита, владение ограниченным источником,
-  долговечное принятие, точное воспроизведение и потоковый ответ;
+  показывает отсутствие audit до detector execution, stdout lifecycle pair,
+  точное воспроизведение и потоковый ответ;
 - [диаграмма состояний жизненного цикла аудита](diagrams/audit-lifecycle-state.puml)
   показывает переходы `DECISION_CREATED` -> `STORE_OWNED` ->
   `DURABLY_RETAINED` -> `EXTERNALLY_DELIVERED`.
@@ -49,10 +49,6 @@ context клиенту и передаёт его upstream.
 `PiiShadowProxyService` до чтения body проверяет method, path и media type.
 Неподдерживаемый descriptor получает stable `400 unsupported_schema` и не
 создаёт shadow audit.
-
-Поддержанный descriptor атомарно резервирует один pending audit event и его
-worst-case disk bytes до identity extraction и body demand. Exhausted или
-unhealthy store возвращает `503 audit_unavailable` без чтения body и upstream.
 
 Затем выбранная реализация общего `BearerIdentityExtractor` выполняется на
 blocking-safe request executor. Development/test `DummyIdentityExtractor`
@@ -126,7 +122,7 @@ Policy domain поддерживает `ALLOW`/`BLOCK` и transformation plans, 
 validation текущего shadow increment разрешает только `ALLOW` без
 transformations для всех outcomes. Поэтому runtime всегда пересылает исходный
 request, включая случаи `DETECTED`, `CLEAN` и `INSPECTION_GAP`. Detector error
-фиксируется как audit decision `ERROR`, но при валидной shadow policy также не
+фиксируется как audit outcome `ERROR`, но при валидной shadow policy также не
 включает enforcement.
 
 ### 5. Fast PII detector
@@ -152,22 +148,23 @@ metadata, но не matched text. PII-free `WindowedInspectionExecutor` разб
 свидетельства качества и явные ограничения описаны в
 [руководстве по обнаружению PII](pii-detection.md).
 
-### 6. Audit и exact replay
+### 6. Best-effort audit и exact replay
 
 Complete-source orchestration выполняет синхронный
 `ShadowInspectionWorkflow` на существующем blocking-safe inspection executor.
 Он последовательно открывает единственный parser view, собирает и сохраняет
-request context, оценивает каждый независимый text fragment и создаёт immutable
-safe record. `LocalAuditStore` назначает persistent sequence, пишет versioned
-JSON в length/checksum frame и завершает acknowledgement только после
-`force(true)`, покрывающего frame и recovery metadata. Лишь затем workflow
-возвращает `Forward` или исходный stable `Reject`.
+request context и оценивает каждый независимый text fragment. После selection
+и непосредственно перед первым detector execution `ShadowAuditLogger`
+best-effort публикует `policy.analysis_started`. После terminal outcome и до
+transport handoff он публикует `policy.analysis_completed` с safe aggregate
+coverage/counts и stable ERROR code либо successful `reaction=ALLOW`.
 
-`ShadowAuditLogger` строит bounded schema с coverage, policy/detector
-identities, числами fragments/findings и безопасными агрегатами по типам.
-Payload, matched text, locators, identity, session и headers в record не
-попадают. После durable acceptance тот же record проецируется в
-`policy.shadow_decision`; discardable async stdout не участвует в acceptance.
+Оба event идут через existing Logback `AsyncAppender` с `neverBlock=true`.
+Payload, matched text, locators, identity, session, headers и raw
+user-controlled correlation values в них не попадают. Workflow не резервирует,
+не submit-ит и не ждёт
+WAL record, queue delivery, stdout write или `force(true)`. Slow/full/throwing
+logging sink не меняет response и не задерживает upstream handoff.
 
 WAL использует один blocking-safe worker, exclusive directory lock, monotonic
 sequence metadata и active/ready segments. Exact byte bound, age bound и
@@ -183,12 +180,12 @@ worker, а не на Netty event loop. Публичный adapter описан �
 [Collector file handoff](audit-collector-file-handoff.md), нормативная модель -
 в [minimum audit trail contract](../spec/MINIMUM_AUDIT_TRAIL_CONTRACT.md).
 
-`ReadinessService` публикует composite lifecycle/audit probe state, но
-`TrafficAdmissionService` использует только lifecycle predicate. Поэтому audit
-exhaustion достигает typed owner в `PiiShadowProxyService`, а graceful shutdown
-по-прежнему отклоняет новое traffic как `draining`. Packaged
-[durability qualification](durability-qualification-2026-08-31.md)
-подтверждает оба независимых outcome.
+До VIG-32-02 `LocalAuditStore`, WAL/Collector handoff и composite audit
+readiness остаются transitional runtime components. Они больше не получают
+request-analysis records и не участвуют в `PiiShadowProxyService` workflow.
+Исторический packaged
+[durability qualification](durability-qualification-2026-08-31.md) отделён от
+текущего request audit contract.
 
 `ReplayReadyRequest` инкапсулирует demand-driven publisher. Его `transferTo`
 допускает ровно один transport handoff. `close()` до

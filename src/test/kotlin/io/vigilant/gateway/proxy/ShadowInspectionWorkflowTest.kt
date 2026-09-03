@@ -6,8 +6,6 @@ import com.linecorp.armeria.common.HttpRequest
 import com.linecorp.armeria.common.MediaType
 import com.linecorp.armeria.common.RequestHeaders
 import com.linecorp.armeria.server.ServiceRequestContext
-import io.opentelemetry.api.trace.Span
-import io.vigilant.audit.AuditReservationResult
 import io.vigilant.context.NormalizedIdentity
 import io.vigilant.context.PolicyContextHandoff
 import io.vigilant.context.PolicyContextHandoffErrorCode
@@ -46,7 +44,6 @@ import io.vigilant.source.RequestSourceState
 import java.net.URI
 import java.time.Duration
 import java.util.concurrent.CancellationException
-import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
@@ -69,9 +66,9 @@ class ShadowInspectionWorkflowTest {
     @AfterTest
     fun closeFixture() = fixture.close()
 
-    /** Valid input returns Forward, stores request context, and emits one aggregate decision. */
+    /** Empty selection returns Forward, stores request context, and emits no audit pair. */
     @Test
-    fun `valid source returns forward with context and one decision audit`() {
+    fun `valid source with empty selection returns forward without audit pair`() {
         val body = """{"model":"gpt-test","messages":[{"role":"user","content":"hello"}]}""".toByteArray()
         val quota = RequestSourceQuota()
         val owner = completeOwner(quota, body)
@@ -91,18 +88,16 @@ class ShadowInspectionWorkflowTest {
         assertEquals("gpt-test", stored.context.model)
         assertEquals("alice", stored.context.user)
         assertEquals(setOf("operators"), stored.context.groups)
-        val decisionEvents = events.filter { event -> event.field("event.name") == "policy.shadow_decision" }
-        assertEquals(1, decisionEvents.size)
-        assertEquals("CLEAN", decisionEvents.single().field("decision"))
+        assertTrue(events.none { event -> event.isAnalysisEvent() })
 
         forward.replay.close()
         assertEquals(0, quota.activeOwners)
         assertEquals(0L, quota.retainedBytes)
     }
 
-    /** Malformed and ambiguous content return typed parser rejects, one audit each, and no owner. */
+    /** Malformed and ambiguous content return typed rejects before audit and release ownership. */
     @Test
-    fun `parser failure matrix returns rejects with safe audit and cleanup`() {
+    fun `parser failure matrix returns rejects without audit and cleans up`() {
         val cases =
             listOf(
                 "{\"model\":\"secret-model\",\"messages\":[" to
@@ -113,7 +108,7 @@ class ShadowInspectionWorkflowTest {
         val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
         val workflow = workflow(emptyPolicyEngine())
 
-        cases.forEachIndexed { index, (body, expectedCode) ->
+        cases.forEach { (body, expectedCode) ->
             val quota = RequestSourceQuota()
             val owner = completeOwner(quota, body.toByteArray())
             val request = workflowRequest()
@@ -131,11 +126,8 @@ class ShadowInspectionWorkflowTest {
             assertEquals(RequestSourceState.CLOSED, owner.state)
             assertEquals(0, quota.activeOwners)
             assertEquals(0L, quota.retainedBytes)
-            val decisions = events.filter { event -> event.field("event.name") == "policy.shadow_decision" }
-            assertEquals(index + 1, decisions.size)
-            assertEquals(expectedCode.name, decisions.last().field("error.code"))
-            assertEquals("ERROR", decisions.last().field("decision"))
         }
+        assertTrue(events.none { event -> event.isAnalysisEvent() })
         assertTrue(events.none { event -> event.renderForSecretScan().contains("secret-model") })
     }
 
@@ -155,7 +147,7 @@ class ShadowInspectionWorkflowTest {
         val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
         val workflow = workflow(emptyPolicyEngine())
 
-        cases.forEachIndexed { index, (quota, owner, expectedCode) ->
+        cases.forEach { (quota, owner, expectedCode) ->
             val request = workflowRequest()
             val outcome =
                 workflow.execute(
@@ -171,13 +163,11 @@ class ShadowInspectionWorkflowTest {
             assertEquals(RequestSourceState.CLOSED, owner.state)
             assertEquals(0, quota.activeOwners)
             assertEquals(0L, quota.retainedBytes)
-            val decisions = events.filter { event -> event.field("event.name") == "policy.shadow_decision" }
-            assertEquals(index + 1, decisions.size)
-            assertEquals(expectedCode.name, decisions.last().field("error.code"))
         }
+        assertTrue(events.none { event -> event.isAnalysisEvent() })
     }
 
-    /** Source closure during evaluation becomes a replay-stage source reject with one audit. */
+    /** Source closure before detector execution becomes a replay-stage reject without audit. */
     @Test
     fun `replay acquisition failure returns source reject and cleanup`() {
         val quota = RequestSourceQuota()
@@ -215,11 +205,10 @@ class ShadowInspectionWorkflowTest {
         )
         assertEquals(RequestSourceState.CLOSED, owner.state)
         assertEquals(0, quota.activeOwners)
-        val decision = events.single { event -> event.field("event.name") == "policy.shadow_decision" }
-        assertEquals("SOURCE_CLOSED", decision.field("error.code"))
+        assertTrue(events.none { event -> event.isAnalysisEvent() })
     }
 
-    /** An occupied request handoff returns one typed context reject, safe audit, and cleanup. */
+    /** An occupied request handoff returns a typed reject before audit and cleans up. */
     @Test
     fun `preexisting request context returns context reject and closes owner`() {
         val body = """{"model":"gpt-test","messages":[{"role":"user","content":"hello"}]}""".toByteArray()
@@ -248,14 +237,12 @@ class ShadowInspectionWorkflowTest {
         )
 
         val expectedError =
-            ShadowAuditError.ContextHandoff(PolicyContextHandoffErrorCode.REQUEST_CONTEXT_ALREADY_SET)
+            ShadowInspectionError.ContextHandoff(PolicyContextHandoffErrorCode.REQUEST_CONTEXT_ALREADY_SET)
         val reject = assertIs<ShadowInspectionOutcome.Reject>(outcome)
-        assertEquals(ShadowInspectionRejection.Context(expectedError), reject.error)
+        assertEquals(ShadowInspectionRejection.Inspection(expectedError), reject.error)
         assertEquals(RequestSourceState.CLOSED, owner.state)
         assertEquals(0, quota.activeOwners)
-        val decision = events.single { event -> event.field("event.name") == "policy.shadow_decision" }
-        assertEquals("REQUEST_CONTEXT_ALREADY_SET", decision.field("error.code"))
-        assertEquals("ERROR", decision.field("decision"))
+        assertTrue(events.none { event -> event.isAnalysisEvent() })
     }
 
     /** Detector error and policy deadline remain Forward with aggregate ERROR decisions. */
@@ -286,9 +273,7 @@ class ShadowInspectionWorkflowTest {
                     deadline = Duration.ofMillis(20),
                 ),
             )
-        val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
-
-        cases.forEachIndexed { index, policyEngine ->
+        cases.forEach { policyEngine ->
             val body = """{"model":"gpt-test","messages":[{"role":"user","content":"hello"}]}""".toByteArray()
             val quota = RequestSourceQuota()
             val owner = completeOwner(quota, body)
@@ -304,9 +289,6 @@ class ShadowInspectionWorkflowTest {
 
             assertIs<ShadowInspectionOutcome.Forward>(outcome).replay.close()
             assertEquals(0, quota.activeOwners)
-            val decisions = events.filter { event -> event.field("event.name") == "policy.shadow_decision" }
-            assertEquals(index + 1, decisions.size)
-            assertEquals("ERROR", decisions.last().field("decision"))
         }
     }
 
@@ -321,8 +303,6 @@ class ShadowInspectionWorkflowTest {
                 """{"model":"gpt-test","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://media.example/image"}}]}]}""" to
                     listOf(""),
             )
-        val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
-
         cases.forEachIndexed { index, (body, expectedPayloads) ->
             val observedPayloads = CopyOnWriteArrayList<String>()
             val detectorId = DetectorId("payload-observer-$index")
@@ -351,15 +331,12 @@ class ShadowInspectionWorkflowTest {
             assertIs<ShadowInspectionOutcome.Forward>(outcome).replay.close()
             assertEquals(expectedPayloads, observedPayloads.toList())
             assertEquals(0, quota.activeOwners)
-            val decisions = events.filter { event -> event.field("event.name") == "policy.shadow_decision" }
-            assertEquals(index + 1, decisions.size)
-            assertEquals(if (index == 0) "CLEAN" else "INSPECTION_GAP", decisions.last().field("decision"))
         }
     }
 
-    /** Unexpected policy failure becomes one durable safe ERROR and releases source ownership. */
+    /** Unexpected policy failure before detector execution emits no pair and releases ownership. */
     @Test
-    fun `unexpected policy failure is durably rejected and closes owner`() {
+    fun `unexpected policy failure before analysis is rejected and closes owner`() {
         val sentinel = IllegalStateException("policy provider sentinel")
         val policyEngine =
             PolicyEngine(
@@ -387,23 +364,21 @@ class ShadowInspectionWorkflowTest {
             )
 
         val rejection = assertIs<ShadowInspectionOutcome.Reject>(outcome)
-        val context = assertIs<ShadowInspectionRejection.Context>(rejection.error)
-        assertEquals(ShadowAuditError.InspectionFailed, context.error)
+        val inspectionRejection = assertIs<ShadowInspectionRejection.Inspection>(rejection.error)
+        assertEquals(ShadowInspectionError.InspectionFailed, inspectionRejection.error)
         assertEquals(RequestSourceState.CLOSED, owner.state)
         assertEquals(0, quota.activeOwners)
-        val audit = events.single { event -> event.field("event.name") == "policy.shadow_decision" }
-        assertEquals("ERROR", audit.field("decision"))
-        assertEquals("INSPECTION_FAILED", audit.field("error.code"))
+        assertTrue(events.none { event -> event.isAnalysisEvent() })
     }
 
-    /** Every workflow failure category remains unpublished until its ERROR record is durable. */
+    /** Every pre-analysis workflow failure category returns without durable audit waiting. */
     @Test
     @Suppress("LongMethod")
-    fun `supported workflow failure matrix waits for durable audit`() {
+    fun `supported pre analysis workflow failure matrix returns immediately`() {
         val malformedQuota = RequestSourceQuota()
         val malformedOwner = completeOwner(malformedQuota, "{".toByteArray())
         val malformedRequest = workflowRequest()
-        assertDurableFailure(
+        assertPreAnalysisRejection(
             name = "parser",
             workflow = workflow(emptyPolicyEngine()),
             owner = malformedOwner,
@@ -415,7 +390,7 @@ class ShadowInspectionWorkflowTest {
         val incompleteQuota = RequestSourceQuota()
         val incompleteOwner = assertIs<RequestSourceOpenResult.Open>(incompleteQuota.open()).owner
         val incompleteRequest = workflowRequest()
-        assertDurableFailure(
+        assertPreAnalysisRejection(
             name = "source",
             workflow = workflow(emptyPolicyEngine()),
             owner = incompleteOwner,
@@ -427,14 +402,14 @@ class ShadowInspectionWorkflowTest {
         val urlQuota = RequestSourceQuota()
         val urlOwner = completeOwner(urlQuota, validWorkflowBody())
         val urlRequest = workflowRequest()
-        val urlError = ShadowAuditError.UrlNormalization(PolicyUrlNormalizationErrorCode.INVALID_POLICY_URL)
-        assertDurableFailure(
+        val urlError = ShadowInspectionError.UrlNormalization(PolicyUrlNormalizationErrorCode.INVALID_POLICY_URL)
+        assertPreAnalysisRejection(
             name = "URL normalization",
             workflow = workflow(emptyPolicyEngine(), URI.create("ftp://llm.example")),
             owner = urlOwner,
             request = urlRequest,
             serviceContext = ServiceRequestContext.of(urlRequest),
-            expected = ShadowInspectionRejection.Context(urlError),
+            expected = ShadowInspectionRejection.Inspection(urlError),
         )
 
         val handoffQuota = RequestSourceQuota()
@@ -451,14 +426,17 @@ class ShadowInspectionWorkflowTest {
                 groups = emptySet(),
             ),
         )
-        val handoffError = ShadowAuditError.ContextHandoff(PolicyContextHandoffErrorCode.REQUEST_CONTEXT_ALREADY_SET)
-        assertDurableFailure(
+        val handoffError =
+            ShadowInspectionError.ContextHandoff(
+                PolicyContextHandoffErrorCode.REQUEST_CONTEXT_ALREADY_SET,
+            )
+        assertPreAnalysisRejection(
             name = "context handoff",
             workflow = workflow(emptyPolicyEngine()),
             owner = handoffOwner,
             request = handoffRequest,
             serviceContext = occupiedContext,
-            expected = ShadowInspectionRejection.Context(handoffError),
+            expected = ShadowInspectionRejection.Inspection(handoffError),
         )
 
         val unexpectedQuota = RequestSourceQuota()
@@ -471,13 +449,13 @@ class ShadowInspectionWorkflowTest {
                 detectorExecutionCoordinator = DetectorExecutionCoordinator(DetectorExecutor(emptyMap())),
                 reactionAggregator = ReactionAggregator(),
             )
-        assertDurableFailure(
+        assertPreAnalysisRejection(
             name = "unexpected inspection",
             workflow = workflow(unexpectedEngine),
             owner = unexpectedOwner,
             request = unexpectedRequest,
             serviceContext = ServiceRequestContext.of(unexpectedRequest),
-            expected = ShadowInspectionRejection.Context(ShadowAuditError.InspectionFailed),
+            expected = ShadowInspectionRejection.Inspection(ShadowInspectionError.InspectionFailed),
         )
     }
 
@@ -509,7 +487,6 @@ class ShadowInspectionWorkflowTest {
                 """{"model":"gpt-test","messages":[{"role":"user","content":"hello"}]}""".toByteArray(),
             )
         val request = workflowRequest()
-        val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
         val failure = AtomicReference<Throwable?>()
         val interruptRestored = AtomicBoolean()
         val worker =
@@ -537,10 +514,9 @@ class ShadowInspectionWorkflowTest {
         assertTrue(interruptRestored.get(), "workflow cleared the interrupt status")
         assertEquals(RequestSourceState.CLOSED, owner.state)
         assertEquals(0, quota.activeOwners)
-        assertTrue(events.none { event -> event.field("event.name") == "policy.shadow_decision" })
     }
 
-    /** Creates the concrete workflow with production protocol and audit implementations. */
+    /** Creates the concrete workflow with production protocol and stdout audit publisher. */
     private fun workflow(
         policyEngine: PolicyEngine,
         upstreamUri: URI = URI.create("https://llm.example"),
@@ -611,17 +587,17 @@ class ShadowInspectionWorkflowTest {
         """{"model":"gpt-test","messages":[{"role":"user","content":"hello"}]}""".toByteArray()
 
     /**
-     * Proves one typed workflow rejection cannot escape before force-backed audit completion.
+     * Proves one typed pre-analysis workflow rejection returns without retained ownership.
      *
      * @param name failure category included in bounded assertion diagnostics.
      * @param workflow production complete-source workflow.
      * @param owner sole retained-source owner for the scenario.
      * @param request supported request metadata.
-     * @param serviceContext request scope used by context handoff and audit correlation.
-     * @param expected typed stable rejection after durable acceptance.
+     * @param serviceContext request scope used by context handoff.
+     * @param expected typed stable rejection.
      */
     @Suppress("LongParameterList")
-    private fun assertDurableFailure(
+    private fun assertPreAnalysisRejection(
         name: String,
         workflow: ShadowInspectionWorkflow,
         owner: io.vigilant.source.BoundedRequestSourceOwner,
@@ -630,52 +606,17 @@ class ShadowInspectionWorkflowTest {
         expected: ShadowInspectionRejection,
     ) {
         serviceContext.setAttr(RequestTracing.TRACE_ID, "0123456789abcdef0123456789abcdef")
-        val auditStore = ControllableAuditStore(autoComplete = false)
-        val reservation = assertIs<AuditReservationResult.Granted>(auditStore.reserve()).reservation
-        val outcome = CompletableFuture<ShadowInspectionOutcome>()
-        val worker =
-            thread(start = true, name = "workflow-$name-durability-test") {
-                outcome.complete(
-                    workflow.execute(
-                        owner,
-                        request,
-                        anonymousIdentity(),
-                        serviceContext,
-                        inspectionSpan = null,
-                        auditReservation = reservation,
-                    ),
-                )
-            }
-
-        assertTrue(auditStore.awaitStoreOwned(), "$name ERROR did not reach STORE_OWNED")
-        assertFalse(outcome.isDone, "$name rejection escaped before durable acceptance")
-        auditStore.completeNext()
-
-        val rejection = assertIs<ShadowInspectionOutcome.Reject>(outcome.get(2, TimeUnit.SECONDS))
-        assertEquals(expected, rejection.error)
-        worker.join(Duration.ofSeconds(2))
-        assertFalse(worker.isAlive, "$name workflow did not terminate")
-        assertEquals(1, auditStore.records().size)
+        val outcome = workflow.execute(owner, request, anonymousIdentity(), serviceContext, inspectionSpan = null)
+        val rejection = assertIs<ShadowInspectionOutcome.Reject>(outcome)
+        assertEquals(expected, rejection.error, name)
         assertEquals(RequestSourceState.CLOSED, owner.state)
     }
 
     /** Returns one structured logging value by key. */
     private fun ILoggingEvent.field(key: String): Any? =
         keyValuePairs.orEmpty().firstOrNull { pair -> pair.key == key }?.value
-}
 
-/** Supplies the mandatory immediately durable audit seam to legacy workflow cases. */
-private fun ShadowInspectionWorkflow.execute(
-    owner: io.vigilant.source.BoundedRequestSourceOwner,
-    request: HttpRequest,
-    identity: IdentityExtractionResult.Success,
-    serviceContext: ServiceRequestContext,
-    inspectionSpan: Span?,
-): ShadowInspectionOutcome {
-    if (serviceContext.attr(RequestTracing.TRACE_ID) == null) {
-        serviceContext.setAttr(RequestTracing.TRACE_ID, "0123456789abcdef0123456789abcdef")
-    }
-    val reservation =
-        (ControllableAuditStore().reserve() as AuditReservationResult.Granted).reservation
-    return execute(owner, request, identity, serviceContext, inspectionSpan, reservation)
+    /** Returns whether this event belongs to the request-analysis lifecycle pair. */
+    private fun ILoggingEvent.isAnalysisEvent(): Boolean =
+        field("event.name").toString().startsWith("policy.analysis_")
 }

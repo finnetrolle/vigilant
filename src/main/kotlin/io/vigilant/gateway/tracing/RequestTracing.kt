@@ -77,6 +77,16 @@ internal object RequestTracing {
     const val TRACE_CONTEXT_REPLACED_MDC_KEY = "trace_context_replaced"
 }
 
+/** Immutable tracing identifiers shared by structured fields and MDC projection. */
+internal data class RequestTracingCorrelation(
+    /** Trace identifier of the active span. */
+    val traceId: String,
+    /** Identifier of the active span. */
+    val spanId: String,
+    /** Identifier of the active span's direct parent. */
+    val parentSpanId: String,
+)
+
 /**
  * Strips the query string, which may carry secrets, from the logged path.
  * Shared by every request-scoped log and span site so the sanitization rule
@@ -103,13 +113,11 @@ internal fun <T> withRequestTracingMdc(
 ): T {
     val traceContext = ctx.attr(RequestTracing.CONTEXT)
     if (traceContext == null) return block()
-    val serverSpanContext = Span.fromContext(traceContext.serverContext).spanContext
-    val spanContext = activeSpan?.spanContext?.takeIf { it.isValid } ?: serverSpanContext
-    val parentSpanId = if (activeSpan == null) traceContext.parentSpanId else serverSpanContext.spanId
+    val correlation = requireNotNull(requestTracingCorrelation(ctx, activeSpan))
     val values = linkedMapOf(
-        RequestTracing.TRACE_ID_MDC_KEY to spanContext.traceId,
-        RequestTracing.SPAN_ID_MDC_KEY to spanContext.spanId,
-        RequestTracing.PARENT_SPAN_ID_MDC_KEY to parentSpanId,
+        RequestTracing.TRACE_ID_MDC_KEY to correlation.traceId,
+        RequestTracing.SPAN_ID_MDC_KEY to correlation.spanId,
+        RequestTracing.PARENT_SPAN_ID_MDC_KEY to correlation.parentSpanId,
         RequestTracing.TRACE_CONTEXT_GENERATED_MDC_KEY to traceContext.traceContextGenerated.toString(),
         RequestTracing.TRACE_CONTEXT_REPLACED_MDC_KEY to traceContext.traceContextReplaced.toString(),
     )
@@ -125,4 +133,18 @@ internal fun <T> withRequestTracingMdc(
     } finally {
         closeables.asReversed().forEach(AutoCloseable::close)
     }
+}
+
+/**
+ * Returns the canonical active-span correlation for structured logging, or `null` when tracing is absent.
+ */
+internal fun requestTracingCorrelation(
+    ctx: com.linecorp.armeria.server.ServiceRequestContext,
+    activeSpan: Span? = null,
+): RequestTracingCorrelation? {
+    val traceContext = ctx.attr(RequestTracing.CONTEXT) ?: return null
+    val serverSpanContext = Span.fromContext(traceContext.serverContext).spanContext
+    val spanContext = activeSpan?.spanContext?.takeIf { it.isValid } ?: serverSpanContext
+    val parentSpanId = if (activeSpan == null) traceContext.parentSpanId else serverSpanContext.spanId
+    return RequestTracingCorrelation(spanContext.traceId, spanContext.spanId, parentSpanId)
 }

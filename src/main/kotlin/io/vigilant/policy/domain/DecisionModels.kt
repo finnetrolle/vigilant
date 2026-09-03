@@ -115,7 +115,7 @@ internal fun immutableDetectorResults(results: Collection<DetectorResult>): List
     immutableList(results.sortedBy { detectorResult -> detectorResult.detectorId.value })
 
 /** Returns immutable policy references in deterministic ID/version order. */
-private fun immutablePolicyReferences(references: Collection<PolicyReference>): List<PolicyReference> =
+internal fun immutablePolicyReferences(references: Collection<PolicyReference>): List<PolicyReference> =
     immutableList(
         references.sortedWith(
             compareBy(

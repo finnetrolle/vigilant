@@ -3,14 +3,13 @@ package io.vigilant.gateway.proxy
 import com.linecorp.armeria.common.HttpRequest
 import com.linecorp.armeria.server.ServiceRequestContext
 import io.opentelemetry.api.trace.Span
-import io.vigilant.audit.AuditReservation
-import io.vigilant.audit.AuditStoreOutcomeCode
 import io.vigilant.context.PolicyContextHandoff
 import io.vigilant.context.PolicyContextHandoffResult
 import io.vigilant.gateway.identity.IdentityExtractionResult
 import io.vigilant.policy.domain.PolicyContext
 import io.vigilant.policy.domain.PolicyDecision
 import io.vigilant.policy.engine.PolicyEngine
+import io.vigilant.policy.selection.PolicySelection
 import io.vigilant.protocol.openai.ChatCompletionsParseFailureCode
 import io.vigilant.protocol.openai.NormalizedChatCompletionsRequest
 import io.vigilant.source.BoundedRequestSourceOwner
@@ -53,16 +52,10 @@ internal sealed interface ShadowInspectionRejection {
         val code: RequestSourceOutcomeCode,
     ) : ShadowInspectionRejection
 
-    /** Context normalization, assembly, or request-scope handoff failed safely. */
-    data class Context(
-        /** Safe context audit detail retained for one aggregate workflow event. */
-        val error: ShadowAuditError,
-    ) : ShadowInspectionRejection
-
-    /** Durable audit acceptance failed, so no normal outcome may escape. */
-    data class Audit(
-        /** Stable store outcome hidden behind the public audit-unavailable response. */
-        val code: AuditStoreOutcomeCode,
+    /** Context preparation or unexpected inspection orchestration failed safely. */
+    data class Inspection(
+        /** Safe inspection detail mapped without disclosure. */
+        val error: ShadowInspectionError,
     ) : ShadowInspectionRejection
 }
 
@@ -71,7 +64,7 @@ internal sealed interface ShadowInspectionRejection {
  *
  * @property protocol existing descriptor-specific parser and context producer.
  * @property policyEngine existing policy selection and detector orchestration boundary.
- * @property auditLogger authoritative safe-record builder and post-durable projection renderer.
+ * @property auditLogger best-effort request-analysis lifecycle publisher.
  */
 internal class ShadowInspectionWorkflow(
     private val protocol: PiiShadowProtocol,
@@ -79,18 +72,17 @@ internal class ShadowInspectionWorkflow(
     private val auditLogger: ShadowAuditLogger,
 ) {
     /**
-     * Accepts ownership of one complete source and returns a typed forwarding or rejection result.
-     * Expected parser, source, and context failures return [ShadowInspectionOutcome.Reject].
-     * Unexpected failures become durable safe `ERROR` rejections. Cancellation escapes unchanged
-     * after owned source cleanup. A [ShadowInspectionOutcome.Forward] transfers cleanup ownership
-     * to its replay object only after durable audit acceptance.
+     * Accepts one complete source and returns a typed forwarding or rejection result.
+     * Parser, source, and context failures before detector execution emit no audit pair.
+     * Once analysis starts, every success, failure, or cancellation attempts exactly one terminal
+     * completion event without waiting for logging delivery. Forwarding transfers cleanup ownership
+     * to its replay object only after the terminal event has been submitted.
      *
      * @param owner sole complete retained-source owner.
      * @param request original request supplying path and headers only.
      * @param identity already validated normalized identity.
-     * @param serviceContext owning Armeria request scope for handoff and audit correlation.
+     * @param serviceContext owning Armeria request scope for handoff and correlation.
      * @param inspectionSpan current INTERNAL inspection span, which remains caller-owned.
-     * @param auditReservation pre-body one-shot durable audit reservation.
      */
     @Suppress("LongMethod", "LongParameterList")
     fun execute(
@@ -99,106 +91,115 @@ internal class ShadowInspectionWorkflow(
         identity: IdentityExtractionResult.Success,
         serviceContext: ServiceRequestContext,
         inspectionSpan: Span?,
-        auditReservation: AuditReservation,
     ): ShadowInspectionOutcome {
         var replayReady: ReplayReadyRequest? = null
         var replayOwnershipTransferred = false
+        val lifecycle = RequestAnalysisLifecycle(serviceContext, inspectionSpan, auditLogger)
         return try {
             val normalizedRequest = protocol.parse(owner)
             val context = protocol.assembleContext(request, normalizedRequest, identity.identity)
             when (val handoff = PolicyContextHandoff.storeRequest(serviceContext, context)) {
                 is PolicyContextHandoffResult.Success -> Unit
                 is PolicyContextHandoffResult.Failure ->
-                    throw SafeContextFailure(ShadowAuditError.ContextHandoff(handoff.code))
+                    throw SafeContextFailure(ShadowInspectionError.ContextHandoff(handoff.code))
             }
-            val startedAt = System.nanoTime()
-            val decisions = evaluateFragments(context, normalizedRequest)
-            val evaluationDuration = Duration.ofNanos(System.nanoTime() - startedAt)
+            val decisions = evaluateFragments(context, normalizedRequest, lifecycle::start)
             replayReady = ReplayReadyRequest.create(owner)
-            val record = auditLogger.decisionRecord(serviceContext, normalizedRequest, decisions, evaluationDuration)
-            acceptShadowAudit(
-                serviceContext = serviceContext,
-                record = record,
-                inspectionSpan = inspectionSpan,
-                auditReservation = auditReservation,
-                auditLogger = auditLogger,
-            )?.let { code ->
-                return ShadowInspectionOutcome.Reject(ShadowInspectionRejection.Audit(code))
-            }
+            lifecycle.complete(normalizedRequest, decisions)
             replayOwnershipTransferred = true
             ShadowInspectionOutcome.Forward(replayReady)
         } catch (failure: SafeParseFailure) {
-            durableError(
-                serviceContext,
-                ShadowAuditError.Parser(failure.code),
-                ShadowInspectionRejection.Parser(failure.code),
-                inspectionSpan,
-                auditReservation,
-            )
+            ShadowInspectionOutcome.Reject(ShadowInspectionRejection.Parser(failure.code))
         } catch (failure: SafeSourceFailure) {
-            durableError(
-                serviceContext,
-                ShadowAuditError.Source(failure.code),
-                ShadowInspectionRejection.Source(failure.code),
-                inspectionSpan,
-                auditReservation,
-            )
+            lifecycle.fail(failure.code.name)
+            ShadowInspectionOutcome.Reject(ShadowInspectionRejection.Source(failure.code))
         } catch (failure: SafeContextFailure) {
-            durableError(
-                serviceContext,
-                failure.error,
-                ShadowInspectionRejection.Context(failure.error),
-                inspectionSpan,
-                auditReservation,
-            )
+            ShadowInspectionOutcome.Reject(ShadowInspectionRejection.Inspection(failure.error))
         } catch (cancelled: CancellationException) {
+            lifecycle.fail("ANALYSIS_CANCELLED")
             throw cancelled
         } catch (_: Throwable) {
-            durableError(
-                serviceContext,
-                ShadowAuditError.InspectionFailed,
-                ShadowInspectionRejection.Context(ShadowAuditError.InspectionFailed),
-                inspectionSpan,
-                auditReservation,
+            lifecycle.fail("INSPECTION_FAILED")
+            ShadowInspectionOutcome.Reject(
+                ShadowInspectionRejection.Inspection(ShadowInspectionError.InspectionFailed),
             )
         } finally {
-            if (!replayOwnershipTransferred) {
-                replayReady?.close() ?: owner.close()
-            }
+            if (!replayOwnershipTransferred) replayReady?.close() ?: owner.close()
         }
     }
 
-    /** Persists one supported-request ERROR before returning its original stable rejection. */
-    private fun durableError(
-        serviceContext: ServiceRequestContext,
-        error: ShadowAuditError,
-        rejection: ShadowInspectionRejection,
-        inspectionSpan: Span?,
-        auditReservation: AuditReservation,
-    ): ShadowInspectionOutcome {
-        val failure =
-            acceptShadowAuditError(
-                serviceContext = serviceContext,
-                error = error,
-                inspectionSpan = inspectionSpan,
-                auditReservation = auditReservation,
-                auditLogger = auditLogger,
-            )
-        return if (failure == null) {
-            ShadowInspectionOutcome.Reject(rejection)
-        } else {
-            ShadowInspectionOutcome.Reject(ShadowInspectionRejection.Audit(failure))
-        }
-    }
-
-    /** Evaluates every independent text fragment without concatenating protocol fields. */
+    /** Evaluates every independent text fragment and shares one lifecycle start boundary. */
     private fun evaluateFragments(
         context: PolicyContext,
         normalizedRequest: NormalizedChatCompletionsRequest,
+        beforeDetectorExecution: (PolicySelection) -> Unit,
     ): List<PolicyDecision> {
         val payloads = normalizedRequest.fragments.map { fragment -> fragment.text }.ifEmpty { listOf("") }
-        return payloads.map { payload -> runSuspending { policyEngine.evaluate(context, payload) } }
+        return payloads.map { payload ->
+            runSuspending { policyEngine.evaluate(context, payload, beforeDetectorExecution) }
+        }
     }
+}
+
+/**
+ * One-shot best-effort stdout lifecycle state for a complete request analysis.
+ *
+ * @property serviceContext owning Armeria scope for safe tracing correlation.
+ * @property inspectionSpan request inspection span shared by the lifecycle pair.
+ * @property auditLogger best-effort stdout publisher.
+ */
+private class RequestAnalysisLifecycle(
+    private val serviceContext: ServiceRequestContext,
+    private val inspectionSpan: Span?,
+    private val auditLogger: ShadowAuditLogger,
+) {
+    /** First policy selection whose detector work started this request analysis. */
+    private var selection: PolicySelection? = null
+
+    /** Monotonic timestamp captured immediately before the first detector execution. */
+    private var startedAtNanos = 0L
+
+    /** Whether the one allowed terminal event has already been submitted. */
+    private var completed = false
+
+    /** Publishes at most one start immediately before the first detector execution. */
+    fun start(selected: PolicySelection) {
+        if (selection != null) return
+        selection = selected
+        startedAtNanos = System.nanoTime()
+        runCatching { auditLogger.emitStarted(serviceContext, selected, inspectionSpan) }
+    }
+
+    /** Publishes the successful terminal aggregate once when detector work actually started. */
+    fun complete(
+        normalizedRequest: NormalizedChatCompletionsRequest,
+        decisions: List<PolicyDecision>,
+    ) {
+        if (selection == null || completed) return
+        completed = true
+        runCatching {
+            auditLogger.emitCompleted(
+                serviceContext,
+                normalizedRequest,
+                decisions,
+                elapsed(),
+                inspectionSpan,
+            )
+        }
+    }
+
+    /** Publishes one stable terminal ERROR only when detector work actually started. */
+    fun fail(errorCode: String) {
+        val selected = selection ?: return
+        if (completed) return
+        completed = true
+        runCatching {
+            auditLogger.emitFailed(serviceContext, selected, elapsed(), errorCode, inspectionSpan)
+        }
+    }
+
+    /** Returns non-negative monotonic elapsed analysis time. */
+    private fun elapsed(): Duration = Duration.ofNanos((System.nanoTime() - startedAtNanos).coerceAtLeast(0L))
 }
 
 /** Runs one suspension boundary on the current blocking-safe inspection thread. */

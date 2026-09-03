@@ -12,7 +12,8 @@ Client -> Server : запрос с необязательными traceparent, t
 activate Server
 Server -> Inspect : создать непосредственный дочерний span
 activate Inspect
-Inspect -> Inspect : разобрать, проверить и долговечно записать аудит
+Inspect -> Inspect : parse/context/select
+Inspect -> Inspect : stdout analysis_started,\ndetector execution, stdout analysis_completed
 Inspect --> Server : теневое решение
 deactivate Inspect
 Server -> UpstreamSpan : создать непосредственный дочерний span

@@ -8,6 +8,7 @@ import io.vigilant.policy.domain.PolicyDecision
 import io.vigilant.policy.execution.DetectorExecutionCoordinator
 import io.vigilant.policy.execution.DetectorExecutionResults
 import io.vigilant.policy.provider.PolicyProvider
+import io.vigilant.policy.selection.PolicySelection
 import io.vigilant.policy.selection.PolicySelector
 import java.time.Duration
 import org.slf4j.LoggerFactory
@@ -36,14 +37,21 @@ class PolicyEngine(
      * Detector orchestration is a blocking boundary. Until a runtime adapter is introduced,
      * callers must enter this method from a virtual thread or another blocking-safe executor.
      *
+     * @param beforeDetectorExecution synchronous lifecycle callback invoked after deterministic
+     * selection and immediately before the first selected detector execution. It is not invoked
+     * when selection contains no detector work.
      * @return a complete deterministic decision explanation.
      */
     suspend fun evaluate(
         context: PolicyContext,
         payload: String,
+        beforeDetectorExecution: (PolicySelection) -> Unit = {},
     ): PolicyDecision {
         val startedAt = nanoTime()
         val selection = policySelector.select(policyProvider.getPolicies(), context)
+        if (selection.applied.any { policy -> policy.detectors.isNotEmpty() }) {
+            beforeDetectorExecution(selection)
+        }
         val execution = detectorExecutionCoordinator.execute(selection.applied, payload)
         logDetectorErrors(execution)
         logPolicyDeadlines(execution, selection.applied)

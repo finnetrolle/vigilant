@@ -16,8 +16,8 @@
 ограничения анализатора описаны в
 [контракте запросов Chat Completions](openai-chat-completions.md).
 
-Для поддержанного descriptor gateway сначала резервирует bounded audit token,
-затем полностью принимает request body в bounded in-memory source. Parser
+Для поддержанного descriptor gateway проверяет identity, затем полностью
+принимает request body в bounded in-memory source. Parser
 создаёт отдельное normalized view model-visible content,
 а исходные bytes остаются неизменными. После shadow inspection upstream
 получает исходные method, path/query, end-to-end headers и byte-identical body.
@@ -57,18 +57,20 @@ metrics, traces или errors; policy context получает только norm
 user/groups. Принятый Authorization передаётся upstream с исходным значением
 без изменений.
 
-## Shadow PII decision
+## Shadow PII analysis outcome
 
 Policy snapshot выбирает global request policy и запускает `fast-pii` для
-каждого независимого text fragment. Результат audit:
+каждого независимого text fragment. Terminal `policy.analysis_completed`
+публикует outcome:
 
 - `DETECTED` - найден хотя бы один PII finding;
 - `CLEAN` - все доступные fragments проверены, findings и gaps нет;
 - `INSPECTION_GAP` - известный non-text content передан без изменений;
 - `ERROR` - inspection не удалось завершить корректно.
 
-Текущая disposition всегда `ALLOW`. Findings не блокируют и не изменяют
-request.
+Для успешных `CLEAN`, `DETECTED` и `INSPECTION_GAP` текущая reaction всегда
+`ALLOW`: findings не блокируют и не изменяют request. `ERROR` не содержит
+reaction и публикует stable `error.code`.
 
 Malformed JSON, неизвестный content discriminator и неоднозначная
 content-bearing structure обрабатываются fail-closed и не достигают upstream.
@@ -87,45 +89,49 @@ content-bearing structure обрабатываются fail-closed и не до�
 | Некорректный request source, включая несовпадение `Content-Length` | `400` | `{"error":"invalid_request_source"}` |
 | Per-request byte limit | `413` | `{"error":"request_too_large"}` |
 | Owner/global retained capacity | `503` | `{"error":"inspection_capacity_exhausted"}` |
-| Audit admission, size, I/O или lifecycle failure | `503` | `{"error":"audit_unavailable"}` |
+| Inspection executor admission failure | `503` | `{"error":"audit_unavailable"}` |
 | Непредвиденный inspection failure | `500` | `{"error":"inspection_failed"}` |
 
-Descriptor и audit reservation выполняются до identity и body demand.
-Некорректный session ID отклоняется ещё раньше, в tracing decorator. Для
-поддержанного descriptor создаётся ровно одна immutable audit record, включая
-fail-closed identity, source, parser, context и inspection outcomes. Исходный
-stable response или первый upstream byte разрешён только после force-backed
-durable acknowledgement. `policy.shadow_decision` публикуется после него как
-best-effort projection. Для неподдержанного descriptor и invalid session ID
-audit reservation и record не создаются.
+Descriptor проверяется до identity и body demand. Некорректный session ID
+отклоняется ещё раньше, в tracing decorator. Identity, source, parser, context,
+empty policy selection и cancellation до detector execution не публикуют
+request audit. Когда после selection действительно начинается detector
+execution, gateway best-effort публикует в existing non-blocking JSONL stdout
+ровно одну пару `policy.analysis_started` и `policy.analysis_completed`.
+Terminal event появляется до разрешённого upstream handoff, но request path не
+резервирует audit record, не submit-ит его в WAL и не ожидает write, `force(true)`
+или delivery. Logging overload или failure не меняет исходный stable response
+и не запрещает upstream.
 
-External Collector не находится в request critical path. Active WAL segment
+До VIG-32-02 transitional LocalAuditStore, его readiness integration и
+Collector handoff остаются в процессе, но request analysis больше не создаёт в
+нём records и не проверяет его capacity перед body demand. Active WAL segment
 становится ready по exact byte bound, age bound или graceful close. Collector
 читает immutable ready segments через документированный
 [file handoff](audit-collector-file-handoff.md) и публикует ack только после
 durable retention всего segment во внешнем destination. Valid contiguous ack
-разрешает asynchronous reclaim. Outage Collector не меняет уже допустимый
-request outcome, пока хватает `audit-max-retained-bytes`; после исчерпания
-следующий supported request получает `503 audit_unavailable` без body demand и
-upstream. Valid ack освобождает capacity и автоматически восстанавливает
-readiness/admission.
+разрешает asynchronous reclaim. Outage Collector не меняет request
+outcome или upstream handoff, но после исчерпания
+`audit-max-retained-bytes` transitional `/readyz` остаётся `503` до valid
+ack/reclaim.
 
 Packaged [qualification 2026-08-31](durability-qualification-2026-08-31.md)
-подтверждает эту строку контракта: retained-capacity admission получает exact
-`503 audit_unavailable`, readiness остаётся `503`, body не demand-ится и
-upstream не вызывается. Lifecycle shutdown независимо сохраняет plain
-`503 draining` для нового traffic.
+подтверждает прежний durable request contract и не описывает
+текущую request path после VIG-32-01. Lifecycle shutdown независимо
+сохраняет plain `503 draining` для нового traffic.
 
-Policy deadline или typed detector error отражается как decision `ERROR` с
-disposition `ALLOW`: current shadow policy не блокирует request, поэтому при
-успешной orchestration исходный body всё равно отправляется upstream.
+Policy deadline или typed detector error отражается как outcome `ERROR` со
+stable `error.code` и без reaction. Current shadow policy не блокирует request,
+поэтому при завершённой orchestration исходный body всё равно отправляется
+upstream.
 `500 inspection_failed` предназначен для непредвиденного сбоя самой
 orchestration или context assembly.
 
-Client cancellation до decision отменяет ingest/inspection и освобождает source
-и audit reservation без record. После decision store ownership и durable append
-сохраняются независимо от HTTP cancellation; новый upstream handoff запрещён.
-Отменённому соединению delivery HTTP error не гарантируется.
+Client cancellation до analysis отменяет ingest/inspection, освобождает
+source и не публикует пару. Cancellation после start best-effort
+публикует terminal `ERROR` с `error.code=ANALYSIS_CANCELLED`; новый
+upstream handoff запрещён. Отменённому соединению delivery HTTP error не
+гарантируется.
 
 ## Upstream errors
 
@@ -158,13 +164,14 @@ environment variables перечислены в
 ## Health и shutdown
 
 - `GET /healthz` возвращает `200`, пока server принимает соединения.
-- `GET /readyz` возвращает `200` только при доступном audit admission; `503`
-  означает draining, exhausted audit capacity или store health failure.
+- `GET /readyz` до VIG-32-02 возвращает `200` только при доступном
+  transitional audit store; `503` означает draining, exhausted store
+  capacity или store health failure, но не блокирует уже admitted request.
 - Probes принадлежат gateway и никогда не проксируются upstream.
 - Readiness не проверяет доступность upstream.
 
-При SIGTERM readiness сначала переключается на `503`, новые audit admissions и
-proxy traffic запрещаются, а active exchanges получают время на drain. После
+При SIGTERM readiness сначала переключается на `503`, новые proxy exchanges и
+store admissions запрещаются, а active exchanges получают время на drain. После
 drain gateway force-ит pending audit records, seal-ит active segment, затем
 закрывает inspection, upstream и telemetry resources. Quiet period и force
 timeout конфигурируются через `VIGILANT_SHUTDOWN_*`.

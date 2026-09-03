@@ -89,12 +89,17 @@ type, deadline/errors, spool/capacity rejects и identity cache hit/miss/lookup
 latency. Audit queue depth/drops не публикуются: stdout delivery принадлежит
 Logback/container runtime. Tracing содержит session, trace ID, span ID и
 parent span ID.
+Текущая REQUEST inspection уже публикует stdout
+`policy.analysis_started`/`policy.analysis_completed` с outcome, latency и safe
+aggregate PII counts; RESPONSE outcome и latency остаются future EPIC-20 behavior.
 
 ### OBS-02. Privacy
 
 Audit, logs, metrics, traces и errors не содержат body, PII value/span, Bearer
 token, user ID или groups. Исключение: tracing identifiers хранятся для
 корреляции.
+Этот privacy contract покрывает текущую REQUEST stdout pair;
+аналогичная RESPONSE pair появится в owning response-enforcement leaves EPIC-20.
 
 ## Deployment и stack
 

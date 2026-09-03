@@ -90,9 +90,10 @@ External delivery использует
 получает доступ к тому же persistent audit volume, читает только atomic ready
 manifests и immutable `.wal`, а создаёт только force-backed `.ack.json` после
 durable destination acknowledgement. Он не изменяет WAL или metadata Vigilant.
-Collector outage не блокирует requests до исчерпания configured retained
-bound; затем readiness и новые supported requests получают
-`audit_unavailable` до valid ack/reclaim.
+VIG-32-01 отключил request analysis от этой transitional подсистемы:
+Collector outage не блокирует request outcome или upstream handoff. При
+исчерпании configured retained bound `/readyz` остаётся `503` до valid
+ack/reclaim; эта readiness integration удаляется в VIG-32-02.
 
 Deployment обязан ограничить directory permissions gateway/Collector service
 accounts, включить volume encryption at rest и передавать Collector credentials
@@ -110,7 +111,7 @@ Orchestrator probes:
 - `GET /readyz` - readiness.
 
 `SIGTERM` запускает JVM shutdown hook. Readiness переключается на `503`, новые
-audit admissions запрещаются, active exchanges получают bounded drain, затем
+proxy exchanges и store admissions запрещаются, active exchanges получают bounded drain, затем
 WAL force-ится и seal-ится до закрытия inspection, upstream и OpenTelemetry
 resources.
 
@@ -123,7 +124,10 @@ timeout 35 seconds сохраняет этот budget и снижает риск
 Container пишет только в stdout. Там находятся два логических потока:
 application logs в JSON Lines и OpenTelemetry traces/metrics в OTLP JSON Lines.
 Runtime обязан использовать non-blocking delivery, ротацию и bounded local
-storage. Collector должен разделять записи по top-level `resourceSpans` и
+storage. Started request analysis публикует safe best-effort
+`policy.analysis_started`/`policy.analysis_completed` через existing Logback
+`AsyncAppender` с `neverBlock=true`; request не ждёт queue delivery или stdout write.
+Collector должен разделять записи по top-level `resourceSpans` и
 `resourceMetrics`; остальные JSON records являются application logs. Требования
 и пример pipeline приведены в [observability reference](observability.md).
 
@@ -156,7 +160,8 @@ storage. Collector должен разделять записи по top-level `
 Smoke test удаляет созданные container/image resources при завершении. Он
 запускается явно и не входит в `./gradlew build` или CI.
 
-Полная packaged durability matrix запускается командой:
+Историческая packaged durability matrix прежнего request contract
+запускается командой до удаления в VIG-32-02:
 
 ~~~bash
 ./gradlew durabilityQualification
@@ -165,9 +170,11 @@ Smoke test удаляет созданные container/image resources при з
 Она добавляет exact audit bounds, real Armeria upstream, отдельный fake
 Collector, crash/recovery и exhaustion phases. Текущий versioned
 [qualification report](durability-qualification-2026-08-31.md) имеет verdict
-`PASS`: retained-capacity admission возвращает exact `503 audit_unavailable`,
+`PASS` для прежнего durable request path: retained-capacity admission
+возвращает exact `503 audit_unavailable`,
 OCI restart сохраняет WAL на том же volume, ack/reclaim восстанавливает
-readiness и новые requests.
+readiness. Этот report не является evidence текущего stdout request
+contract.
 
 ## Не входит в поставку
 

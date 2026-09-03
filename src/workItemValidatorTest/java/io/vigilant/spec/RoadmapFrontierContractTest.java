@@ -15,13 +15,13 @@ final class RoadmapFrontierContractTest {
     private static final Path ARCHITECTURE = Path.of("docs/architecture.md");
     private static final Path OBSERVABILITY = Path.of("docs/observability.md");
 
-    /** Names the open implementation leaf instead of a completed historical benchmark. */
+    /** Names the open audit-removal leaf instead of a completed historical benchmark. */
     @Test
     void namesCurrentOpenImplementationFrontier() throws IOException {
         String frontier = section(Files.readString(ROADMAP), "## Текущий roadmap frontier");
 
         assertFalse(frontier.contains("Полный repository frontier сохраняет VIG-01A"));
-        assertTrue(frontier.contains("VIG-22-03"));
+        assertTrue(frontier.contains("VIG-32-02"));
     }
 
     /** Keeps the historical load baseline distinct from the later max-shape qualification. */
@@ -60,20 +60,20 @@ final class RoadmapFrontierContractTest {
                 () -> assertTrue(exclusions.contains("offline JWT Bearer identity")));
     }
 
-    /** Separates best-effort stdout projection from the implemented local durability guarantee. */
+    /** Separates the current stdout pair from the transitional historical durable subsystem. */
     @Test
-    void distinguishesSafeAggregateFromGuaranteedAuditTrail() throws IOException {
+    void distinguishesStdoutPairFromTransitionalAuditSubsystem() throws IOException {
         String roadmap = Files.readString(ROADMAP);
         String observability = Files.readString(OBSERVABILITY);
         String architecture = Files.readString(ARCHITECTURE);
 
         assertAll(
-                () -> assertTrue(roadmap.contains("### Safe aggregate event")),
-                () -> assertTrue(roadmap.contains("### Guaranteed minimum audit trail")),
-                () -> assertTrue(observability.contains("## Safe aggregate shadow event")),
-                () -> assertTrue(observability.contains("## Guaranteed minimum audit trail")),
-                () -> assertTrue(architecture.contains("acknowledgement только после")),
-                () -> assertTrue(observability.contains("Текущий runtime реализует local durable стадии")),
+                () -> assertTrue(roadmap.contains("### Safe request analysis pair")),
+                () -> assertTrue(roadmap.contains("### Transitional durable subsystem")),
+                () -> assertTrue(observability.contains("## Safe request analysis pair")),
+                () -> assertTrue(observability.contains("## Transitional durable subsystem")),
+                () -> assertTrue(architecture.contains("request-analysis records")),
+                () -> assertTrue(observability.contains("VIG-32-01 отключил")),
                 () -> assertTrue(roadmap.contains("EPIC-22")));
     }
 

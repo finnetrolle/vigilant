@@ -151,7 +151,6 @@ interface AppComponent {
             bypassProxyService: BypassProxyService,
             inspectionResources: InspectionResources,
             policyEngine: PolicyEngine,
-            auditStore: AuditStore,
             identityExtractor: BearerIdentityExtractor,
         ): PiiShadowProxyService {
             val protocol = PiiShadowProtocol(appConfig.upstreamUri)
@@ -164,8 +163,6 @@ interface AppComponent {
                 workflow = workflow,
                 inspectionExecutor = inspectionResources.requestExecutor,
                 identityExtractor = identityExtractor,
-                auditLogger = auditLogger,
-                auditStore = auditStore,
             )
         }
 

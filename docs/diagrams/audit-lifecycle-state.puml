@@ -1,5 +1,5 @@
 @startuml
-title Жизненный цикл минимальной долговечной записи аудита
+title Transitional lifecycle долговечной записи до VIG-32-02
 skinparam state {
   BackgroundColor White
   BorderColor Black
@@ -13,11 +13,11 @@ EXTERNALLY_DELIVERED --> [*] : идемпотентное освобождени
 
 DECISION_CREATED --> AUDIT_UNAVAILABLE : событие слишком велико или нет места
 STORE_OWNED --> AUDIT_UNAVAILABLE : ошибка записи, фиксации или жизненного цикла
-AUDIT_UNAVAILABLE --> [*] : 503, без передачи вышестоящему серверу
+AUDIT_UNAVAILABLE --> [*] : typed store failure
 
-note right of DURABLY_RETAINED
-Только это состояние разрешает передать первый байт
-вышестоящему серверу или исходный ответ на поддержанный запрос.
+note right of DECISION_CREATED
+Request analysis больше не создаёт record
+и не входит в эту state machine.
 end note
 
 note right of EXTERNALLY_DELIVERED

@@ -79,6 +79,9 @@ REQUEST pair принадлежит
 [VIG-32-01](issues/epic_32/issue_32_01_stdout_request_audit_migration.md),
 RESPONSE pair -
 [VIG-20-02](issues/epic_20/issue_20_02_response_inspection_enforcement.md).
+Текущая REQUEST inspection уже публикует эту pair до upstream handoff и не
+ждёт durable acknowledgement; RESPONSE pair остаётся future behavior owning
+leaves EPIC-20.
 
 ## MVP-07. Минимальная интеграция
 

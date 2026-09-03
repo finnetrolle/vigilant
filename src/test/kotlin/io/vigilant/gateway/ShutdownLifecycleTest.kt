@@ -35,9 +35,9 @@ class ShutdownLifecycleTest {
         fixture.close()
     }
 
-    /** Active traffic drains after SIGTERM while header-only new traffic is rejected locally. */
+    /** Active traffic drains without request-audit WAL while new traffic is rejected locally. */
     @Test
-    fun `shutdown drains active stream and rejects new proxy traffic`() {
+    fun `shutdown drains active stream without request audit WAL and rejects new proxy traffic`() {
         val upstreamPaths = CopyOnWriteArrayList<String>()
         val activeWriter = AtomicReference<HttpResponseWriter>()
         val activeStarted = CountDownLatch(1)
@@ -94,8 +94,10 @@ class ShutdownLifecycleTest {
             Files.list(gateway.auditDirectory).use { paths ->
                 paths.map { path -> path.fileName.toString() }.toList()
             }
-        assertTrue(segmentNames.any { name -> name.endsWith(".wal") }, segmentNames.toString())
-        assertTrue(segmentNames.none { name -> name.endsWith(".active") }, segmentNames.toString())
+        assertTrue(
+            segmentNames.none { name -> name.endsWith(".wal") || name.endsWith(".active") },
+            "request analysis unexpectedly created durable audit data: $segmentNames",
+        )
     }
 
     /** A non-terminating exchange is force-closed on time before bounded process cleanup finishes. */

@@ -86,41 +86,39 @@ Roadmap связывает work items нескольких epics в один del
 - Отсутствующая или неверная coverage policy завершает startup с exit code `2`.
 - Hardcoded hidden default policy не добавляется.
 
-### Safe aggregate event
+### Safe request analysis pair
 
-На каждый поддерживаемый HTTP request создаётся один aggregated event:
+Каждый supported REQUEST, где после parse, identity/context assembly и
+policy selection реально начинается detector execution, best-effort
+публикует в JSONL stdout ровно одну lifecycle pair:
 
 ```text
-event.name=policy.shadow_decision
+event.name=policy.analysis_started | policy.analysis_completed
 protocol=openai.chat_completions
 phase=REQUEST
-decision=DETECTED|CLEAN|INSPECTION_GAP|ERROR
-disposition=ALLOW
-coverage=FULLY_INSPECTABLE|PARTIALLY_INSPECTABLE|UNINSPECTABLE
+outcome=CLEAN|DETECTED|INSPECTION_GAP|ERROR
 ```
 
-Event также содержит trace ID, sorted policy ID/version, detector ID/version,
-inspected fragment count, total finding count, sorted counts по `PiiType`,
-sorted `EvidenceStrength` и total evaluation duration.
+Оба event содержат correlation одного inspection span: span IDs генерируются
+server-side, а trace ID может продолжать валидный W3C parent по current tracing
+contract. Events также содержат canonical policy references и detector
+ID/version. Terminal event содержит coverage, aggregate
+fragment/finding counts, duration и `reaction=ALLOW` либо stable `error.code`
+без reaction. Payload, PII values/spans, path/query, headers, credentials,
+identity, user/groups, session и raw inbound propagation values запрещены.
 
-Event и связанные errors не содержат payload, matched text, offsets, protocol
-locator, media URL, filename, raw headers, identity values, credentials или
-reversible hashes. Detector errors и policy deadlines остаются отдельными
-structured error events.
+Existing Logback `AsyncAppender` с `neverBlock=true` остаётся единственной
+queue. Request path не ждёт logging delivery, stdout write или durable
+acknowledgement. RESPONSE pair остаётся future behavior owning leaves EPIC-20.
 
-Это contract безопасного содержимого одного aggregate event. Публикация через
-discardable async stdout остаётся только best-effort projection уже durably
-accepted record и сама по себе не подтверждает mandatory audit acceptance.
+### Transitional durable subsystem
 
-### Guaranteed minimum audit trail
-
-Отдельный нормативный [contract](MINIMUM_AUDIT_TRAIL_CONTRACT.md) требует
-application-owned WAL и durable acknowledgement до forwarding или normal
-supported-request response. VIG-22-01, VIG-22-02 и VIG-22-03 реализуют local
-durable boundary, external Collector handoff и acknowledged reclaim в current
-runtime. Оставшийся owner внутри
-[EPIC-22](epics/epic_22_durable_minimum_audit_trail.md) добавляет packaged
-qualification; SIEM и query UI не входят в minimum durability boundary.
+Исторический нормативный [contract](MINIMUM_AUDIT_TRAIL_CONTRACT.md) и completed
+[EPIC-22](epics/epic_22_durable_minimum_audit_trail.md) фиксируют прежний
+application-owned WAL, Collector handoff и qualification. VIG-32-01 отключает
+request analysis от record reservation/submission/acknowledgement. Сама подсистема,
+её readiness/startup/shutdown и packaging consumers остаются transitional до
+removal в VIG-32-02.
 
 ## Discovery map
 
@@ -151,7 +149,7 @@ Production PII shadow proxy
 |   +-- bounded execution outside event loop
 +-- Operator-visible tracer bullet
 |   +-- PII request forwarded unchanged
-|   +-- one safe shadow decision event
+|   +-- one safe request-analysis event pair
 |   +-- fail-closed protocol outcomes
 |   +-- explicit inspection gaps
 |   +-- stable resource exhaustion
@@ -409,6 +407,11 @@ acknowledged Collector handoff
 тоже имеют status `Done`; EPIC-22 завершён с versioned PASS evidence.
 VIG-01A, EPIC-10 и VIG-10-08 имеют status `Done` и не входят в current
 frontier.
+
+EPIC-32 мигрирует current audit на best-effort stdout. VIG-32-01 имеет
+status `Done`: REQUEST lifecycle pair публикуется без durable acknowledgement.
+VIG-32-02 теперь является следующим removal leaf для WAL,
+Collector, audit-driven readiness/configuration и packaging consumers.
 
 ## Не входит в первый production increment
 

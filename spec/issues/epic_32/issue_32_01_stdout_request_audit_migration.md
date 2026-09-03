@@ -1,6 +1,6 @@
 # VIG-32-01: Stdout request audit migration
 
-**Статус:** Ready for implementation
+**Статус:** Done
 **Epic:** [EPIC-32](../../epics/epic_32_best_effort_stdout_audit.md)
 **Ветка:** Migrate request audit contract > operator-visible stdout pair
 **Зависит от:** нет
@@ -39,9 +39,11 @@ non-blocking failure behavior по одному observable case.
 Оба event используют existing structured JSONL encoding и содержат:
 
 - `event.name`, `protocol=openai.chat_completions`, `phase=REQUEST`;
-- server-generated `trace.id`, `span.id`, `parent.span.id` одного inspection
-  span без session ID, inbound `traceparent`/`tracestate` или другой
-  user-controlled correlation;
+- `trace.id`, server-generated `span.id` и `parent.span.id` одного inspection
+  span. `trace.id` либо генерируется server-side, либо продолжает валидный W3C
+  parent по existing tracing contract; session ID, raw inbound
+  `traceparent`/`tracestate` и другие raw user-controlled correlation values
+  отсутствуют;
 - canonical deterministic policy references в формате `id@version` и detector
   references `detector.id`/`detector.version`.
 
@@ -73,35 +75,56 @@ contract; [EPIC-32](../../epics/epic_32_best_effort_stdout_audit.md).
 
 ## Критерии готовности
 
-- [ ] Causal real-Armeria test доказывает exact ordering: started видим после
+- [x] Causal real-Armeria test доказывает exact ordering: started видим после
   selection и до первого detector execution; completed видим после final
   outcome и до transport release. Один request создаёт не более одной пары,
   независимо от количества fragments и policies.
-- [ ] Table-driven stdout assertions покрывают `CLEAN`, `DETECTED`,
+- [x] Table-driven stdout assertions покрывают `CLEAN`, `DETECTED`,
   `INSPECTION_GAP` и detector/policy `ERROR`, exact required fields, canonical
   ordering policy references, aggregate counts/duration и отсутствие
   `reaction` для `ERROR`.
-- [ ] Tests покрывают отсутствие пары для unsupported/malformed request,
+- [x] Tests покрывают отсутствие пары для unsupported/malformed request,
   identity/context/source failure, empty selection и cancellation до analysis,
   а также terminal completion при cancellation после реально начатого analysis.
-- [ ] Request workflow не резервирует audit record, не submit-ит его и не ждёт
+- [x] Request workflow не резервирует audit record, не submit-ит его и не ждёт
   write/force/durable future. Upstream и исходные stable request errors больше
   не зависят от durable acknowledgement.
-- [ ] Existing Logback `AsyncAppender` с `neverBlock=true` остаётся единственной
+- [x] Existing Logback `AsyncAppender` с `neverBlock=true` остаётся единственной
   queue. Slow, full или throwing logging sink не меняет status/body, не
   задерживает upstream handoff и не создаёт audit queue/worker/config/metric/
   callback/drop alert.
-- [ ] Privacy tests используют уникальные sentinels для body, PII values/spans,
+- [x] Privacy tests используют уникальные sentinels для body, PII values/spans,
   path/query, headers, credentials, identity, user/groups, session и inbound
   propagation, затем доказывают их отсутствие в обоих stdout events и client
   errors.
-- [ ] `MVP-06`, `OBS-01`, `OBS-02` и current observability/coverage docs
+- [x] `MVP-06`, `OBS-01`, `OBS-02` и current observability/coverage docs
   описывают реализованную REQUEST pair, сохраняя RESPONSE pair как future
   behavior owning leaves EPIC-20.
-- [ ] Все добавленные и изменённые Kotlin declarations, lifecycle helpers и
+- [x] Все добавленные и изменённые Kotlin declarations, lifecycle helpers и
   test methods имеют актуальный KDoc. Зафиксированы expected RED, focused GREEN,
   affected request/process suite, `./gradlew validateWorkItems` и
   `./gradlew build`.
+
+## Evidence
+
+- RED: causal real-Armeria test до production change не увидел
+  `policy.analysis_started` перед held detector execution; focused command
+  завершился `BUILD FAILED` за 12s. Migration RED также показал,
+  что durable capacity всё ещё менял request outcome.
+- GREEN: causal ordering, exact outcome/schema, absence/cancellation,
+  slow/full/throwing logger, privacy и installed-process stdout slices прошли
+  focused tests. Дополнительные RED cases обнаружили два early-rejection
+  inspection-span leak; оба focused GREEN прошли после one-shot span cleanup.
+- Affected suites: complete `PiiShadowProxyServiceTest` прошёл за 2m24s,
+  complete `PiiShadowProxyProcessTest` прошёл за 22s, а
+  `ShadowInspectionWorkflowTest` вместе с `PolicyEngineTest` прошли за 2s.
+- Repository gates: `./gradlew validateWorkItems` прошёл с
+  `Work-item graph is valid`; `./gradlew build` прошёл с `BUILD SUCCESSFUL`.
+- Verification fix pass: packaged-process table подтвердил exact JSONL schema
+  для `CLEAN`, `DETECTED`, `INSPECTION_GAP` и deterministic policy `ERROR`, а
+  packaged privacy case покрыл полный sentinel matrix и client error.
+  Correlation fields и MDC теперь используют одно canonical tracing rule;
+  complete affected request/process/workflow suites прошли за 2m49s.
 
 ## Не входит
 

@@ -20,7 +20,7 @@
 | `MVP-03` | Не реализовано | Runtime разрешает только `ALLOW`; `MASK` и `BLOCK` transport enforcement отсутствуют. |
 | `MVP-04` | Частично | Startup policy snapshot и group matching существуют, но новая direction/group contract и startup policy logging отсутствуют. |
 | `MVP-05` | Не реализовано | Есть Dummy и offline JWT extractors; external Bearer lookup и cache отсутствуют. |
-| `MVP-06` | Частично | Current durable audit WAL безопасен по содержимому, но блокирует request admission и не соответствует best-effort writer contract. |
+| `MVP-06` | Частично | REQUEST analysis публикует safe best-effort started/completed pair через existing non-blocking stdout без durable acknowledgement; RESPONSE pair остаётся future EPIC-20 behavior, а transitional WAL удаляется в VIG-32-02. |
 | `MVP-07` | Частично | Поддержан только Chat Completions request path; response inspection и enforcement отсутствуют. |
 
 ## Нефункциональные требования MVP
@@ -37,8 +37,8 @@
 | `PROXY-01` | Не реализовано | Response/SSE currently pass through; bounded hold-before-release enforcement отсутствует. |
 | `PROXY-02` | Не реализовано | Exact-span JSON mutation отсутствует. |
 | `PROXY-03` | Частично | Capacity errors существуют, но новый `503`/`Retry-After` matrix и policy `BLOCK` contract принадлежат VIG-29. |
-| `OBS-01` | Частично | Base metrics/tracing существуют; new outcome и identity metrics отсутствуют. Audit-drop metrics intentionally не требуются. |
-| `OBS-02` | Частично | Logs/audit безопасны для payload и credentials, но новый tracing/audit contract не реализован. |
+| `OBS-01` | Частично | Base metrics/tracing и REQUEST stdout outcome pair существуют; response outcome и identity metrics отсутствуют. Audit-drop metrics intentionally не требуются. |
+| `OBS-02` | Частично | REQUEST pair и errors исключают payload, PII values/spans, credentials, identity/session и raw inbound propagation values. Ordinary request logs/traces сохраняют разрешённые tracing identifiers, configured session и accepted W3C propagation metadata по tracing contract; RESPONSE audit пока отсутствует. |
 
 ## Stage 1 и non-goals
 

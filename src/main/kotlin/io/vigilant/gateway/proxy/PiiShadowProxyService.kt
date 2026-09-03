@@ -9,9 +9,6 @@ import io.opentelemetry.api.common.AttributeKey
 import io.opentelemetry.api.trace.Span
 import io.opentelemetry.api.trace.SpanKind
 import io.opentelemetry.api.trace.StatusCode
-import io.vigilant.audit.AuditReservation
-import io.vigilant.audit.AuditReservationResult
-import io.vigilant.audit.AuditStore
 import io.vigilant.gateway.identity.BearerIdentityExtractor
 import io.vigilant.gateway.identity.IdentityExtractionResult
 import io.vigilant.gateway.tracing.RequestTracing
@@ -46,8 +43,6 @@ class PiiShadowProxyService internal constructor(
     private val workflow: ShadowInspectionWorkflow,
     private val inspectionExecutor: ExecutorService,
     private val identityExtractor: BearerIdentityExtractor,
-    private val auditLogger: ShadowAuditLogger,
-    private val auditStore: AuditStore,
 ) : HttpService {
     /**
      * Selects the supported descriptor and extracts identity before body demand,
@@ -63,23 +58,13 @@ class PiiShadowProxyService internal constructor(
             return stableProxyError(HttpStatus.BAD_REQUEST, "unsupported_schema")
         }
 
-        val auditReservation =
-            when (val result = auditStore.reserve()) {
-                is AuditReservationResult.Granted -> result.reservation
-                is AuditReservationResult.Rejected -> {
-                    inspectionSpan?.end()
-                    return stableProxyError(HttpStatus.SERVICE_UNAVAILABLE, "audit_unavailable")
-                }
-            }
-
-        return extractIdentity(ctx, request, auditReservation, inspectionSpan)
+        return extractIdentity(ctx, request, inspectionSpan)
     }
 
     /** Runs credential validation on the blocking-safe request executor before body demand. */
     private fun extractIdentity(
         ctx: ServiceRequestContext,
         request: HttpRequest,
-        auditReservation: AuditReservation,
         inspectionSpan: Span?,
     ): HttpResponse {
         val completion = CompletableFuture<HttpResponse>()
@@ -89,22 +74,17 @@ class PiiShadowProxyService internal constructor(
                     ctx.push().use {
                         when (val result = identityExtractor.extract(request.headers())) {
                             is IdentityExtractionResult.Success ->
-                                openRequestSource(ctx, request, result, auditReservation, inspectionSpan)
+                                openRequestSource(ctx, request, result, inspectionSpan)
 
                             is IdentityExtractionResult.Failure ->
-                                durableErrorResponse(
-                                    ctx,
-                                    auditReservation,
-                                    ShadowAuditError.Identity(result.code),
-                                    InspectionHttpResponses.identityError(result.code),
-                                    inspectionSpan,
-                                )
+                                InspectionHttpResponses.identityError(result.code).also {
+                                    inspectionSpan?.end()
+                                }
                         }
                     }
                 completion.complete(response)
             }
         } catch (_: java.util.concurrent.RejectedExecutionException) {
-            auditReservation.close()
             inspectionSpan?.setStatus(StatusCode.ERROR)
             inspectionSpan?.end()
             completion.complete(stableProxyError(HttpStatus.SERVICE_UNAVAILABLE, "audit_unavailable"))
@@ -117,78 +97,18 @@ class PiiShadowProxyService internal constructor(
         ctx: ServiceRequestContext,
         request: HttpRequest,
         identity: IdentityExtractionResult.Success,
-        auditReservation: AuditReservation,
         inspectionSpan: Span?,
     ): HttpResponse {
         val knownContentLength = request.headers().contentLength().takeIf { length -> length >= 0L }
         return when (val opened = requestSourceQuota.open(knownContentLength)) {
             is RequestSourceOpenResult.Rejected ->
-                durableErrorResponse(
-                    ctx,
-                    auditReservation,
-                    ShadowAuditError.Source(opened.code),
-                    InspectionHttpResponses.sourceError(opened.code),
-                    inspectionSpan,
-                )
+                InspectionHttpResponses.sourceError(opened.code).also {
+                    inspectionSpan?.end()
+                }
 
             is RequestSourceOpenResult.Open ->
-                inspectAndForward(ctx, request, opened.owner, identity, auditReservation, inspectionSpan)
+                inspectAndForward(ctx, request, opened.owner, identity, inspectionSpan)
         }
-    }
-
-    /** Persists one pre-ingest ERROR on a blocking-safe worker before exposing its response. */
-    private fun durableErrorResponse(
-        ctx: ServiceRequestContext,
-        auditReservation: AuditReservation,
-        error: ShadowAuditError,
-        originalResponse: HttpResponse,
-        inspectionSpan: Span?,
-    ): HttpResponse {
-        val completion =
-            durableErrorFuture(ctx, auditReservation, error, originalResponse, inspectionSpan)
-        completion.whenComplete { _, failure ->
-            if (failure != null) inspectionSpan?.setStatus(StatusCode.ERROR)
-            inspectionSpan?.end()
-        }
-        return HttpResponse.of(completion)
-    }
-
-    /** Persists one supported ERROR asynchronously and selects the original or audit response. */
-    private fun durableErrorFuture(
-        ctx: ServiceRequestContext,
-        auditReservation: AuditReservation,
-        error: ShadowAuditError,
-        originalResponse: HttpResponse,
-        inspectionSpan: Span?,
-    ): CompletableFuture<HttpResponse> {
-        val completion = CompletableFuture<HttpResponse>()
-        try {
-            inspectionExecutor.execute {
-                val response =
-                    try {
-                        if (
-                            acceptShadowAuditError(
-                                serviceContext = ctx,
-                                error = error,
-                                inspectionSpan = inspectionSpan,
-                                auditReservation = auditReservation,
-                                auditLogger = auditLogger,
-                            ) == null
-                        ) {
-                            originalResponse
-                        } else {
-                            stableProxyError(HttpStatus.SERVICE_UNAVAILABLE, "audit_unavailable")
-                        }
-                    } catch (_: CancellationException) {
-                        stableProxyError(HttpStatus.SERVICE_UNAVAILABLE, "audit_unavailable")
-                    }
-                completion.complete(response)
-            }
-        } catch (_: java.util.concurrent.RejectedExecutionException) {
-            auditReservation.close()
-            completion.complete(stableProxyError(HttpStatus.SERVICE_UNAVAILABLE, "audit_unavailable"))
-        }
-        return completion
     }
 
     /** Starts the request inspection span as a direct child of the gateway SERVER span. */
@@ -207,12 +127,10 @@ class PiiShadowProxyService internal constructor(
         request: HttpRequest,
         owner: BoundedRequestSourceOwner,
         identity: IdentityExtractionResult.Success,
-        auditReservation: AuditReservation,
         inspectionSpan: Span?,
     ): HttpResponse {
         val cancellation = InspectionCancellation(ctx.whenRequestCancelled()) {
             owner.close()
-            auditReservation.close()
         }
         val response =
             owner.ingest(requestBodyFlowPublisher(request)).handle { ingestResult, failure ->
@@ -220,17 +138,12 @@ class PiiShadowProxyService internal constructor(
                     failure != null -> {
                         owner.close()
                         if (failure.isCancellation()) {
-                            auditReservation.close()
                             CompletableFuture.completedFuture(
                                 InspectionHttpResponses.sourceError(RequestSourceOutcomeCode.CANCELLED),
                             )
                         } else {
-                            durableErrorFuture(
-                                ctx,
-                                auditReservation,
-                                ShadowAuditError.InspectionFailed,
+                            CompletableFuture.completedFuture(
                                 stableProxyError(HttpStatus.INTERNAL_SERVER_ERROR, "inspection_failed"),
-                                inspectionSpan,
                             )
                         }
                     }
@@ -242,38 +155,23 @@ class PiiShadowProxyService internal constructor(
                             owner = owner,
                             identity = identity,
                             cancellation = cancellation,
-                            auditReservation = auditReservation,
                             inspectionSpan = inspectionSpan,
                         )
 
                     ingestResult is RequestSourceIngestResult.Rejected -> {
                         owner.close()
-                        if (ingestResult.code == RequestSourceOutcomeCode.CANCELLED) {
-                            auditReservation.close()
-                            CompletableFuture.completedFuture(InspectionHttpResponses.sourceError(ingestResult.code))
-                        } else {
-                            durableErrorFuture(
-                                ctx,
-                                auditReservation,
-                                ShadowAuditError.Source(ingestResult.code),
-                                InspectionHttpResponses.sourceError(ingestResult.code),
-                                inspectionSpan,
-                            )
-                        }
+                        CompletableFuture.completedFuture(
+                            InspectionHttpResponses.sourceError(ingestResult.code),
+                        )
                     }
 
                     else ->
-                        durableErrorFuture(
-                            ctx,
-                            auditReservation,
-                            ShadowAuditError.InspectionFailed,
+                        CompletableFuture.completedFuture(
                             stableProxyError(HttpStatus.INTERNAL_SERVER_ERROR, "inspection_failed"),
-                            inspectionSpan,
                         )
                 }
             }.thenCompose { stage -> stage }
         response.whenComplete { _, failure ->
-            auditReservation.close()
             if (failure != null && !failure.isCancellation()) {
                 inspectionSpan?.setStatus(StatusCode.ERROR)
                 inspectionSpan?.recordException(failure)
@@ -290,7 +188,6 @@ class PiiShadowProxyService internal constructor(
         owner: BoundedRequestSourceOwner,
         identity: IdentityExtractionResult.Success,
         cancellation: InspectionCancellation,
-        auditReservation: AuditReservation,
         inspectionSpan: Span?,
     ): CompletableFuture<HttpResponse> {
         val completion = CompletableFuture<HttpResponse>()
@@ -304,7 +201,6 @@ class PiiShadowProxyService internal constructor(
                             owner,
                             identity,
                             cancellation,
-                            auditReservation,
                             inspectionSpan,
                         ),
                     )
@@ -326,10 +222,9 @@ class PiiShadowProxyService internal constructor(
         owner: BoundedRequestSourceOwner,
         identity: IdentityExtractionResult.Success,
         cancellation: InspectionCancellation,
-        auditReservation: AuditReservation,
         inspectionSpan: Span?,
     ): HttpResponse =
-        when (val outcome = workflow.execute(owner, request, identity, ctx, inspectionSpan, auditReservation)) {
+        when (val outcome = workflow.execute(owner, request, identity, ctx, inspectionSpan)) {
             is ShadowInspectionOutcome.Forward ->
                 if (cancellation.claimTransportHandoff()) {
                     forwardReplay(ctx, request, outcome.replay)
@@ -359,11 +254,8 @@ class PiiShadowProxyService internal constructor(
                 stableProxyError(HttpStatus.BAD_REQUEST, rejection.code.name.lowercase())
 
             is ShadowInspectionRejection.Source -> InspectionHttpResponses.sourceError(rejection.code)
-            is ShadowInspectionRejection.Context ->
+            is ShadowInspectionRejection.Inspection ->
                 stableProxyError(HttpStatus.INTERNAL_SERVER_ERROR, "inspection_failed")
-
-            is ShadowInspectionRejection.Audit ->
-                stableProxyError(HttpStatus.SERVICE_UNAVAILABLE, "audit_unavailable")
         }
 
     private companion object {

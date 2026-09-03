@@ -62,7 +62,7 @@ internal class PiiShadowProtocol(upstreamUri: URI) {
             when (val result = PolicyUrlNormalizer.normalize(effectiveUrl)) {
                 is PolicyUrlNormalizationResult.Success -> result.url
                 is PolicyUrlNormalizationResult.Failure ->
-                    throw SafeContextFailure(ShadowAuditError.UrlNormalization(result.error.code))
+                    throw SafeContextFailure(ShadowInspectionError.UrlNormalization(result.error.code))
             }
         return when (
             val result =
@@ -75,7 +75,7 @@ internal class PiiShadowProtocol(upstreamUri: URI) {
         ) {
             is PolicyContextAssemblyResult.Success -> result.context
             is PolicyContextAssemblyResult.Failure ->
-                throw SafeContextFailure(ShadowAuditError.ContextAssembly(result.code))
+                throw SafeContextFailure(ShadowInspectionError.ContextAssembly(result.code))
         }
     }
 
@@ -95,7 +95,7 @@ internal class SafeSourceFailure(
     val code: RequestSourceOutcomeCode,
 ) : RuntimeException()
 
-/** Safe control-flow exception carrying only a context assembly code. */
+/** Safe control-flow exception carrying one typed context-preparation or inspection failure. */
 internal class SafeContextFailure(
-    val error: ShadowAuditError,
+    val error: ShadowInspectionError,
 ) : RuntimeException()

@@ -2,7 +2,7 @@
 
 **ID:** `EPIC-32`
 **Тип:** Epic
-**Статус:** Ready for implementation
+**Статус:** In progress
 **Приоритет:** High
 **Суммарная оценка:** 7-10 инженерных дней
 **Связанные требования:** `MVP-06`, `OBS-01`, `OBS-02`
@@ -36,9 +36,11 @@ container runtime и deployment.
 - `phase` имеет значение `REQUEST` или `RESPONSE`. REQUEST pair принадлежит
   VIG-32-01; RESPONSE pair использует тот же schema contract в owning
   enforcement leaves EPIC-20.
-- Events содержат только safe aggregate data и server-generated trace/span
-  correlation. Payload, content preview, PII value/span, headers, credentials,
-  user ID, groups, session ID и user-controlled correlation запрещены.
+- Events содержат только safe aggregate data и correlation одного inspection
+  span. Span IDs генерируются server-side; trace ID либо генерируется
+  server-side, либо продолжает валидный W3C parent по existing tracing contract.
+  Payload, content preview, PII value/span, headers, credentials, user ID,
+  groups, session ID и raw user-controlled correlation values запрещены.
 - `analysis_completed` использует outcome `CLEAN`, `DETECTED`,
   `INSPECTION_GAP` или `ERROR`. Для успешного анализа указывается final
   reaction; для `ERROR` reaction отсутствует и присутствует только stable
@@ -74,7 +76,7 @@ VIG-32-01 Stdout request audit migration
 
 ## Дочерние issues
 
-- [ ] [VIG-32-01: Stdout request audit migration](../issues/epic_32/issue_32_01_stdout_request_audit_migration.md) - `Ready for implementation`
+- [x] [VIG-32-01: Stdout request audit migration](../issues/epic_32/issue_32_01_stdout_request_audit_migration.md) - `Done`
 - [ ] [VIG-32-02: Durable audit removal](../issues/epic_32/issue_32_02_durable_audit_removal.md) - `Ready for implementation`
 
 ## Не входит

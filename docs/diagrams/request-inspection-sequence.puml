@@ -1,18 +1,18 @@
 @startuml
-title Проверка и долговечная передача поддержанного запроса
+title Проверка и best-effort audit поддержанного запроса
 autonumber
 
 actor "Клиент" as Client
 participant "TracingService" as Tracing
 participant "TrafficAdmissionService" as Admission
 participant "PiiShadowProxyService" as Proxy
-participant "LocalAuditStore" as Audit
 participant "Blocking-safe request executor" as Executor
 participant "BearerIdentityExtractor" as Identity
 participant "BoundedRequestSource" as Source
 participant "ShadowInspectionWorkflow" as Workflow
 participant "ChatCompletionsRequestParser" as Parser
 participant "PolicyEngine" as Engine
+participant "Logback AsyncAppender\nneverBlock=true" as Audit
 participant "BypassProxyService" as Transport
 participant "Вышестоящий сервер OpenAI" as Upstream
 
@@ -24,42 +24,37 @@ Proxy -> Proxy : проверить метод, путь и медиатип
 alt дескриптор не поддерживается
   Proxy --> Client : 400 unsupported_schema
 else дескриптор поддерживается
-  Proxy -> Audit : зарезервировать максимальный размер записи
-  alt аудит недоступен
-    Audit --> Proxy : отказ
-    Proxy --> Client : 503 audit_unavailable
-  else место в аудите зарезервировано
-    Proxy -> Executor : проверить identity до body demand
-    Executor -> Identity : single Bearer header
-    Identity -> Identity : Dummy configured identity или\noffline RS256 + pinned JWK + claims
-    alt identity отклонена
-      Identity --> Executor : typed safe failure
-      Executor -> Audit : добавить безопасную ERROR запись
-      Audit --> Executor : DURABLY_RETAINED
-      Executor --> Client : 400/401 stable identity error
-    else identity нормализована
-      Identity --> Executor : normalized user/groups
-      Executor -> Source : принять с обратным давлением и квотами
+  Proxy -> Executor : проверить identity до body demand
+  Executor -> Identity : single Bearer header
+  Identity -> Identity : Dummy configured identity или\noffline RS256 + pinned JWK + claims
+  alt identity отклонена
+    Identity --> Executor : typed safe failure
+    Executor --> Client : 400/401 stable identity error\nбез audit pair
+  else identity нормализована
+    Identity --> Executor : normalized user/groups
+    Executor -> Source : принять с обратным давлением и квотами
     Source --> Proxy : полный источник
     Proxy -> Workflow : передать владение источником
     Workflow -> Parser : открыть представление только для чтения
-    Parser --> Workflow : атрибуты, фрагменты, непроверяемые части или типизированная ошибка
-    Workflow -> Engine : проверить каждый независимый текстовый фрагмент
-    Engine --> Workflow : детерминированное теневое решение
-    Workflow -> Audit : добавить неизменяемую безопасную запись
-    Audit -> Audit : сформировать кадр, записать, вызвать force(true)
-    Audit --> Workflow : DURABLY_RETAINED
-
-    alt типизированное локальное отклонение
-      Workflow --> Proxy : Reject
-      Proxy --> Client : стабильная безопасная ошибка
-    else Forward
+    Parser --> Workflow : атрибуты, фрагменты, gaps или typed failure
+    alt parse/context/selection без detector work
+      Workflow --> Proxy : Forward или stable Reject\nбез audit pair
+    else начинается detector execution
+      Workflow -> Engine : выбрать policies
+      Engine --> Workflow : callback перед detector execution
+      Workflow -> Audit : policy.analysis_started
+      Workflow -> Engine : проверить все независимые fragments
+      Engine --> Workflow : terminal shadow outcome
+      Workflow -> Audit : policy.analysis_completed
+      note right of Audit
+        Queue delivery и stdout write
+        не ожидаются request path.
+      end note
       Workflow --> Proxy : ReplayReadyRequest
       Proxy -> Transport : одноразовая передача точного воспроизведения
-      Transport -> Upstream : исходные байты и сквозные заголовки
+      Transport -> Upstream : исходные bytes и end-to-end headers
       Upstream --> Transport : поток ответа
       Transport --> Client : потоковый ответ
-    end
     end
   end
 end

@@ -7,6 +7,7 @@ import java.net.ServerSocket
 import java.net.URI
 import java.nio.file.Path
 import java.time.Duration
+import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 import kotlin.random.Random
@@ -21,6 +22,8 @@ internal class GatewayProcessFixture private constructor(
     /** Process-exclusive persistent audit directory available to lifecycle assertions. */
     val auditDirectory: Path,
     private val outputBuffer: StringBuilder,
+    /** Signals each appended child-output line to deterministic observers. */
+    private val outputSignal: Semaphore,
     private val outputReader: Thread,
 ) : AutoCloseable {
     /**
@@ -49,6 +52,26 @@ internal class GatewayProcessFixture private constructor(
 
     /** Returns a thread-safe snapshot of merged child stdout and stderr. */
     fun output(): String = synchronized(outputBuffer) { outputBuffer.toString() }
+
+    /**
+     * Waits until [predicate] accepts a child-output snapshot or [timeout] expires.
+     * Each wait is driven by an appended output line and failure reports the last snapshot.
+     */
+    fun awaitOutput(
+        timeout: Duration,
+        predicate: (String) -> Boolean,
+    ): String {
+        val deadline = System.nanoTime() + timeout.toNanos()
+        var snapshot = output()
+        while (!predicate(snapshot)) {
+            val remaining = deadline - System.nanoTime()
+            if (remaining <= 0L || !outputSignal.tryAcquire(remaining, TimeUnit.NANOSECONDS)) {
+                throw AssertionError("gateway output condition was not observed: $snapshot")
+            }
+            snapshot = output()
+        }
+        return snapshot
+    }
 
     /** Force-stops the child if necessary and joins its output reader. */
     override fun close() {
@@ -87,12 +110,14 @@ internal class GatewayProcessFixture private constructor(
                     }
                 }.start()
             val output = StringBuilder()
+            val outputSignal = Semaphore(0)
             val outputReader = thread(name = "gateway-$port-output") {
                 process.inputStream.bufferedReader().forEachLine { line ->
                     synchronized(output) { output.append(line).append('\n') }
+                    outputSignal.release()
                 }
             }
-            return GatewayProcessFixture(process, port, auditDirectory, output, outputReader)
+            return GatewayProcessFixture(process, port, auditDirectory, output, outputSignal, outputReader)
         }
 
         /**

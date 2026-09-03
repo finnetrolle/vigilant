@@ -51,58 +51,61 @@ safe structured `request_completed` event с method, path без query, HTTP sta
 и upstream/gateway durations. Health/readiness probes этим decorator не
 обрабатываются.
 
-## Safe aggregate shadow event
+## Safe request analysis pair
 
-Для каждого поддержанного Chat Completions request создаётся один aggregate
-event `event.name=policy.shadow_decision`. Он содержит:
+Для каждого request, где после parse, identity/context assembly и policy
+selection действительно начинается detector execution, logger best-effort
+публикует ровно одну пару:
 
-- `protocol=openai.chat_completions`;
-- `phase=REQUEST`;
-- `decision=DETECTED|CLEAN|INSPECTION_GAP|ERROR`;
-- `disposition=ALLOW`;
-- inspection coverage;
-- trace ID;
-- sorted policy IDs/versions;
-- detector ID/version;
-- число inspected fragments;
-- aggregate finding counts по type и evidence strength;
-- evaluation duration;
-- safe error code для failed request.
+- `policy.analysis_started` непосредственно перед первым detector execution;
+- `policy.analysis_completed` после всех запущенных fragment evaluations и до
+  разрешённого transport handoff.
 
-Неподдерживаемый descriptor и invalid tracing session отклоняются до audit
-reservation и body demand, поэтому durable record и stdout projection не
-создаются.
+Оба event содержат `protocol=openai.chat_completions`, `phase=REQUEST`,
+`trace.id`, server-generated `span.id` и `parent.span.id`, canonical sorted
+policy references `id@version` и detector ID/version. Trace ID либо генерируется
+server-side, либо продолжает валидный W3C parent по current tracing contract.
+Terminal event дополнительно
+содержит `outcome=CLEAN|DETECTED|INSPECTION_GAP|ERROR`, `coverage`,
+`fragments.inspected`, `findings.total`, canonical `findings.by_type` и
+`findings.by_evidence_strength`, а также non-negative `analysis.duration_ms`.
+Successful shadow analysis содержит
+`reaction=ALLOW`; ERROR не содержит reaction и публикует только stable
+`error.code`.
 
-Identity extraction failure поддержанного descriptor создаёт тот же один
-aggregate event с `decision=ERROR` и bounded `error.code`. Configured Dummy
-identity, decoded JWT claim values и raw `Authorization` в event не добавляются.
+Unsupported/malformed request, identity/context/source failure, empty policy
+selection и cancellation до detector execution не публикуют пару. Cancellation
+после start best-effort публикует terminal ERROR. Ни один event не содержит
+payload, PII values/spans, path/query, headers, credentials, identity,
+user/groups, session, raw exception, generated event ID или raw inbound
+propagation values. Policy/detector references остаются stdout-only.
 
-Этот event является projection уже durably accepted record. `AsyncAppender`
-может отбросить INFO record до stdout, поэтому `policy.shadow_decision` сам по
-себе не является mandatory audit acceptance.
+Пара не является durable acceptance. Existing Logback `AsyncAppender` с
+`neverBlock=true` остаётся единственной queue и может отбросить оба INFO event.
+Request path не ждёт queue delivery, stdout write, WAL или `force(true)`;
+logging overload/failure не меняет HTTP outcome и upstream handoff.
 
-## Guaranteed minimum audit trail
+## Transitional durable subsystem
 
-Нормативный [minimum audit trail contract](../spec/MINIMUM_AUDIT_TRAIL_CONTRACT.md)
-отделяет creation safe decision, store ownership, durable retention и
-external delivery. Минимальная guarantee - application-owned WAL record,
-подтверждённая covering `force(true)` до forwarding или normal
-supported-request response.
+Исторический [minimum audit trail contract](../spec/MINIMUM_AUDIT_TRAIL_CONTRACT.md)
+описывает прежнее разделение creation, store ownership, durable retention и
+external delivery. VIG-32-01 отключил создание и ожидание WAL record в request
+analysis. Полное удаление подсистемы принадлежит VIG-32-02.
 
-Текущий runtime реализует local durable стадии `RESERVED`, `DECISION_CREATED`,
+Оставшаяся transitional подсистема реализует стадии `RESERVED`, `DECISION_CREATED`,
 `STORE_OWNED`, `DURABLY_RETAINED` и `EXTERNALLY_DELIVERED`.
 Application-owned segmented WAL использует
 versioned JSON, length/checksum frame, persistent sequence, exclusive directory
-lock и `force(true)` до upstream handoff или original supported-request
-response. Directory и bounds перечислены в
+lock и `force(true)` для принятых store records, но request analysis больше не
+создаёт и не ждёт их. Directory и bounds перечислены в
 [configuration reference](configuration.md).
 
 Граница долговечности на диаграмме состояний UML 2.0:
 [audit-lifecycle-state.puml](diagrams/audit-lifecycle-state.puml).
 
-`CAPACITY_EXHAUSTED`, `EVENT_TOO_LARGE`, `IO_FAILURE` и `CLOSED` дают только
-`503 {"error":"audit_unavailable"}` и переводят readiness в `503`, пока store
-не восстановил admission. External Collector асинхронно читает immutable ready
+`CAPACITY_EXHAUSTED`, `EVENT_TOO_LARGE`, `IO_FAILURE` и `CLOSED` всё ещё могут
+перевести transitional composite readiness в `503`, пока store не восстановил
+admission. External Collector асинхронно читает immutable ready
 segments по [file handoff contract](audit-collector-file-handoff.md). Exact
 contiguous ack force-backed переводит segment в `EXTERNALLY_DELIVERED` и
 разрешает reclaim; Collector outage оставляет records локально до retained
@@ -136,8 +139,9 @@ Policy engine пишет дополнительные safe structured events:
   исчерпан, с policy ID/version, deadline и unfinished detector IDs.
 
 Эти события не содержат payload, matched text, offsets или protocol locators.
-Итог того же request остаётся в единственном aggregate
-`policy.shadow_decision` с decision `ERROR` и disposition `ALLOW`.
+Итог того же request остаётся в terminal
+`policy.analysis_completed` с outcome `ERROR`, stable `error.code` и без
+reaction.
 
 ## Request completion event
 
