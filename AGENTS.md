@@ -29,6 +29,11 @@ Before coding, and again before requesting verification, follow the
   consistency change, and do not mark work `Done` before its required dynamic
   evidence exists and `./gradlew validateWorkItems` passes.
 
+Before handing work to `verify-changes`, publish the exact
+`Pre-verification closure` summary required by `CLAUDE.md`. A green build does
+not permit handoff while any criterion, quantified case, lifecycle path,
+contract sweep, canonical-reuse decision, or scope item remains unresolved.
+
 When Codex uses RTK, use `rtk proxy` for machine-consumed output and for raw
 verification evidence. Do not pipe presentation-filtered paths or JSON into
 another command, and do not start a second Gradle command until the first

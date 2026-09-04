@@ -22,13 +22,17 @@ Completions in shadow mode. The v0 proxy remains the transport foundation, but
 the production request path now retains a bounded complete request source,
 derives a lossless normalized inspection view, evaluates the immutable startup
 policy snapshot with `fast-pii`, emits a safe aggregate decision, and replays
-the original body upstream byte-for-byte. Response bodies remain streaming.
+the original body upstream byte-for-byte. The low-level bypass transport keeps
+responses streaming, while the guardrail-enabled Chat Completions path retains
+the complete upstream response in memory, validates its protocol terminal
+state, and only then replays the exact original response to the client.
 
 The current startup contract enforces shadow-only `ALLOW` reactions without
-transformations. Do not add enforcement (`BLOCK`, `MASK`, `REMOVE`), response
-inspection, new protocol routes, external identity lookup or authentication,
-disk spill, plugin workers, or other runtime behavior unless a dedicated
-implementation-ready issue explicitly requires it.
+transformations. Response retention and protocol validation are active, but
+response policy evaluation and audit are not. Do not add enforcement (`BLOCK`,
+`MASK`, `REMOVE`), new protocol routes, external identity lookup or
+authentication, disk spill, plugin workers, or other runtime behavior unless a
+dedicated implementation-ready issue explicitly requires it.
 
 ## Commands
 
@@ -120,7 +124,8 @@ The maintained architectural overview is `docs/architecture.md`; use it with
 
 Key gateway and policy files under `src/main/kotlin/io/vigilant/`:
 
-- `gateway/proxy/PiiShadowProxyService.kt` - thin production HTTP inspection boundary. It validates the supported Chat Completions descriptor, ingests into a quota-controlled source, schedules complete-source workflow execution, maps typed rejects to stable responses, and performs the one-shot handoff to `BypassProxyService` after best-effort terminal audit submission without durable reservation or acknowledgement.
+- `gateway/proxy/PiiShadowProxyService.kt` - thin production HTTP inspection boundary. It validates the supported Chat Completions descriptor, ingests into a quota-controlled request source, schedules complete-source workflow execution, maps typed rejects to stable responses, and performs the one-shot handoff to `BypassProxyService` and `RetainedResponseHandler` after best-effort terminal request audit submission without durable reservation or acknowledgement.
+- `gateway/proxy/RetainedResponseHandler.kt` / `source/RetainedResponseSource.kt` - response-retention boundary for the guardrail route. It holds upstream status, headers, trailers and body until complete protocol validation, then replays the exact original response or returns the stable invalid-upstream error; the source owns in-memory segments and clears them on every terminal path without response quota or disk spill.
 - `gateway/proxy/ShadowInspectionWorkflow.kt` / `gateway/proxy/ReplayReadyRequest.kt` - gateway-specific complete-source application workflow and one-shot transport ownership boundary. The workflow parses one normalized view, assembles context, evaluates fragments, publishes one safe started/completed pair through the existing non-blocking logger, and returns typed `Forward` or `Reject`. `ReplayReadyRequest` retains owner responsibility until transport accepts exact replay, then terminal replay owns cleanup.
 - `gateway/proxy/ShadowAuditLogger.kt` - safe request analysis lifecycle events published best-effort through the existing non-blocking Logback stdout pipeline. The application owns no audit persistence or delivery subsystem.
 - `gateway/identity/DummyIdentityExtractor.kt` / `gateway/identity/OfflineJwtIdentityExtractor.kt` / `context/PolicyContextHandoff.kt` - common single-Bearer boundary with a development/test-only configured Dummy implementation and the production offline RS256 implementation. JWT verifies pinned `kid`, signature, issuer, audience, expiry and not-before before normalizing `sub`/`groups`; request identity validation runs off the Armeria event loop. Raw tokens are never retained, and accepted Authorization is preserved upstream.
@@ -204,6 +209,23 @@ They supplement the TDD loop above and do not replace its RED -> GREEN order.
   substitute for an OCI smoke test, load run, streaming observation, or process
   shutdown scenario.
 
+### Require causal and independent evidence
+
+- A test or generated report is evidence only when its setup reaches the named
+  state, it observes the requirement at the boundary that owns it, and its oracle
+  is independent from the production calculation. Case labels, comments,
+  hard-coded booleans or counts, and duplicated calculations cannot establish a
+  criterion.
+- A parameterized row must vary a required input, state, terminal event, or
+  transition and assert the corresponding consequence. Do not count future or
+  unimplemented reactions as covered by passing their names through the same
+  generic code path.
+- For cross-component state, synchronize on an observation published by the
+  owning server or process. Client transport consumption, callback entry, or an
+  earlier latch is not proof that the asserted state has been published.
+- Cleanup must attempt every owned resource even when one close operation fails;
+  preserve the first failure and retain later failures as suppressed evidence.
+
 ### Preserve scope and failure semantics
 
 - Implement only behavior required by the current implementation-ready issue.
@@ -272,6 +294,19 @@ They supplement the TDD loop above and do not replace its RED -> GREEN order.
   dynamic evidence has run, the diff contains no unapproved behavior, and all
   asynchronous tests use deterministic barriers.
 
+Before requesting `verify-changes`, publish this closure summary and stop when
+any required field is unresolved:
+
+```text
+Pre-verification closure:
+  criteria: <covered>/<total>; unsupported: <count>
+  quantified cases: <named cases>; label-only cases: 0
+  lifecycle: <owners and terminal paths>; missing: 0
+  canonical reuse: <searches and decisions>
+  contract sweep: <old/new terms and searched sources>; stale claims: 0
+  scope: <base and owned files>; unrelated files: 0 or <approved list>
+```
+
 ## Protocol compatibility principle
 
 For guardrail-enabled work after bypass-only v0, the OpenAI-compatible protocol layer must be **schema-tolerant, lossless in forwarding, and strict about inspectability**:
@@ -291,7 +326,11 @@ original source, and always replay the original bytes for an allowed request.
 
 - Follow YAGNI and SOLID principles: implement only currently required functionality and keep designs focused, cohesive, extensible, and dependent on appropriate abstractions.
 - Always document added or modified Kotlin/Java methods with the language-standard doc format: KDoc (`/** */`) for Kotlin, Javadoc for Java. Follow the existing style in this codebase (see `BypassProxyService.kt`, `AppConfig.kt`).
-- Do not aggregate response bodies. Request-side inspection may retain only the bounded complete source owned by `RequestSourceQuota`; parse a separate view and replay the original bytes without DTO reserialization.
+- Keep low-level bypass responses streaming. The guardrail route may retain a
+  complete upstream response only through `RetainedResponseSource`; parse a
+  separate view and replay the original bytes without DTO reserialization.
+  Request-side inspection may retain only the bounded complete source owned by
+  `RequestSourceQuota`.
 - Hop-by-hop header handling must follow the HTTP proxy rules, including headers listed in `Connection`.
 - Keep Netty event loops free of blocking calls; blocking work belongs on virtual threads or bounded executors (spec CONC-01..03).
 - Upstream errors must surface as stable proxy errors, not raw connection exceptions (spec PROXY-03).

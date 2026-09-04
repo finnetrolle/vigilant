@@ -7,13 +7,13 @@ import io.vigilant.policy.domain.DetectorResult
 import io.vigilant.policy.domain.Disposition
 import io.vigilant.policy.domain.Finding
 import io.vigilant.policy.domain.FindingType
+import io.vigilant.policy.domain.MaskingInstruction
 import io.vigilant.policy.domain.PolicyId
 import io.vigilant.policy.domain.PolicyReference
 import io.vigilant.policy.domain.PolicyResult
 import io.vigilant.policy.domain.PolicyVersion
 import io.vigilant.policy.domain.Reaction
 import io.vigilant.policy.domain.Transformation
-import io.vigilant.policy.domain.TransformationOperation
 import io.vigilant.policy.domain.Utf8Span
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -21,7 +21,75 @@ import kotlin.test.assertFailsWith
 
 /** Pure behavior tests for reaction and UTF-8 span aggregation. */
 class ReactionAggregatorTest {
-    /** Verifies that any blocking reaction removes otherwise executable transformations. */
+    /** Verifies selected MASK reactions create typed canonical instructions from existing findings. */
+    @Test
+    fun `mask reactions create typed canonical instructions`() {
+        val plan =
+            ReactionAggregator().aggregate(
+                listOf(
+                    policyResult(
+                        policyId = "masking-policy",
+                        detectorId = "masking-detector",
+                        findings =
+                            listOf(
+                                Finding(FindingType("EMAIL_ADDRESS"), Utf8Span(0, 8), null),
+                                Finding(FindingType("PAYMENT_CARD"), Utf8Span(9, 13), null),
+                            ),
+                        reaction = Reaction(Disposition.ALLOW, listOf(Transformation.MASK)),
+                    ),
+                ),
+            )
+
+        assertEquals(
+            listOf(
+                MaskingInstruction(Utf8Span(0, 8), "[EMAIL_MASKED]"),
+                MaskingInstruction(Utf8Span(9, 13), "[CARD_MASKED]"),
+            ),
+            plan.maskingInstructions,
+        )
+    }
+
+    /** Verifies every built-in PII finding type receives its documented irreversible marker. */
+    @Test
+    fun `all supported PII finding types receive typed markers`() {
+        val expectedMarkers =
+            listOf(
+                "EMAIL_ADDRESS" to "[EMAIL_MASKED]",
+                "PAYMENT_CARD" to "[CARD_MASKED]",
+                "PHONE_NUMBER" to "[PHONE_MASKED]",
+                "IP_ADDRESS" to "[IP_MASKED]",
+                "IBAN" to "[IBAN_MASKED]",
+                "RU_INN" to "[INN_MASKED]",
+                "RU_SNILS" to "[SNILS_MASKED]",
+                "RU_PASSPORT" to "[PASSPORT_MASKED]",
+                "RU_OMS" to "[OMS_MASKED]",
+            )
+        val plan =
+            ReactionAggregator().aggregate(
+                listOf(
+                    policyResult(
+                        policyId = "all-pii-markers",
+                        detectorId = "fast-pii",
+                        findings =
+                            expectedMarkers.mapIndexed { index, (type, _) ->
+                                Finding(
+                                    FindingType(type),
+                                    Utf8Span(index * 2L, index * 2L + 1),
+                                    null,
+                                )
+                            },
+                        reaction = Reaction(Disposition.ALLOW, listOf(Transformation.MASK)),
+                    ),
+                ),
+            )
+
+        assertEquals(
+            expectedMarkers.map { (_, marker) -> marker },
+            plan.maskingInstructions.map(MaskingInstruction::marker),
+        )
+    }
+
+    /** Verifies that any blocking reaction removes otherwise executable masking instructions. */
     @Test
     fun `block takes precedence over allowing transformations`() {
         val transforming =
@@ -42,12 +110,12 @@ class ReactionAggregatorTest {
         val plan = ReactionAggregator().aggregate(listOf(transforming, blocking))
 
         assertEquals(Disposition.BLOCK, plan.disposition)
-        assertEquals(emptyList(), plan.transformations)
+        assertEquals(emptyList(), plan.maskingInstructions)
     }
 
-    /** Verifies cross-policy collection, duplicate removal, and REMOVE precedence for one finding. */
+    /** Verifies cross-policy collection deduplicates a typed instruction for one finding. */
     @Test
-    fun `remove replaces duplicate masks for the same finding`() {
+    fun `duplicate mask reactions produce one canonical instruction`() {
         val finding = Finding(FindingType("secret"), Utf8Span(4, 10), null)
         val masking =
             policyResult(
@@ -56,20 +124,20 @@ class ReactionAggregatorTest {
                 findings = listOf(finding),
                 reaction = Reaction(Disposition.ALLOW, listOf(Transformation.MASK)),
             )
-        val removing =
+        val duplicateMasking =
             policyResult(
-                policyId = "removing-policy",
-                detectorId = "removing-detector",
+                policyId = "duplicate-masking-policy",
+                detectorId = "duplicate-masking-detector",
                 findings = listOf(finding),
-                reaction = Reaction(Disposition.ALLOW, listOf(Transformation.MASK, Transformation.REMOVE)),
+                reaction = Reaction(Disposition.ALLOW, listOf(Transformation.MASK)),
             )
 
-        val plan = ReactionAggregator().aggregate(listOf(masking, removing))
+        val plan = ReactionAggregator().aggregate(listOf(masking, duplicateMasking))
 
         assertEquals(Disposition.ALLOW, plan.disposition)
         assertEquals(
-            listOf(TransformationOperation(Transformation.REMOVE, Utf8Span(4, 10))),
-            plan.transformations,
+            listOf(MaskingInstruction(Utf8Span(4, 10), "[PII_MASKED]")),
+            plan.maskingInstructions,
         )
     }
 
@@ -95,7 +163,7 @@ class ReactionAggregatorTest {
                                 reaction = Reaction(Disposition.ALLOW, listOf(Transformation.MASK)),
                             ),
                         ),
-                    expected = listOf(TransformationOperation(Transformation.MASK, Utf8Span(0, 8))),
+                    expected = listOf(MaskingInstruction(Utf8Span(0, 8), "[PII_MASKED]")),
                 ),
                 AggregationCase(
                     name = "adjacent boundaries for Aé🙂Z",
@@ -113,16 +181,16 @@ class ReactionAggregatorTest {
                                 reaction = Reaction(Disposition.ALLOW, listOf(Transformation.MASK)),
                             ),
                             policyResult(
-                                policyId = "unicode-remove",
-                                detectorId = "unicode-remove-detector",
+                                policyId = "unicode-adjacent-mask",
+                                detectorId = "unicode-adjacent-mask-detector",
                                 findings = listOf(Finding(FindingType("accent"), Utf8Span(1, 3), null)),
-                                reaction = Reaction(Disposition.ALLOW, listOf(Transformation.REMOVE)),
+                                reaction = Reaction(Disposition.ALLOW, listOf(Transformation.MASK)),
                             ),
                         ),
                     expected =
                         listOf(
-                            TransformationOperation(Transformation.REMOVE, Utf8Span(0, 7)),
-                            TransformationOperation(Transformation.MASK, Utf8Span(9, 10)),
+                            MaskingInstruction(Utf8Span(0, 7), "[PII_MASKED]"),
+                            MaskingInstruction(Utf8Span(9, 10), "[PII_MASKED]"),
                         ),
                 ),
             )
@@ -131,8 +199,8 @@ class ReactionAggregatorTest {
             val forward = ReactionAggregator().aggregate(case.policyResults)
             val reversed = ReactionAggregator().aggregate(case.policyResults.reversed())
 
-            assertEquals(case.expected, forward.transformations, case.name)
-            assertEquals(case.expected, reversed.transformations, "${case.name}, reversed input")
+            assertEquals(case.expected, forward.maskingInstructions, case.name)
+            assertEquals(case.expected, reversed.maskingInstructions, "${case.name}, reversed input")
         }
     }
 
@@ -172,10 +240,10 @@ class ReactionAggregatorTest {
             val plan = ReactionAggregator().aggregate(policyResults)
 
             assertEquals(Disposition.ALLOW, plan.disposition)
-            assertEquals(emptyList(), plan.transformations)
+            assertEquals(emptyList(), plan.maskingInstructions)
             assertFailsWith<UnsupportedOperationException> {
                 @Suppress("UNCHECKED_CAST")
-                (plan.transformations as MutableList<TransformationOperation>).clear()
+                (plan.maskingInstructions as MutableList<MaskingInstruction>).clear()
             }
         }
     }
@@ -219,11 +287,11 @@ class ReactionAggregatorTest {
      *
      * @property name diagnostic case description.
      * @property policyResults applied policy outcomes supplied in caller order.
-     * @property expected normalized executable operations.
+     * @property expected normalized canonical masking instructions.
      */
     private class AggregationCase(
         val name: String,
         val policyResults: List<PolicyResult>,
-        val expected: List<TransformationOperation>,
+        val expected: List<MaskingInstruction>,
     )
 }

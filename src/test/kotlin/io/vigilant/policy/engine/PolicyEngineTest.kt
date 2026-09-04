@@ -82,7 +82,7 @@ class PolicyEngineTest {
         val decision = runSuspend { engine.evaluate(CONTEXT, SENSITIVE_PAYLOAD) }
 
         assertEquals(Disposition.ALLOW, decision.reactionPlan.disposition)
-        assertEquals(emptyList(), decision.reactionPlan.transformations)
+        assertEquals(emptyList(), decision.reactionPlan.maskingInstructions)
         assertEquals(emptyList(), decision.matchedPolicies)
         assertEquals(emptyList(), decision.overriddenPolicies)
         assertEquals(emptyList(), decision.appliedPolicies)
@@ -139,7 +139,7 @@ class PolicyEngineTest {
         assertEquals(
             DecisionProjection(
                 disposition = "ALLOW",
-                transformations = listOf("MASK:0-8"),
+                maskingInstructions = listOf("[PII_MASKED]:0-8"),
                 matchedPolicies = listOf("a-applied-policy:1", "z-overridden-policy:1"),
                 overriddenPolicies = listOf("z-overridden-policy:1"),
                 appliedPolicies = listOf("a-applied-policy:1"),
@@ -758,7 +758,7 @@ class PolicyEngineTest {
     /** Stable public decision projection used as an independent serialized-form oracle. */
     private data class DecisionProjection(
         val disposition: String,
-        val transformations: List<String>,
+        val maskingInstructions: List<String>,
         val matchedPolicies: List<String>,
         val overriddenPolicies: List<String>,
         val appliedPolicies: List<String>,
@@ -771,9 +771,9 @@ class PolicyEngineTest {
             fun from(decision: PolicyDecision): DecisionProjection =
                 DecisionProjection(
                     disposition = decision.reactionPlan.disposition.name,
-                    transformations =
-                        decision.reactionPlan.transformations.map { operation ->
-                            "${operation.transformation.name}:${operation.span.startUtf8}-${operation.span.endUtf8}"
+                    maskingInstructions =
+                        decision.reactionPlan.maskingInstructions.map { instruction ->
+                            "${instruction.marker}:${instruction.span.startUtf8}-${instruction.span.endUtf8}"
                         },
                     matchedPolicies = decision.matchedPolicies.map(::reference),
                     overriddenPolicies = decision.overriddenPolicies.map(::reference),

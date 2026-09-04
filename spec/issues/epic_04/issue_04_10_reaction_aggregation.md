@@ -7,6 +7,10 @@
 **Блокирует:** [VIG-04-11](issue_04_11_decision_observability.md)  
 **Оценка:** 3-5 инженерных дня
 
+> Current final-plan contract is superseded by VIG-20-03: `ReactionPlan` now
+> exposes typed `MaskingInstruction`, and startup rejects `REMOVE`. This issue
+> remains historical evidence for the original aggregation seam.
+
 ## Результат
 
 Pure aggregation component формирует `ReactionPlan`: BLOCK precedence,

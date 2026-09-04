@@ -81,6 +81,29 @@ class PolicyConfigurationLoadingTest {
         )
     }
 
+    /** Verifies configured REMOVE is rejected before a startup snapshot can ignore or execute it. */
+    @Test
+    fun `remove transformation is rejected before startup`() {
+        val configFile =
+            writeConfig(
+                completePolicyConfig("remove-policy")
+                    .replace("transformations = [\"MASK\"]", "transformations = [\"REMOVE\"]"),
+            )
+
+        val exception = assertFailsWith<PolicyValidationException> {
+            loadPolicySnapshot(
+                env = mapOf("VIGILANT_POLITICS_CONFIG" to configFile.toString()),
+                defaultConfigPath = Path.of("unused-politics.conf"),
+                availableDetectorIds = setOf(DetectorId("fast-pii")),
+            )
+        }
+
+        assertEquals(
+            "Invalid policy 'remove-policy' field 'reactions.detected.transformations': must contain only MASK",
+            exception.message,
+        )
+    }
+
     /** Verifies a matching policy cannot remove the only mandatory coverage policy. */
     @Test
     fun `overridden global coverage policy is rejected`() {

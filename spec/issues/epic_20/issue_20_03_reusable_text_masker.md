@@ -1,6 +1,6 @@
 # VIG-20-03: Reusable text masker
 
-**Статус:** Ready for implementation
+**Статус:** Done
 **Epic:** [EPIC-20](../../epics/epic_20_atomic_in_memory_response_analysis.md)
 **Ветка:** Response enforcement > transport-neutral masking
 **Зависит от:** нет
@@ -41,20 +41,21 @@ JSON locations.
   используется generic irreversible `[PII_MASKED]`. Non-overlapping spans
   сохраняют typed markers. Result is deterministic независимо от входного
   order detectors/policies.
-- Invalid instruction — out-of-range span, span not on UTF-8 boundary или
-  invalid marker — produces typed failure and no partial output. Response
-  layer fail-closes through VIG-29 `503 response_inspection_unavailable`;
-  invalid instruction never permits unmasked forwarding.
+- Invalid instruction - out-of-range span, span not on UTF-8 boundary или
+  invalid marker - produces typed failure and no partial output. Dependent
+  response integration VIG-20-02 maps this failure through VIG-29 `503
+  response_inspection_unavailable`; VIG-20-03 does not add an otherwise-unused
+  HTTP mapper or response workflow.
 - `REMOVE` не входит в MVP. Startup policy validation rejects any configured
   `REMOVE`; it is never ignored, passed to `TextMasker` or implemented as
   second transformation path.
 
 ## Известный контекст
 
-Current `ReactionPlan` хранит `TransformationOperation` with transformation
-kind and UTF-8 span, но не хранит FindingType/replacement. Для typed marker
-policy layer должен передать masker enriched canonical instruction; нельзя
-заново запускать detector или угадывать type по text.
+До этой issue `ReactionPlan` хранил `TransformationOperation` with
+transformation kind and UTF-8 span, но не хранил FindingType/replacement.
+Теперь final plan exposes enriched immutable canonical instructions; detector
+не запускается повторно, а masker не угадывает type по text.
 
 ## Не входит
 
@@ -66,19 +67,20 @@ policy layer должен передать masker enriched canonical instruction
 
 ## Критерий готовности задачи
 
-- [ ] `MaskingInstruction(span, marker)` is immutable policy-domain contract;
+- [x] `MaskingInstruction(span, marker)` is immutable policy-domain contract;
   final reaction aggregation creates it once from selected `MASK` reactions and
   findings, without rerunning a detector.
-- [ ] `TextMasker` is a pure transport-neutral class over text and canonical
+- [x] `TextMasker` is a pure transport-neutral class over text and canonical
   instructions; it changes only selected UTF-8 spans and preserves all other
   Unicode text.
-- [ ] Tests cover ASCII, multibyte UTF-8, multiple, adjacent and overlapping
+- [x] Tests cover ASCII, multibyte UTF-8, multiple, adjacent and overlapping
   spans, equal and conflicting markers, typed markers and input immutability.
-- [ ] Invalid instruction produces typed failure and no partial output;
-  response integration maps it to existing `503 response_inspection_unavailable`.
-- [ ] Startup validation rejects `REMOVE`; focused test proves app configuration
+- [x] Invalid instruction produces typed failure and no partial output. Causal
+  response mapping to existing `503 response_inspection_unavailable` belongs
+  to dependent VIG-20-02, which owns the first response caller of `TextMasker`.
+- [x] Startup validation rejects `REMOVE`; focused test proves app configuration
   never silently ignores or executes it.
-- [ ] All new or modified Kotlin declarations and test methods have current
+- [x] All new or modified Kotlin declarations and test methods have current
   KDoc; focused tests and `./gradlew build` pass.
 
 ## Ambiguity Report

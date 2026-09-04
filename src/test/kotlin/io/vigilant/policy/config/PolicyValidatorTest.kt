@@ -241,7 +241,7 @@ class PolicyValidatorTest {
                         reactions = validReactions(detected = ParsedReaction("ALLOW", listOf("HASH"))),
                     ),
                     "reactions.detected.transformations",
-                    "must contain only MASK or REMOVE",
+                    "must contain only MASK",
                 ),
             )
 
@@ -265,7 +265,7 @@ class PolicyValidatorTest {
                 invalidCase(
                     "clean transformation",
                     valid.copy(
-                        reactions = validReactions(clean = ParsedReaction("ALLOW", listOf("REMOVE"))),
+                        reactions = validReactions(clean = ParsedReaction("ALLOW", listOf("MASK"))),
                     ),
                     "reactions.clean.transformations",
                     "clean reaction cannot contain transformations",
@@ -367,7 +367,7 @@ class PolicyValidatorTest {
                         deadline = Duration.ofNanos(1),
                         reactions =
                             validReactions(
-                                detected = ParsedReaction("ALLOW", listOf("REMOVE", "MASK")),
+                                detected = ParsedReaction("ALLOW", listOf("MASK")),
                                 clean = ParsedReaction("BLOCK", emptyList()),
                                 error = ParsedReaction("ALLOW", emptyList()),
                             ),
@@ -393,7 +393,7 @@ class PolicyValidatorTest {
         val exactPolicy = validatedSnapshots[1].single()
         assertEquals(listOf(DetectorId("fast-pii"), DetectorId("secondary")), exactPolicy.detectors)
         assertEquals(
-            setOf(Transformation.MASK, Transformation.REMOVE),
+            setOf(Transformation.MASK),
             exactPolicy.reactions.detected.transformations,
         )
     }

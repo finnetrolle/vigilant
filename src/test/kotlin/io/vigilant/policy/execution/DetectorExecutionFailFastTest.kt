@@ -99,7 +99,7 @@ class DetectorExecutionFailFastTest {
 
             assertEquals(listOf(reactions.detected, reactions.error), policyResult.appliedReactions)
             assertEquals(Disposition.BLOCK, result.disposition)
-            assertEquals(emptyList(), assertNotNull(result.finalizedReactionPlan).transformations)
+            assertEquals(emptyList(), assertNotNull(result.finalizedReactionPlan).maskingInstructions)
             unfinished.awaitCancelled()
         }
     }
@@ -129,7 +129,7 @@ class DetectorExecutionFailFastTest {
             assertEquals(Disposition.BLOCK, result.disposition)
             val finalizedPlan = assertNotNull(result.finalizedReactionPlan)
             assertEquals(Disposition.BLOCK, finalizedPlan.disposition)
-            assertEquals(emptyList(), finalizedPlan.transformations)
+            assertEquals(emptyList(), finalizedPlan.maskingInstructions)
             assertSame(
                 blockingPolicy.reactions.detected,
                 result.policyResultFor(blockingPolicy.reference).appliedReactions.single(),

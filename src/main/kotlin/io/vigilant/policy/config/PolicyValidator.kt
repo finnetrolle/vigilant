@@ -165,8 +165,8 @@ internal class PolicyValidator {
         if (reaction.disposition != "ALLOW" && reaction.disposition != "BLOCK") {
             invalid(parsedPolicy, "$fieldPrefix.disposition", "must be ALLOW or BLOCK")
         }
-        if (reaction.transformations.any { transformation -> transformation != "MASK" && transformation != "REMOVE" }) {
-            invalid(parsedPolicy, "$fieldPrefix.transformations", "must contain only MASK or REMOVE")
+        if (reaction.transformations.any { transformation -> transformation != "MASK" }) {
+            invalid(parsedPolicy, "$fieldPrefix.transformations", "must contain only MASK")
         }
         if (reaction.transformations.isEmpty()) {
             return

@@ -59,7 +59,7 @@ Detector получает только payload. Detector не знает URL, м
 - параллельный запуск независимых detectors;
 - общий deadline набора detectors для каждой policy;
 - dispositions `ALLOW` и `BLOCK`;
-- transformations `MASK` и `REMOVE`;
+- transformation `MASK` и final typed `MaskingInstruction`;
 - файловый `DummyPolicyProvider` для `politics.conf`.
 
 ## Цель
@@ -320,7 +320,7 @@ policies = [
 - `subject.type=*` используется с точным subject ID;
 - reaction state отсутствует;
 - disposition отличается от `ALLOW`/`BLOCK`;
-- transformation отличается от `MASK`/`REMOVE`;
+- transformation отличается от `MASK`;
 - непустые transformations заданы для `BLOCK`, `clean` или `error`;
 - deadline неположительный.
 
@@ -482,13 +482,13 @@ Reaction не является одним плоским enum:
 ```text
 ReactionPlan
   disposition = ALLOW | BLOCK
-  transformations[] = MASK | REMOVE
+  maskingInstructions[] = MaskingInstruction(utf8Span, marker)
 ```
 
 Правила:
 
 - disposition обязателен;
-- transformations разрешены только для `detected` с disposition `ALLOW`;
+- `MASK` разрешён только для `detected` с disposition `ALLOW`; `REMOVE` не поддерживается;
 - `BLOCK` с transformations невалиден;
 - `clean` и `error` не могут содержать transformations;
 - engine возвращает plan, но не изменяет payload;
@@ -500,11 +500,12 @@ ReactionPlan
 
 Если хотя бы одна applied policy возвращает `BLOCK`, итоговый disposition равен `BLOCK`. Исполняемые transformations при этом отсутствуют. Для completion-order-independent explanation сохраняются policy results, фактически сформировавшие `BLOCK`, и соответствующие detector results. Отменённые policy results и завершённые только с `ALLOW` outcomes не включаются в нормализованный `BLOCK` decision.
 
-Если `BLOCK` отсутствует, итоговый disposition равен `ALLOW`, а transformations всех applied policies объединяются.
+Если `BLOCK` отсутствует, итоговый disposition равен `ALLOW`, а selected `MASK`
+reactions создают instructions из уже полученных detector findings.
 
-Для одного finding `REMOVE` сильнее `MASK`. Duplicate transformations удаляются.
+`ReactionAggregator` выбирает typed irreversible marker по `FindingType`; detector повторно не запускается. Duplicate instructions удаляются.
 
-Пересекающиеся или соприкасающиеся UTF-8 spans объединяются. Если объединённый диапазон содержит хотя бы один `REMOVE`, итоговая операция для диапазона — `REMOVE`; иначе — `MASK`.
+Пересекающиеся или соприкасающиеся UTF-8 spans объединяются. Если markers объединённого диапазона различаются, используется generic irreversible `[PII_MASKED]`; иначе сохраняется typed marker.
 
 ## Результат engine
 
@@ -615,7 +616,7 @@ Raw exception, stack trace внешнего plugin worker, payload и findings �
 | Независимые detectors параллельно | Выбран | Соответствует `PERF-03` и снижает latency |
 | Последовательный запуск по порядку файла | Отклонён | Порядок конфигурации не является зависимостью между checks |
 | Явный `DetectionResult.status` | Выбран | Engine не выводит business-result из nullable fields, пустого списка или exception |
-| Плоский reaction enum | Отклонён | `MASK`/`REMOVE` являются transformations и могут сочетаться с `ALLOW` |
+| Плоский reaction enum | Отклонён | `MASK` является transformation и создаёт typed immutable instruction вместе с `ALLOW` |
 | Полный wildcard `*` | Выбран | Покрывает общие политики без сложности glob/regex |
 | Partial wildcard/glob/regex | Отложен | Нет подтверждённого сценария, но потребуются escaping и отдельная семантика URL matching |
 | Parser внутри provider | Отклонён | Нарушает single responsibility и усложняет будущую замену источника на БД |
@@ -629,7 +630,7 @@ Raw exception, stack trace внешнего plugin worker, payload и findings �
 5. Реализовать registry и `DetectorExecutor`.
 6. Реализовать matching и одновременное разрешение overrides.
 7. Реализовать дедупликацию, parallel execution, per-policy deadlines и cancellation.
-8. Реализовать reaction aggregation и нормализацию transformation spans.
+8. Реализовать reaction aggregation и нормализацию typed masking spans.
 9. Реализовать структурированные ошибки без чувствительных данных.
 10. Добавить unit и orchestration tests.
 
@@ -692,9 +693,9 @@ Raw exception, stack trace внешнего plugin worker, payload и findings �
 - `CLEAN`, `DETECTED` и `ERROR` выбирают явно настроенные reactions.
 - Одновременные `DETECTED` и `ERROR` одной policy применяют обе reactions.
 - Любой `BLOCK` побеждает `ALLOW` и прекращает evaluation досрочно.
-- Без `BLOCK` transformations всех policies объединяются.
-- `REMOVE` побеждает `MASK` для одного finding.
-- Duplicate и overlapping spans нормализуются детерминированно.
+- Без `BLOCK` selected `MASK` reactions создают instructions из existing findings.
+- Каждый supported PII `FindingType` получает typed irreversible marker.
+- Duplicate, overlapping и adjacent instructions нормализуются детерминированно; marker conflict даёт `[PII_MASKED]`.
 - Engine не изменяет исходный payload.
 
 ### Result и logs

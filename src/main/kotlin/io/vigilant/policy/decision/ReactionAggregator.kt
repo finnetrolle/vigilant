@@ -3,11 +3,11 @@ package io.vigilant.policy.decision
 import io.vigilant.policy.domain.DetectionResult
 import io.vigilant.policy.domain.Disposition
 import io.vigilant.policy.domain.Finding
+import io.vigilant.policy.domain.MaskingInstruction
 import io.vigilant.policy.domain.PolicyResult
 import io.vigilant.policy.domain.ReactionPlan
 import io.vigilant.policy.domain.Transformation
-import io.vigilant.policy.domain.TransformationOperation
-import io.vigilant.policy.domain.Utf8Span
+import io.vigilant.policy.domain.defaultMaskingMarker
 
 /**
  * Pure component that combines applied policy outcomes into one executable reaction plan.
@@ -27,11 +27,10 @@ class ReactionAggregator {
             return ReactionPlan(Disposition.BLOCK, emptyList())
         }
 
-        val operations =
+        val instructions =
             policyResults
-                .flatMap(PolicyResult::transformationOperations)
-                .mergeOverlappingOrAdjacentSpans()
-        return ReactionPlan(Disposition.ALLOW, operations)
+                .flatMap(PolicyResult::maskingInstructions)
+        return ReactionPlan(Disposition.ALLOW, instructions)
     }
 }
 
@@ -41,13 +40,15 @@ private fun Collection<PolicyResult>.hasBlockingReaction(): Boolean =
         policyResult.appliedReactions.any { reaction -> reaction.disposition == Disposition.BLOCK }
     }
 
-/** Expands this policy's detected findings into its requested executable operations. */
-private fun PolicyResult.transformationOperations(): List<TransformationOperation> {
-    val transformations = appliedReactions.flatMap { reaction -> reaction.transformations }.toSet()
-    return detectedFindings().flatMap { finding ->
-        transformations.map { transformation -> TransformationOperation(transformation, finding.span) }
+/** Expands one selected MASK reaction into typed instructions from its existing detector findings. */
+private fun PolicyResult.maskingInstructions(): List<MaskingInstruction> =
+    if (appliedReactions.any { reaction -> Transformation.MASK in reaction.transformations }) {
+        detectedFindings().map { finding ->
+            MaskingInstruction(finding.span, defaultMaskingMarker(finding.type))
+        }
+    } else {
+        emptyList()
     }
-}
 
 /** Returns every finding from explicit detected outcomes in this policy result. */
 private fun PolicyResult.detectedFindings(): List<Finding> =
@@ -59,41 +60,3 @@ private fun PolicyResult.detectedFindings(): List<Finding> =
             -> emptyList()
         }
     }
-
-/** Deduplicates and transitively merges overlapping or adjacent transformation spans. */
-private fun Collection<TransformationOperation>.mergeOverlappingOrAdjacentSpans(): List<TransformationOperation> {
-    val ordered =
-        sortedWith(
-            compareBy(
-                { operation: TransformationOperation -> operation.span.startUtf8 },
-                { operation: TransformationOperation -> operation.span.endUtf8 },
-                TransformationOperation::transformation,
-            ),
-        )
-    val merged = mutableListOf<TransformationOperation>()
-    ordered.forEach { operation ->
-        val previous = merged.lastOrNull()
-        if (previous == null || operation.span.startUtf8 > previous.span.endUtf8) {
-            merged.add(operation)
-        } else {
-            merged[merged.lastIndex] = previous.mergeWith(operation)
-        }
-    }
-    return merged
-}
-
-/** Merges two already-overlapping or adjacent operations using REMOVE precedence. */
-private fun TransformationOperation.mergeWith(other: TransformationOperation): TransformationOperation =
-    TransformationOperation(
-        transformation =
-            if (transformation == Transformation.REMOVE || other.transformation == Transformation.REMOVE) {
-                Transformation.REMOVE
-            } else {
-                Transformation.MASK
-            },
-        span =
-            Utf8Span(
-                startUtf8 = minOf(span.startUtf8, other.span.startUtf8),
-                endUtf8 = maxOf(span.endUtf8, other.span.endUtf8),
-            ),
-    )

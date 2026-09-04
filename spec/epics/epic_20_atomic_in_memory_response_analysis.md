@@ -4,7 +4,7 @@
 **Тип:** Epic
 **Статус:** In progress
 **Приоритет:** High
-**Предварительная оценка:** 9-13 инженерных дней; 2/5 issues завершены
+**Предварительная оценка:** 7-10 инженерных дней; 3/5 issues завершены
 **Связанные требования:** `PROXY-01`, `PROXY-02`, `CONC-01`, `CONC-02`, `CONC-03`
 
 ## Контекст
@@ -69,7 +69,7 @@ EPIC-20 Atomic in-memory response analysis
 ├── SSE response enforcement (Ready: VIG-20-05)
 │   ├── cross-chunk MASK rewrite
 │   └── atomic ALLOW/BLOCK disclosure plus response audit pair
-└── reusable masking seam (Ready)
+└── reusable masking seam (Done: VIG-20-03)
     ├── typed masking instructions
     ├── deterministic overlap handling
     └── all-or-nothing invalid-input failure
@@ -79,7 +79,7 @@ EPIC-20 Atomic in-memory response analysis
 
 - [x] [VIG-20-04: Retained in-memory response contract](../issues/epic_20/issue_20_04_retained_memory_response_contract.md) - `Done`
 - [x] [VIG-20-01: In-memory response source](../issues/epic_20/issue_20_01_retained_memory_response_source.md) - `Done`
-- [ ] [VIG-20-03: Reusable text masker](../issues/epic_20/issue_20_03_reusable_text_masker.md) - `Ready for implementation`
+- [x] [VIG-20-03: Reusable text masker](../issues/epic_20/issue_20_03_reusable_text_masker.md) - `Done`
 - [ ] [VIG-20-02: Non-stream response inspection and enforcement](../issues/epic_20/issue_20_02_response_inspection_enforcement.md) - `Ready for implementation`
 - [ ] [VIG-20-05: SSE response inspection and enforcement](../issues/epic_20/issue_20_05_sse_response_enforcement.md) - `Ready for implementation`
 

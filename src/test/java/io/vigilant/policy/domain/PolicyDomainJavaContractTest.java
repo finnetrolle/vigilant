@@ -68,8 +68,7 @@ class PolicyDomainJavaContractTest {
                 new ReactionPlan(
                         Disposition.ALLOW,
                         List.of(
-                                new TransformationOperation(
-                                        Transformation.MASK, new Utf8Span(0, 3))));
+                                new MaskingInstruction(new Utf8Span(0, 3), "[PII_MASKED]")));
         DetectorResult detectorResult = new DetectorResult(new DetectorId("a-detector"), detected);
         PolicyResult policyResult =
                 new PolicyResult(reference, List.of(detectorResult), List.of(reaction), false);
@@ -98,7 +97,7 @@ class PolicyDomainJavaContractTest {
         assertThrows(UnsupportedOperationException.class, context.getGroups()::clear);
         assertThrows(UnsupportedOperationException.class, detected.getFindings()::clear);
         assertThrows(UnsupportedOperationException.class, reaction.getTransformations()::clear);
-        assertThrows(UnsupportedOperationException.class, plan.getTransformations()::clear);
+        assertThrows(UnsupportedOperationException.class, plan.getMaskingInstructions()::clear);
         assertThrows(UnsupportedOperationException.class, policyResult.getDetectorResults()::clear);
         assertThrows(UnsupportedOperationException.class, policyResult.getAppliedReactions()::clear);
         assertThrows(UnsupportedOperationException.class, decision.getMatchedPolicies()::clear);

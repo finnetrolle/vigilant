@@ -53,6 +53,9 @@ leaf VIG-20-05.
   content-bearing shape дают VIG-29 safe `502 invalid_upstream_response`.
 - Detector/policy timeout или failure дают VIG-29 safe `503` с
   `Retry-After: 1` и `response_inspection_unavailable` без partial disclosure.
+- `TextMaskingException` из VIG-20-03 и typed source-map/rewrite failure
+  отображаются в тот же VIG-29 safe `503` без partial disclosure или fallback
+  на unmasked forwarding.
 - Dependency VIG-29 завершена: закрытая production matrix уже предоставляет
   response `BLOCK`, response inspection failure и invalid upstream outcomes без
   optional details. Эта issue владеет только выбором этих outcomes после
@@ -241,7 +244,9 @@ invalid_upstream_response`.
 - [ ] Cases покрывают ASCII, multibyte UTF-8, JSON escapes, `\uXXXX`, несколько
   spans/choices и byte-identical preservation unknown fields/formatting.
 - [ ] Invalid, duplicate или ambiguous locator и невозможное UTF-8/source
-  mapping дают typed failure без partial output и без mutation input.
+  mapping, включая `TextMaskingException`, дают typed failure без partial
+  output и без mutation input; real response caller отображает failure в exact
+  VIG-29 `503 response_inspection_unavailable` без unmasked forwarding.
 - [ ] One-shot response handoff tests покрывают successful transfer, repeated
   transfer, close-before-transfer, synchronous handoff failure и cancellation
   races с exact-once cleanup.

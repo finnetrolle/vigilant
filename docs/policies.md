@@ -13,8 +13,9 @@ Vigilant загружает один неизменяемый снимок по�
   контексты `REQUEST` с помощью детектора `fast-pii`;
 - реакции `detected`, `clean` и `error` во всех политиках обязаны иметь
   `disposition = "ALLOW"` и пустые `transformations`;
-- доменная модель уже содержит `BLOCK`, `MASK` и `REMOVE`, но проверка
-  конфигурации при запуске запрещает их в текущей исполняемой системе;
+- доменная модель содержит `BLOCK`, `MASK` и immutable canonical
+  `MaskingInstruction`; `REMOVE` отвергается semantic validation, а startup
+  по-прежнему запрещает non-`ALLOW` и любые transformations в shadow runtime;
 - решение политики не изменяет тело запроса и не блокирует срабатывание PII.
 
 Диаграмма деятельности UML 2.0:
@@ -132,12 +133,14 @@ validated `sub`/`groups`. Raw token не входит в policy context. Пол�
 
 Полный доменный контракт допускает:
 
-- `detected`: `ALLOW`, `BLOCK`, а для `ALLOW` также `MASK` и `REMOVE`;
+- `detected`: `ALLOW`, `BLOCK`, а для `ALLOW` также `MASK`;
 - `clean`: `ALLOW` или `BLOCK`, преобразования запрещены;
 - `error`: `ALLOW` или `BLOCK`, преобразования запрещены.
 
-Эти возможности предусмотрены доменной моделью, но пока недоступны через
-шлюз. Сейчас любое значение `disposition`, отличное от `ALLOW`, или непустое
+Aggregation уже создаёт typed irreversible instructions из selected `MASK`
+reactions и `FindingType`; transport-neutral `TextMasker` применяет только
+готовые instructions. Эти возможности пока не подключены к HTTP gateway.
+Сейчас любое значение `disposition`, отличное от `ALLOW`, или непустое
 преобразование завершает запуск с кодом `2`. Тайм-аут или ошибка детектора
 создаёт stdout audit outcome `ERROR`, но logging delivery не ожидается и запрос
 получает теневое решение `ALLOW`.

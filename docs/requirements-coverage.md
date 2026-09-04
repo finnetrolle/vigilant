@@ -17,7 +17,7 @@
 |---|---|---|
 | `MVP-01` | Частично | Request Chat Completions полностью принимается и проверяется до upstream, но только shadow mode; response enforcement отсутствует. |
 | `MVP-02` | Частично | `fast-pii` реализован с указанным detector set и windowing, но request-only integration. |
-| `MVP-03` | Не реализовано | Runtime разрешает только `ALLOW`; `MASK` и `BLOCK` transport enforcement отсутствуют. Закрытый VIG-29 encoder уже фиксирует safe `BLOCK` HTTP contract, но не выполняет enforcement. |
+| `MVP-03` | Не реализовано | Runtime разрешает только `ALLOW`; `MASK` и `BLOCK` transport enforcement отсутствуют. Policy aggregation уже выдаёт typed immutable `MaskingInstruction`, а transport-neutral `TextMasker` применяет exact UTF-8 spans без HTTP integration. Закрытый VIG-29 encoder уже фиксирует safe `BLOCK` и response-`503` contracts, но не выполняет enforcement. |
 | `MVP-04` | Частично | Startup policy snapshot и group matching существуют, но новая direction/group contract и startup policy logging отсутствуют. |
 | `MVP-05` | Не реализовано | Есть Dummy и offline JWT extractors; external Bearer lookup и cache отсутствуют. |
 | `MVP-06` | Частично | REQUEST analysis публикует safe best-effort started/completed pair через existing non-blocking stdout без application-owned persistence; RESPONSE pair остаётся future EPIC-20 behavior. |
