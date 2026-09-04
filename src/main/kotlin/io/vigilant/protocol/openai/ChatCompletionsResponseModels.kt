@@ -37,19 +37,55 @@ class NormalizedChatCompletionsResponse(
  * Immutable transport coordinates produced by the response parser without retaining payload.
  *
  * @param jsonStrings ordinary JSON string coordinates in fragment order.
+ * @param sseFragments SSE logical-field coordinates in fragment order.
  */
 class ResponseSourceMap(
     jsonStrings: Collection<JsonStringSourceCoordinates>,
+    sseFragments: Collection<SseFragmentSourceCoordinates> = emptyList(),
 ) {
     /** Ordinary JSON string coordinates in normalized fragment order. */
     val jsonStrings: List<JsonStringSourceCoordinates> =
         Collections.unmodifiableList(ArrayList(jsonStrings))
 
+    /** SSE logical-field coordinates in normalized fragment order. */
+    val sseFragments: List<SseFragmentSourceCoordinates> =
+        Collections.unmodifiableList(ArrayList(sseFragments))
+
     /** Shared source-map values with no transport coordinates. */
     companion object {
-        /** Empty map used by transports that do not yet expose rewrite coordinates. */
-        val EMPTY: ResponseSourceMap = ResponseSourceMap(emptyList())
+        /** Empty map used by typed failures and responses without rewrite coordinates. */
+        val EMPTY: ResponseSourceMap = ResponseSourceMap(emptyList(), emptyList())
     }
+}
+
+/** Parser-owned coordinates for all ordered delta segments of one normalized SSE fragment. */
+class SseFragmentSourceCoordinates(
+    /** Normalized fragment ordinal associated with this logical field. */
+    val fragmentOrdinal: Int,
+    /** Opaque parser-owned logical-field locator. */
+    val locator: ProtocolLocator,
+    segments: Collection<SseDeltaSegmentSourceCoordinates>,
+) {
+    /** Immutable event-order delta segment coordinates. */
+    val segments: List<SseDeltaSegmentSourceCoordinates> =
+        Collections.unmodifiableList(ArrayList(segments))
+}
+
+/** Raw JSON literal coordinates for one SSE delta value inside a logical fragment. */
+class SseDeltaSegmentSourceCoordinates(
+    /** Inclusive decoded UTF-8 offset inside the complete logical fragment. */
+    val decodedStartUtf8: Long,
+    /** Exclusive decoded UTF-8 offset inside the complete logical fragment. */
+    val decodedEndUtf8: Long,
+    /** Inclusive raw byte offset of this JSON string's content in the retained SSE source. */
+    val rawContentStart: Long,
+    /** Exclusive raw byte offset of this JSON string's content in the retained SSE source. */
+    val rawContentEnd: Long,
+    rawOffsetsByUtf8Boundary: Map<Long, Long>,
+) {
+    /** Immutable segment-local decoded-to-raw boundary mapping. */
+    val rawOffsetsByUtf8Boundary: Map<Long, Long> =
+        Collections.unmodifiableMap(LinkedHashMap(rawOffsetsByUtf8Boundary))
 }
 
 /** Raw JSON coordinates for one normalized decoded response fragment. */
@@ -69,11 +105,11 @@ class JsonStringSourceCoordinates(
 }
 
 /**
- * Canonical instructions associated with exactly one normalized JSON fragment.
+ * Canonical instructions associated with exactly one normalized response fragment.
  *
  * @param instructions immutable-copy input in canonical UTF-8 byte order.
  */
-class JsonFragmentMaskingPlan(
+class ResponseFragmentMaskingPlan(
     /** Expected normalized fragment ordinal. */
     val fragmentOrdinal: Int,
     /** Expected parser-owned source locator. */

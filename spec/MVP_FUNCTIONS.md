@@ -81,9 +81,8 @@ REQUEST pair принадлежит
 [VIG-32-01](issues/epic_32/issue_32_01_stdout_request_audit_migration.md),
 RESPONSE pair -
 [VIG-20-02](issues/epic_20/issue_20_02_response_inspection_enforcement.md).
-Текущая REQUEST inspection и ordinary JSON RESPONSE enforcement уже публикуют
-эту pair до transport handoff и не ждут durable acknowledgement. RESPONSE pair
-для SSE остаётся future behavior VIG-20-05.
+Текущая REQUEST inspection и ordinary JSON/SSE RESPONSE enforcement публикуют
+эту pair до transport handoff и не ждут durable acknowledgement.
 
 ## MVP-07. Минимальная интеграция
 

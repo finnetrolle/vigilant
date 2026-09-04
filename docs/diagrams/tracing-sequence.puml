@@ -25,12 +25,8 @@ UpstreamSpan --> Server : gateway-owned complete response
 deactivate UpstreamSpan
 Server -> ResponseInspect : создать непосредственный дочерний span
 activate ResponseInspect
-ResponseInspect -> ResponseInspect : protocol parse
-alt ordinary JSON с detector execution
-  ResponseInspect -> ResponseInspect : stdout analysis_started,\ndetectors/reaction, stdout analysis_completed
-else SSE до VIG-20-05
-  ResponseInspect -> ResponseInspect : только terminal protocol validation
-end
+ResponseInspect -> ResponseInspect : ordinary/SSE protocol parse
+ResponseInspect -> ResponseInspect : stdout analysis_started,\ndetectors/reaction, stdout analysis_completed
 ResponseInspect --> Server : exact forward / masked forward / safe reject
 deactivate ResponseInspect
 Server --> Client : ответ с итоговым сеансом и SERVER traceparent

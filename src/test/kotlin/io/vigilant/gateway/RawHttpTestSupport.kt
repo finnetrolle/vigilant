@@ -135,15 +135,38 @@ internal fun BufferedInputStream.readBoundedHttp1RequestHead(): String? {
     error("request head exceeds $MAX_HTTP1_REQUEST_HEAD_BYTES bytes")
 }
 
+/** Writes and flushes one ASCII HTTP/1 wire fragment. */
+internal fun BufferedOutputStream.writeAsciiHttp1(fragment: String) {
+    write(fragment.toByteArray(StandardCharsets.US_ASCII))
+    flush()
+}
+
+/** Writes and flushes one UTF-8 HTTP/1 chunk with its exact hexadecimal byte length. */
+internal fun BufferedOutputStream.writeUtf8Http1Chunk(content: String) {
+    val bytes = content.toByteArray(StandardCharsets.UTF_8)
+    write(bytes.size.toString(16).toByteArray(StandardCharsets.US_ASCII))
+    write("\r\n".toByteArray(StandardCharsets.US_ASCII))
+    write(bytes)
+    write("\r\n".toByteArray(StandardCharsets.US_ASCII))
+    flush()
+}
+
 /**
  * Raw HTTP/1.1 upstream that handles Armeria protocol probing before returning
- * one deterministic ASCII response to each application connection.
+ * one deterministic response to each application connection.
+ *
+ * @param diagnosticName safe suffix used to identify fixture failures.
+ * @param writeApplicationResponse callback that writes the complete application response.
  */
 internal class RawHttp1TestUpstream(
-    private val diagnosticName: String,
-    private val applicationResponse: String,
+    diagnosticName: String,
+    private val writeApplicationResponse: (BufferedOutputStream) -> Unit,
 ) : AutoCloseable {
     private val endpoint = BoundRawTestEndpoint("raw-http1-$diagnosticName", ::handleConnection)
+
+    /** Creates a raw upstream that writes one complete ASCII application response. */
+    constructor(diagnosticName: String, applicationResponse: String) :
+        this(diagnosticName, { output -> output.writeAsciiHttp1(applicationResponse) })
 
     /** Address used by a real Armeria upstream client. */
     val uri: URI
@@ -165,22 +188,16 @@ internal class RawHttp1TestUpstream(
             val requestLine = requestHead.substringBefore("\r\n")
             when (requestLine) {
                 HTTP2_PREFACE_REQUEST_LINE -> continueReading = false
-                HTTP1_OPTIONS_REQUEST_LINE -> writeResponse(output, PROBE_RESPONSE)
+                HTTP1_OPTIONS_REQUEST_LINE -> output.writeAsciiHttp1(PROBE_RESPONSE)
                 else -> {
                     require(requestLine.endsWith(" HTTP/1.1")) {
                         "unexpected request-line shape"
                     }
-                    writeResponse(output, applicationResponse)
+                    writeApplicationResponse(output)
                     continueReading = false
                 }
             }
         }
-    }
-
-    /** Writes and flushes one complete ASCII response. */
-    private fun writeResponse(output: BufferedOutputStream, response: String) {
-        output.write(response.toByteArray(StandardCharsets.US_ASCII))
-        output.flush()
     }
 
     private companion object {

@@ -2,9 +2,9 @@
 
 **ID:** `EPIC-20`
 **Тип:** Epic
-**Статус:** In progress
+**Статус:** Done
 **Приоритет:** High
-**Предварительная оценка:** 4-5 инженерных дней осталось; 4/5 issues завершены
+**Предварительная оценка:** 0 инженерных дней осталось; 5/5 issues завершены
 **Связанные требования:** `PROXY-01`, `PROXY-02`, `CONC-01`, `CONC-02`, `CONC-03`
 
 ## Контекст
@@ -12,8 +12,8 @@
 Первый production increment реализовал и проверил bounded in-memory request
 source в завершённом [EPIC-08](epic_08_message_spooling_replay.md). VIG-20-01
 добавил retained in-memory source и protocol gate для ordinary и SSE response.
-VIG-20-02 завершил ordinary JSON policy evaluation, reactions и audit;
-cross-event SSE enforcement остаётся в VIG-20-05.
+VIG-20-02 завершил ordinary JSON policy evaluation, reactions и audit, а
+VIG-20-05 завершил atomic cross-event SSE enforcement через тот же workflow.
 
 Этот epic принял response/SSE scope из EPIC-08. Он не
 переоткрывает завершённый request contract и сохраняет response source
@@ -23,8 +23,9 @@ cross-event SSE enforcement остаётся в VIG-20-05.
 
 Guardrail-enabled response полностью удерживается в retained in-memory response
 source до terminal event и итогового policy decision. При `ALLOW` exact
-original response раскрывается клиенту с backpressure, при `BLOCK` клиент не
-получает upstream status, headers или body. Для MVP source использует доступный
+original response раскрывается клиенту с backpressure, при `MASK` exact
+source patch меняет только selected spans, а при `BLOCK` клиент не получает
+upstream status, headers или body. Для MVP source использует доступный
 JVM heap и не имеет application-level limit, shared quota, disk spill path или
 persistent storage. Heap sizing и runtime OOM policy принадлежат deployment.
 
@@ -66,9 +67,9 @@ EPIC-20 Atomic in-memory response analysis
 ├── SSE protocol parsing (Done: VIG-06-03)
 │   ├── framing and standalone terminal-event parser
 │   └── text assembly by choice.index
-├── SSE response enforcement (Ready: VIG-20-05)
+├── SSE response enforcement (Done: VIG-20-05)
 │   ├── cross-chunk MASK rewrite
-│   └── atomic ALLOW/BLOCK disclosure plus response audit pair
+│   └── atomic ALLOW/MASK/BLOCK disclosure plus response audit pair
 └── reusable masking seam (Done: VIG-20-03)
     ├── typed masking instructions
     ├── deterministic overlap handling
@@ -81,22 +82,25 @@ EPIC-20 Atomic in-memory response analysis
 - [x] [VIG-20-01: In-memory response source](../issues/epic_20/issue_20_01_retained_memory_response_source.md) - `Done`
 - [x] [VIG-20-03: Reusable text masker](../issues/epic_20/issue_20_03_reusable_text_masker.md) - `Done`
 - [x] [VIG-20-02: Non-stream response inspection and enforcement](../issues/epic_20/issue_20_02_response_inspection_enforcement.md) - `Done`
-- [ ] [VIG-20-05: SSE response inspection and enforcement](../issues/epic_20/issue_20_05_sse_response_enforcement.md) - `Ready for implementation`
+- [x] [VIG-20-05: SSE response inspection and enforcement](../issues/epic_20/issue_20_05_sse_response_enforcement.md) - `Done`
 
 VIG-20-02 завершил первый узкий enforcement leaf. Его прежний полный
-response/SSE contract поднят в этот epic. VIG-20-05 остаётся отдельным ready
-SSE enforcement leaf; framing и terminal parsing завершены в
+response/SSE contract поднят в этот epic. VIG-20-05 завершил отдельный SSE
+enforcement leaf; framing и terminal parsing завершены в
 [VIG-06-03](../issues/epic_06/issue_06_03_chat_completions_response_parser.md).
 
-## Нормативный future scope
+## Завершённый нормативный scope
 
 ### Atomic response lifecycle
 
 - Source принимает ordinary response или SSE events с upstream backpressure.
 - Terminal response/SSE state должен быть однозначно определён protocol
   adapter-ом до итогового policy decision.
-- До полного `ALLOW` status, headers и body остаются нераскрыты клиенту.
+- До final `ALLOW`, `MASK` или `BLOCK` status, headers и body остаются
+  нераскрыты клиенту.
 - При `ALLOW` exact original source replay-ится по client demand.
+- При `MASK` exact source patch меняет только selected spans и пересчитывает
+  representation headers до replay.
 - При `BLOCK`, parse failure или policy failure не происходит partial client
   forwarding; внешний outcome остаётся stable и safe.
 - Client cancellation, upstream cancellation/error, timeout и shutdown
@@ -169,13 +173,14 @@ SSE enforcement leaf; framing и terminal parsing завершены в
 
 ## Предварительные критерии готовности epic
 
-- Unmodified response replay-ится byte-for-byte для memory path.
+- `ALLOW` response replay-ится byte-for-byte для memory path.
 - Slow upstream или client создаёт backpressure, а не unbounded queue.
 - Каждый terminal lifecycle освобождает response buffers и references.
 - Cancellation/error на каждой lifecycle phase освобождает все ресурсы.
 - Temporary source недоступен через logs/errors и освобождается после lifecycle.
-- SSE replay начинается только после terminal event и полного `ALLOW`; любой
-  `BLOCK` оставляет upstream SSE полностью нераскрытым клиенту.
+- SSE replay начинается только после terminal event и final reaction:
+  `ALLOW` отдаёт exact original, `MASK` отдаёт exact source-patched representation,
+  а `BLOCK` оставляет upstream SSE полностью нераскрытым клиенту.
 - Non-stream JSON и SSE protocol/enforcement доказаны отдельными узкими leaves,
   каждый с одним основным E2E или public parser seam.
 - Каждый реально проанализированный response публикует одну safe stdout audit
@@ -193,5 +198,5 @@ Ambiguity Report:
   Boundaries:   0.05  source, parser, policy and transport ownership fixed
   Alternatives: 0.10  retained memory and no disk spill selected
   Assumptions:  0.15  dependencies control implementation order
-  Aggregate:    0.07  Ready for implementation.
+  Aggregate:    0.07  Done.
 ```

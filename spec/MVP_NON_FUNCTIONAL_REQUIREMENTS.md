@@ -90,17 +90,17 @@ type, deadline/errors, spool/capacity rejects и identity cache hit/miss/lookup
 latency. Audit queue depth/drops не публикуются: stdout delivery принадлежит
 Logback/container runtime. Tracing содержит session, trace ID, span ID и
 parent span ID.
-Текущая REQUEST inspection и ordinary JSON RESPONSE enforcement публикуют stdout
-`policy.analysis_started`/`policy.analysis_completed` с outcome, latency и safe
-aggregate PII counts; SSE RESPONSE outcome и latency остаются future VIG-20-05 behavior.
+Текущая REQUEST inspection и ordinary JSON/SSE RESPONSE enforcement публикуют
+stdout `policy.analysis_started`/`policy.analysis_completed` с outcome, latency и
+safe aggregate PII counts.
 
 ### OBS-02. Privacy
 
 Audit, logs, metrics, traces и errors не содержат body, PII value/span, Bearer
 token, user ID или groups. Исключение: tracing identifiers хранятся для
 корреляции.
-Этот privacy contract покрывает текущие REQUEST и ordinary JSON RESPONSE stdout
-pairs; аналогичная SSE RESPONSE pair принадлежит VIG-20-05.
+Этот privacy contract покрывает текущие REQUEST и ordinary JSON/SSE
+RESPONSE stdout pairs.
 
 ## Deployment и stack
 

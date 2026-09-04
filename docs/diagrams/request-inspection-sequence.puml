@@ -71,43 +71,31 @@ else дескриптор поддерживается
     end note
     ResponseSource --> ResponseHandler : complete source
     ResponseHandler -> Executor : protocol/policy work вне event loop
-    alt SSE response
-      Executor -> ResponseParser : полный read-only view
-      alt malformed/incomplete/interrupted response
-        ResponseParser --> ResponseHandler : typed protocol failure
-        ResponseHandler --> Client : 502 invalid_upstream_response
-      else valid SSE response
-        ResponseParser --> ResponseHandler : success
-        ResponseHandler -> ResponseSource : получить exact replay
-        ResponseSource --> Client : original SSE status/headers/body\nпо client demand
+    Executor -> ResponseWorkflow : complete retained source
+    ResponseWorkflow -> ResponseParser : полный read-only view
+    alt malformed/ambiguous/incomplete/interrupted response
+      ResponseParser --> ResponseWorkflow : typed protocol failure
+      ResponseWorkflow --> ResponseHandler : Reject invalid upstream
+      ResponseHandler --> Client : 502 invalid_upstream_response
+    else valid ordinary JSON или SSE response
+      ResponseParser --> ResponseWorkflow : fragments, gaps, source map
+      ResponseWorkflow -> Engine : response context + independent fragments
+      Engine --> ResponseWorkflow : callback before detector execution
+      ResponseWorkflow -> Audit : RESPONSE analysis_started
+      Engine --> ResponseWorkflow : decisions / technical failure
+      alt ALLOW
+        ResponseWorkflow -> ResponseReplay : original source
+      else MASK
+        ResponseWorkflow -> ResponseRewriter : validate and patch JSON/SSE exact spans
+        ResponseRewriter --> ResponseWorkflow : rewritten bytes or typed failure
+        ResponseWorkflow -> ResponseReplay : masked body + rewritten headers
+      else BLOCK / 503
+        ResponseWorkflow --> ResponseHandler : Reject
+        ResponseHandler --> Client : safe VIG-29 response
       end
-    else ordinary JSON response
-      Executor -> ResponseWorkflow : complete retained source
-      ResponseWorkflow -> ResponseParser : полный read-only view
-      alt malformed/ambiguous response
-        ResponseParser --> ResponseWorkflow : typed protocol failure
-        ResponseWorkflow --> ResponseHandler : Reject invalid upstream
-        ResponseHandler --> Client : 502 invalid_upstream_response
-      else valid ordinary response
-        ResponseParser --> ResponseWorkflow : fragments, gaps, source map
-        ResponseWorkflow -> Engine : response context + independent fragments
-        Engine --> ResponseWorkflow : callback before detector execution
-        ResponseWorkflow -> Audit : RESPONSE analysis_started
-        Engine --> ResponseWorkflow : decisions / technical failure
-        alt ALLOW
-          ResponseWorkflow -> ResponseReplay : original source
-        else MASK
-          ResponseWorkflow -> ResponseRewriter : validate and patch exact spans
-          ResponseRewriter --> ResponseWorkflow : rewritten bytes or typed failure
-          ResponseWorkflow -> ResponseReplay : masked body + rewritten headers
-        else BLOCK / 503
-          ResponseWorkflow --> ResponseHandler : Reject
-          ResponseHandler --> Client : safe VIG-29 response
-        end
-        ResponseWorkflow -> Audit : RESPONSE analysis_completed
-        ResponseReplay --> ResponseHandler : one-shot transport claim
-        ResponseHandler --> Client : final status/headers/body\nпо client demand
-      end
+      ResponseWorkflow -> Audit : RESPONSE analysis_completed
+      ResponseReplay --> ResponseHandler : one-shot transport claim
+      ResponseHandler --> Client : final status/headers/body\nпо client demand
     end
   end
 end

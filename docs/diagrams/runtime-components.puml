@@ -51,17 +51,16 @@ Upstream --> Transport : потоковый ответ
 Transport --> ShadowProxy : gateway-owned exchange handle
 ShadowProxy --> ResponseHandler : upstream response
 ResponseHandler --> ResponseSource : one-item demand
-ResponseHandler --> ResponseWorkflow : complete ordinary source
+ResponseHandler --> ResponseWorkflow : complete ordinary/SSE source
 ResponseWorkflow --> ResponseSource : полный read-only view
 ResponseWorkflow --> ResponseParser : parse + source map
-ResponseParser --> ResponseWorkflow : ordinary fragments + gaps
+ResponseParser --> ResponseWorkflow : fragments + gaps + source map
 ResponseWorkflow --> PolicyEngine : response context + fragments
 ResponseWorkflow --> AuditLogger : RESPONSE started/completed pair
-ResponseWorkflow --> ResponseRewriter : MASK only
+ResponseWorkflow --> ResponseRewriter : JSON/SSE MASK only
 ResponseWorkflow --> ResponseReplay : ForwardOriginal / ForwardMasked
 ResponseReplay --> ResponseHandler : one-shot transport claim
 ResponseHandler --> Client : атомарный ответ или safe reject
-ResponseHandler --> ResponseParser : SSE protocol validation
 ResponseLifecycle --> ShadowProxy : запрет нового handoff при shutdown
 
 note bottom of ShadowProxy
@@ -76,6 +75,6 @@ end note
 
 note bottom of ResponseSource
 Нет application quota, disk spill или persistence.
-SSE enforcement ещё не подключён.
+SSE удерживается до [DONE] и final policy outcome.
 end note
 @enduml

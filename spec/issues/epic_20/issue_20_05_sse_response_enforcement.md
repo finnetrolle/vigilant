@@ -1,6 +1,6 @@
 # VIG-20-05: SSE response inspection and enforcement
 
-**Статус:** Ready for implementation
+**Статус:** Done
 **Epic:** [EPIC-20](../../epics/epic_20_atomic_in_memory_response_analysis.md)
 **Ветка:** Response enforcement > SSE Chat Completions
 **Зависит от:** [VIG-06-03](../epic_06/issue_06_03_chat_completions_response_parser.md), [VIG-20-01](issue_20_01_retained_memory_response_source.md), [VIG-20-02](issue_20_02_response_inspection_enforcement.md), [VIG-20-03](issue_20_03_reusable_text_masker.md), [VIG-29](../issue_29_openai_error_contract.md), [VIG-32-01](../epic_32/issue_32_01_stdout_request_audit_migration.md)
@@ -117,8 +117,11 @@ canonical masking instructions. Он валидирует locators/ranges до �
 ## Основной public test seam
 
 Основной acceptance seam проходит через real Armeria client, production
-`PiiShadowProxyService` и controlled real Armeria upstream в существующем
-`PiiShadowProxyServiceTest`. Прямой вызов rewriter не заменяет этот E2E.
+`PiiShadowProxyService` и controlled upstream в существующем
+`PiiShadowProxyServiceTest`. Causal response lifecycle использует real Armeria
+boundaries; wire-level `Connection` semantics доказываются raw HTTP/1 upstream,
+потому что Armeria server удаляет этот hop-by-hop field до gateway. Прямой
+вызов rewriter не заменяет этот E2E.
 
 Fixture использует две причинные test-only synchronization точки:
 
@@ -179,8 +182,9 @@ VIG-29 `403`, `502` или `503`.
   проходят через rewrite.
 - Переиспользовать retained source lifecycle VIG-20-01, `TextMasker` VIG-20-03,
   canonical response-header filtering и VIG-29 error factory.
-- Добавить pure source-map/rewrite tests и causal real-Armeria cases в
-  существующий `PiiShadowProxyServiceTest` fixture.
+- Добавить pure source-map/rewrite tests и causal real-Armeria client/gateway
+  cases в существующий `PiiShadowProxyServiceTest` fixture; raw HTTP/1 upstream
+  использовать только для wire-level `Connection` semantics.
 - Создать `docs/response-masking-headers.md` и синхронизировать current runtime
   documentation/requirements coverage только после появления production
   behavior.
@@ -196,46 +200,89 @@ VIG-29 `403`, `502` или `503`.
 
 ### Real-Armeria E2E
 
-- [ ] `ALLOW`: обе causal checkpoints подтверждают отсутствие client headers
+- [x] `ALLOW`: обе causal checkpoints подтверждают отсутствие client headers
   и body; после final decision client получает original status, разрешённые
   headers и SSE bytes byte-for-byte.
-- [ ] `MASK`: PII пересекает два `delta.content` events; marker появляется
+- [x] `MASK`: PII пересекает два `delta.content` events; marker появляется
   один раз, незатронутые bytes сохраняются, client disclosure начинается
   только после final decision. `Content-Length` соответствует rewritten bytes;
   hop-by-hop headers и representation validators удалены, разрешённые
   end-to-end metadata сохранены.
-- [ ] `BLOCK`: client получает exact VIG-29 `403 policy_blocked`; upstream
+- [x] `BLOCK`: client получает exact VIG-29 `403 policy_blocked`; upstream
   status, headers и event bytes не раскрываются.
-- [ ] Malformed event, missing `[DONE]` и upstream interruption возвращают
+- [x] Malformed event, missing `[DONE]` и upstream interruption возвращают
   exact VIG-29 `502 invalid_upstream_response` без partial disclosure.
-- [ ] Detector failure и timeout возвращают exact VIG-29 `503
+- [x] Detector failure и timeout возвращают exact VIG-29 `503
   response_inspection_unavailable` с `Retry-After: 1` без partial disclosure.
-- [ ] Client cancellation до `[DONE]`, cancellation во время analysis и
+- [x] Client cancellation до `[DONE]`, cancellation во время analysis и
   shutdown освобождают source ownership и не раскрывают partial response.
-- [ ] Safe audit observations доказывают started/completed ordering;
+- [x] Safe audit observations доказывают started/completed ordering;
   parse failure и cancellation до analysis не создают audit pair.
 
 ### Pure SSE mapping и rewrite
 
-- [ ] Cases покрывают `OUTPUT_TEXT`, `REFUSAL`, modern tool arguments и
+- [x] Cases покрывают `OUTPUT_TEXT`, `REFUSAL`, modern tool arguments и
   deprecated function arguments; interleaved choices и tool-call indexes не
   смешивают logical fields.
-- [ ] Cases покрывают span внутри одного event, span через несколько events,
+- [x] Cases покрывают span внутри одного event, span через несколько events,
   несколько independent spans и уже объединённые adjacent/overlapping
   instructions.
-- [ ] Cases покрывают ASCII, multibyte UTF-8, JSON escapes, `\uXXXX`, empty
+- [x] Cases покрывают ASCII, multibyte UTF-8, JSON escapes, `\uXXXX`, empty
   rewritten value и сохранение decoded-text semantics после valid re-encoding.
-- [ ] Cases покрывают `LF`, `CRLF`, comments, multi-line `data`, unknown
+- [x] Cases покрывают `LF`, `CRLF`, comments, multi-line `data`, unknown
   metadata и byte-identical preservation каждого незатронутого source range.
-- [ ] Missing, duplicate или ambiguous locator, invalid UTF-8 boundary и
+- [x] Missing, duplicate или ambiguous locator, invalid UTF-8 boundary и
   невозможное source mapping возвращают typed failure без partial output.
-- [ ] Source и masking instructions не мутируются; повторение одного input
+- [x] Source и masking instructions не мутируются; повторение одного input
   даёт byte-identical deterministic result.
-- [ ] `docs/response-masking-headers.md` содержит актуальную reference matrix
+- [x] `docs/response-masking-headers.md` содержит актуальную reference matrix
   для `ALLOW`, `MASK`, `BLOCK`, `502`, `503` и compressed-SSE non-goal.
-- [ ] Все новые и изменённые Kotlin declarations, test methods, causal
+- [x] Все новые и изменённые Kotlin declarations, test methods, causal
   callbacks и lifecycle helpers имеют актуальный KDoc; focused suites,
   `./gradlew validateWorkItems` и `./gradlew build` проходят.
+
+## Dynamic evidence
+
+- Behavioral rewriter RED: `rtk proxy ./gradlew test --tests
+  'io.vigilant.protocol.openai.SseResponseRewriterTest'` до production rewrite
+  вернул expected `Success`, actual typed `Failure` и завершил 1 test failure.
+- Behavioral gateway RED: `rtk proxy ./gradlew test --tests
+  'io.vigilant.gateway.proxy.PiiShadowProxyServiceTest.SSE MASK is atomic across
+  events and rewrites representation headers'` до shared-workflow routing
+  не достиг detector barrier, потому что old SSE path replay-ил без analysis.
+- Duplicate-logical-locator RED/GREEN: `rtk proxy ./gradlew test --tests
+  'io.vigilant.protocol.openai.SseResponseRewriterTest.invalid SSE rewrite matrix
+  fails atomically without mutating inputs'` сначала упал на новом
+  independent oracle, после uniqueness validation прошёл за 1 s.
+- Pure parser/rewriter GREEN: `rtk proxy ./gradlew test --tests
+  'io.vigilant.protocol.openai.ChatCompletionsResponseParserTest' --tests
+  'io.vigilant.protocol.openai.JsonResponseRewriterTest' --tests
+  'io.vigilant.protocol.openai.SseResponseRewriterTest'` прошёл за 1 s.
+- Полный affected GREEN: `rtk proxy ./gradlew test --tests
+  'io.vigilant.protocol.openai.ChatCompletionsResponseParserTest' --tests
+  'io.vigilant.protocol.openai.JsonResponseRewriterTest' --tests
+  'io.vigilant.protocol.openai.SseResponseRewriterTest' --tests
+  'io.vigilant.gateway.proxy.ResponseInspectionWorkflowTest' --tests
+  'io.vigilant.gateway.proxy.PiiShadowProxyServiceTest'` прошёл за 5 min 32 s.
+- Wire-header evidence RED: добавление upstream `Connection`, nominated field и
+  `Transfer-Encoding` в real-Armeria server fixture оставило
+  `x-private-hop` у клиента, потому что server удалил `Connection` до gateway;
+  повтор с forced H1C воспроизвёл тот же invalid-fixture result.
+- Wire-header evidence GREEN: после согласованного raw HTTP/1 upstream seam
+  `rtk proxy ./gradlew test --tests
+  'io.vigilant.gateway.proxy.PiiShadowProxyServiceTest.SSE MASK is atomic across
+  events and rewrites representation headers'` прошёл за 6 s и доказал удаление
+  chunked framing, `Connection` и его nominated field на real Armeria
+  client/gateway boundaries.
+- Sonar RED: `scripts/pipeline-sonar` нашёл `kotlin:S3776` в
+  `SseResponseRewriter.rewrite`: cognitive complexity 27 при лимите 15.
+- Sonar refactor GREEN: после декомпозиции без изменения
+  поведения `rtk proxy ./gradlew test --tests
+  'io.vigilant.protocol.openai.SseResponseRewriterTest'` прошёл за 1 s,
+  `rtk proxy ./gradlew detekt` прошёл за 4 s.
+- Static/style и work-item gates: `rtk proxy ./gradlew detekt`, `rtk proxy
+  ./gradlew validateWorkItems` и `rtk proxy ./gradlew build` завершились
+  `BUILD SUCCESSFUL`; validator опубликовал `Work-item graph is valid.`.
 
 ## Не входит
 
@@ -255,5 +302,5 @@ Acceptance:   0.05  E2E and pure rewrite matrices explicit
 Boundaries:   0.05  orchestration, mapping and fragment boundaries fixed
 Alternatives: 0.10  source-patching rewrite selected
 Assumptions:  0.15  integration reuses contracts delivered by dependencies
-Aggregate:    0.08  Ready for implementation.
+Aggregate:    0.08  Done.
 ```

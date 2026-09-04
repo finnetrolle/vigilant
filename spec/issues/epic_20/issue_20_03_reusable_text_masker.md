@@ -4,7 +4,8 @@
 **Epic:** [EPIC-20](../../epics/epic_20_atomic_in_memory_response_analysis.md)
 **Ветка:** Response enforcement > transport-neutral masking
 **Зависит от:** нет
-**Блокирует:** [VIG-20-02](issue_20_02_response_inspection_enforcement.md) и будущий SSE enforcement leaf EPIC-20
+**Блокирует:** [VIG-20-02](issue_20_02_response_inspection_enforcement.md) и
+завершённый [VIG-20-05](issue_20_05_sse_response_enforcement.md)
 **Оценка:** 2-3 инженерных дня; confidence High
 
 ## Цель

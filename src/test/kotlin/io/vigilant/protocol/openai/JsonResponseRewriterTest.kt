@@ -47,7 +47,7 @@ class JsonResponseRewriterTest {
             )
 
         val rewritten =
-            assertIs<JsonResponseRewriteResult.Success>(
+            assertIs<ResponseRewriteResult.Success>(
                 JsonResponseRewriter().rewrite(
                     CompleteByteSource.copyOf(original),
                     parsed.response,
@@ -82,7 +82,7 @@ class JsonResponseRewriterTest {
         val fragment = parsed.response.fragments.single()
         val coordinates = parsed.response.sourceMap.jsonStrings.single()
         val validPlan =
-            JsonFragmentMaskingPlan(
+            ResponseFragmentMaskingPlan(
                 fragment.provenance.ordinal,
                 fragment.provenance.locator,
                 listOf(MaskingInstruction(Utf8Span(1L, 5L), "[PII_MASKED]")),
@@ -96,25 +96,25 @@ class JsonResponseRewriterTest {
                     "duplicate source locator",
                     responseWithMap(parsed, ResponseSourceMap(listOf(coordinates, coordinates))),
                     listOf(validPlan),
-                    JsonResponseRewriteFailure.INVALID_SOURCE_MAP,
+                    ResponseRewriteFailure.INVALID_SOURCE_MAP,
                 ),
                 RewriteFailureCase(
                     "duplicate plan locator",
                     parsed.response,
                     listOf(validPlan, validPlan),
-                    JsonResponseRewriteFailure.INVALID_SOURCE_MAP,
+                    ResponseRewriteFailure.INVALID_SOURCE_MAP,
                 ),
                 RewriteFailureCase(
                     "mismatched locator",
                     parsed.response,
                     listOf(
-                        JsonFragmentMaskingPlan(
+                        ResponseFragmentMaskingPlan(
                             fragment.provenance.ordinal,
                             ProtocolLocator("/choices/9/message/content"),
                             validPlan.instructions,
                         ),
                     ),
-                    JsonResponseRewriteFailure.INVALID_SOURCE_MAP,
+                    ResponseRewriteFailure.INVALID_SOURCE_MAP,
                 ),
                 RewriteFailureCase(
                     "impossible source boundary",
@@ -132,31 +132,31 @@ class JsonResponseRewriterTest {
                         ),
                     ),
                     listOf(validPlan),
-                    JsonResponseRewriteFailure.INVALID_SOURCE_MAP,
+                    ResponseRewriteFailure.INVALID_SOURCE_MAP,
                 ),
                 RewriteFailureCase(
                     "out of range instruction",
                     parsed.response,
                     listOf(
-                        JsonFragmentMaskingPlan(
+                        ResponseFragmentMaskingPlan(
                             fragment.provenance.ordinal,
                             fragment.provenance.locator,
                             listOf(MaskingInstruction(Utf8Span(1L, 9L), "[PII_MASKED]")),
                         ),
                     ),
-                    JsonResponseRewriteFailure.INVALID_MASKING_INSTRUCTION,
+                    ResponseRewriteFailure.INVALID_MASKING_INSTRUCTION,
                 ),
                 RewriteFailureCase(
                     "split UTF-8 instruction",
                     parsed.response,
                     listOf(
-                        JsonFragmentMaskingPlan(
+                        ResponseFragmentMaskingPlan(
                             fragment.provenance.ordinal,
                             fragment.provenance.locator,
                             listOf(MaskingInstruction(Utf8Span(2L, 4L), "[PII_MASKED]")),
                         ),
                     ),
-                    JsonResponseRewriteFailure.INVALID_MASKING_INSTRUCTION,
+                    ResponseRewriteFailure.INVALID_MASKING_INSTRUCTION,
                 ),
             )
 
@@ -171,7 +171,7 @@ class JsonResponseRewriterTest {
                     case.plans,
                 )
 
-            assertEquals(case.expected, assertIs<JsonResponseRewriteResult.Failure>(result, case.name).code)
+            assertEquals(case.expected, assertIs<ResponseRewriteResult.Failure>(result, case.name).code)
             assertContentEquals(sourceSnapshot, original, case.name)
             assertEquals(planSnapshot, case.plans.map { it.instructions }, case.name)
         }
@@ -185,7 +185,7 @@ class JsonResponseRewriterTest {
         val maskingPlan = plan(parsed, "/choices/0/message/content", 1L, 4L, "[PII_MASKED]")
 
         val rewritten =
-            assertIs<JsonResponseRewriteResult.Success>(
+            assertIs<ResponseRewriteResult.Success>(
                 JsonResponseRewriter().rewrite(
                     CompleteByteSource.copyOf(original),
                     parsed.response,
@@ -209,8 +209,8 @@ class JsonResponseRewriterTest {
                 listOf(maskingPlan),
             )
         assertEquals(
-            JsonResponseRewriteFailure.INVALID_SOURCE_MAP,
-            assertIs<JsonResponseRewriteResult.Failure>(rejected).code,
+            ResponseRewriteFailure.INVALID_SOURCE_MAP,
+            assertIs<ResponseRewriteResult.Failure>(rejected).code,
         )
     }
 
@@ -219,7 +219,7 @@ class JsonResponseRewriterTest {
         parsed: ChatCompletionsResponseParseResult.Success,
         locator: String,
         vararg instructions: Any,
-    ): JsonFragmentMaskingPlan {
+    ): ResponseFragmentMaskingPlan {
         val fragment = parsed.response.fragments.single { it.provenance.locator.value == locator }
         val replacements =
             instructions.toList().chunked(3).map { values ->
@@ -228,7 +228,7 @@ class JsonResponseRewriterTest {
                     values[2] as String,
                 )
             }
-        return JsonFragmentMaskingPlan(
+        return ResponseFragmentMaskingPlan(
             fragmentOrdinal = fragment.provenance.ordinal,
             locator = fragment.provenance.locator,
             instructions = replacements,
@@ -263,8 +263,8 @@ class JsonResponseRewriterTest {
         /** Normalized response carrying controlled parser metadata. */
         val response: NormalizedChatCompletionsResponse,
         /** Fragment-specific masking plans presented to the rewriter. */
-        val plans: List<JsonFragmentMaskingPlan>,
+        val plans: List<ResponseFragmentMaskingPlan>,
         /** Expected stable no-output failure. */
-        val expected: JsonResponseRewriteFailure,
+        val expected: ResponseRewriteFailure,
     )
 }

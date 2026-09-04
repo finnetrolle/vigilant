@@ -40,11 +40,11 @@ maps, terminal semantics, transport contracts и implementation issues.
 
 Текущий runtime полностью удерживает Chat Completions response, включая SSE при
 `stream=true`, и protocol-validates complete source до раскрытия клиенту.
-VIG-20-02 добавил ordinary JSON policy inspection и enforcement; cross-event
-SSE enforcement остаётся VIG-20-05. Retained source и protocol gate завершены
-в VIG-20-01, pure Chat Completions JSON/SSE response parsing завершён в
-VIG-06-03; OpenAI Responses scope не реализован и не получает невыбранные
-terminal semantics.
+VIG-20-02 добавил ordinary JSON policy inspection и enforcement, а завершённый
+VIG-20-05 добавил cross-event SSE enforcement через тот же workflow. Retained
+source и protocol gate завершены в VIG-20-01, pure Chat Completions JSON/SSE
+response parsing завершён в VIG-06-03; OpenAI Responses scope не реализован и
+не получает невыбранные terminal semantics.
 
 Парсер возвращает payload как упорядоченную immutable-коллекцию независимых
 текстовых фрагментов. Каждый фрагмент относится ровно к одному логическому
@@ -168,9 +168,9 @@ Parser распознаёт reference field и возвращает `UNRESOLVED_
   role эвристически.
 
 Protocol-specific locator однозначно указывает исходный item, content block,
-JSON field или SSE event. Его структура принадлежит соответствующему adapter
-и будущему rewriter. Locator и OpenAI identifiers не передаются detector или
-policy engine и не попадают в safe logs/errors.
+JSON field или SSE event. Его структура принадлежит соответствующему adapter и
+реализованному для этого transport rewriter. Locator и OpenAI identifiers не
+передаются detector или policy engine и не попадают в safe logs/errors.
 
 Detector offsets всегда локальны для decoded text одного fragment. Нельзя
 считать их offsets исходного JSON, SSE frame или полного сообщения без
@@ -223,8 +223,8 @@ snapshot и mismatch rules остаются открыты только для O
 В response-inspection contract SSE является одной атомарной policy-транзакцией.
 Parser может возвращать завершённые fragments внутреннему evaluation flow по
 мере разбора, но integration layer не отправляет клиенту upstream status,
-headers или body до terminal event. Retained protocol gate уже активен;
-итоговый SSE policy decision и rewrite принадлежат VIG-20-05.
+headers или body до terminal event. Retained protocol gate, итоговый SSE policy
+decision и rewrite реализованы завершёнными VIG-20-01 и VIG-20-05.
 
 Атомарное удержание retained in-memory response source, replay, cleanup и
 backpressure принадлежат
@@ -349,8 +349,8 @@ Original body и normalized parse result имеют разное ownership:
 - parser читает source в read-only режиме и строит normalized result;
 - parse result не содержит копию raw body и не возвращает reconstructed body;
 - forwarding без modifications использует только original source;
-- будущий rewriter получает original source и protocol locators отдельно и
-  изменяет только целевые fields.
+- transport-specific rewriter получает original source и protocol locators
+  отдельно и изменяет только целевые fields.
 
 Spooling, replay, cleanup и forwarding lifecycle не входят в EPIC-06.
 Завершённый bounded in-memory request source описан в
@@ -611,10 +611,12 @@ Unknown schema keyword с `null`, boolean или number сохраняется �
 
 Parser читает immutable source, но не закрывает, не replay-ит и не копирует
 его в result. Fragment длиннее detector limit передаётся EPIC-07 целиком.
-Первый increment имеет только `ALLOW`, поэтому encoded reverse mapping не
-публикуется: opaque locator связывает fragment с logical field, но decoded
-UTF-8 offsets не объявляются JSON byte offsets. Любой будущий rewriter должен
-получить отдельный contract и патчить только targeted field original source.
+Первый request increment имеет только `ALLOW`, поэтому request-side encoded
+reverse mapping не публикуется: opaque locator связывает fragment с logical
+field, но decoded UTF-8 offsets не объявляются JSON byte offsets. Будущий
+request rewriter должен получить отдельный contract и патчить только targeted
+field original source; response source maps и rewriters завершены VIG-20-02 и
+VIG-20-05.
 
 ## Отложенные решения полного epic
 
@@ -706,7 +708,7 @@ Ambiguity Report:
   Goals:        0.05  ✓ first request slice and future scope are explicit
   Acceptance:   0.15  ✓ pinned field map and stable outcomes are testable
   Boundaries:   0.05  ✓ parser, source, windowing and integration separated
-  Alternatives: 0.10  ✓ combined Chat parser selected; Responses/rewriter deferred
+  Alternatives: 0.10  ✓ combined Chat parser selected; OpenAI Responses adapters/rewriter deferred
   Assumptions:  0.20  ✓ upstream evolution is bounded by pinned snapshot
   Aggregate:    0.11  ✓ below threshold (0.3 epic)
 ```

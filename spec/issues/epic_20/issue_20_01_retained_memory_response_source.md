@@ -61,7 +61,7 @@ gateway не вводит свой response quota или admission rejection.
 - На момент реализации VIG-20-01 response policy evaluation,
   `ALLOW`/`MASK`/`BLOCK` integration и response audit pair оставались за
   следующими enforcement leaves; ordinary JSON path позднее закрыт VIG-20-02,
-  SSE остаётся VIG-20-05.
+  SSE path позднее закрыт VIG-20-05.
 - Audit persistence, WAL, file handoff, Collector protocol, disk spill или
   external object storage.
 - Изменение завершённого request source EPIC-08.

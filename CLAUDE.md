@@ -25,14 +25,18 @@ policy snapshot with `fast-pii`, emits a safe aggregate decision, and replays
 the original body upstream byte-for-byte. The low-level bypass transport keeps
 responses streaming, while the guardrail-enabled Chat Completions path retains
 the complete upstream response in memory, validates its protocol terminal
-state, and only then replays the exact original response to the client.
+state, and only then either replays the exact original response, replays an
+exact source-patched masked representation, or rejects without upstream
+disclosure.
 
-The current startup contract enforces shadow-only `ALLOW` reactions without
-transformations. Response retention and protocol validation are active, but
-response policy evaluation and audit are not. Do not add enforcement (`BLOCK`,
-`MASK`, `REMOVE`), new protocol routes, external identity lookup or
-authentication, disk spill, plugin workers, or other runtime behavior unless a
-dedicated implementation-ready issue explicitly requires it.
+The current startup contract keeps request policies shadow-only: every request
+reaction is `ALLOW` without transformations. Ordinary JSON and SSE responses
+are retained through protocol validation and final policy evaluation, publish a
+safe response audit pair, and then apply `ALLOW`, `MASK`, or `BLOCK`. `REMOVE`
+is not supported. Do not add request enforcement, `REMOVE`, new protocol
+routes, external identity lookup or authentication, disk spill, plugin workers,
+or other runtime behavior unless a dedicated implementation-ready issue
+explicitly requires it.
 
 ## Commands
 
@@ -125,13 +129,14 @@ The maintained architectural overview is `docs/architecture.md`; use it with
 Key gateway and policy files under `src/main/kotlin/io/vigilant/`:
 
 - `gateway/proxy/PiiShadowProxyService.kt` - thin production HTTP inspection boundary. It validates the supported Chat Completions descriptor, ingests into a quota-controlled request source, schedules complete-source workflow execution, maps typed rejects to stable responses, and performs the one-shot handoff to `BypassProxyService` and `RetainedResponseHandler` after best-effort terminal request audit submission without durable reservation or acknowledgement.
-- `gateway/proxy/RetainedResponseHandler.kt` / `source/RetainedResponseSource.kt` - response-retention boundary for the guardrail route. It holds upstream status, headers, trailers and body until complete protocol validation, then replays the exact original response or returns the stable invalid-upstream error; the source owns in-memory segments and clears them on every terminal path without response quota or disk spill.
+- `gateway/proxy/RetainedResponseHandler.kt` / `source/RetainedResponseSource.kt` - response-retention boundary for the guardrail route. It holds upstream status, headers, trailers and body until complete protocol validation and final response-policy enforcement, then transfers one exact or masked replay or returns a stable VIG-29 error; the source owns in-memory segments and clears them on every terminal path without response quota or disk spill.
+- `gateway/proxy/ResponseInspectionWorkflow.kt` / `protocol/openai/JsonResponseRewriter.kt` / `protocol/openai/SseResponseRewriter.kt` - shared ordinary JSON/SSE response-policy orchestration and transport-specific exact-source rewriting. The response parser creates immutable source coordinates in its single parse pass; SSE spans may cross delta events without reserializing event objects.
 - `gateway/proxy/ShadowInspectionWorkflow.kt` / `gateway/proxy/ReplayReadyRequest.kt` - gateway-specific complete-source application workflow and one-shot transport ownership boundary. The workflow parses one normalized view, assembles context, evaluates fragments, publishes one safe started/completed pair through the existing non-blocking logger, and returns typed `Forward` or `Reject`. `ReplayReadyRequest` retains owner responsibility until transport accepts exact replay, then terminal replay owns cleanup.
-- `gateway/proxy/ShadowAuditLogger.kt` - safe request analysis lifecycle events published best-effort through the existing non-blocking Logback stdout pipeline. The application owns no audit persistence or delivery subsystem.
+- `gateway/proxy/ShadowAuditLogger.kt` - safe request and response analysis lifecycle events published best-effort through the existing non-blocking Logback stdout pipeline. The application owns no audit persistence or delivery subsystem.
 - `gateway/identity/DummyIdentityExtractor.kt` / `gateway/identity/OfflineJwtIdentityExtractor.kt` / `context/PolicyContextHandoff.kt` - common single-Bearer boundary with a development/test-only configured Dummy implementation and the production offline RS256 implementation. JWT verifies pinned `kid`, signature, issuer, audience, expiry and not-before before normalizing `sub`/`groups`; request identity validation runs off the Armeria event loop. Raw tokens are never retained, and accepted Authorization is preserved upstream.
 - `source/BoundedRequestSource.kt` - process-wide owner/byte/segment quota plus one-request lifecycle. It receives the request with backpressure, exposes one sequential parser view and one demand-driven exact replay lease, and releases every reservation on completion or cancellation.
 - `protocol/openai/ChatCompletionsRequestParser.kt` - schema-tolerant parser for model-visible Chat Completions content. It preserves unknown fields by never rebuilding the original body, records recognized non-text inspection gaps, and fails closed for malformed or ambiguous content-bearing shapes.
-- `policy/engine/PolicyEngine.kt` / `policy/selection/PolicySelector.kt` / `policy/execution/DetectorExecutionCoordinator.kt` - deterministic policy matching, simultaneous overrides, deduplicated detector execution, per-policy deadlines, fail-fast blocking semantics in the domain layer, and complete decision explanations. Runtime startup currently restricts all configured reactions to shadow-only `ALLOW`.
+- `policy/engine/PolicyEngine.kt` / `policy/selection/PolicySelector.kt` / `policy/execution/DetectorExecutionCoordinator.kt` - deterministic policy matching, simultaneous overrides, deduplicated detector execution, per-policy deadlines, fail-fast blocking semantics in the domain layer, and complete decision explanations. Startup validation keeps request reactions shadow-only while allowing response `ALLOW`, `MASK`, and `BLOCK`.
 - `detectors/pii/fast/FastPiiDetector.kt` / `windowing/WindowedInspectionExecutor.kt` / `windowing/WindowedFastPiiExecutor.kt` - built-in deterministic detector, PII-free UTF-8-safe generic windowing core, and the thin Fast PII contract adapter. CPU work runs on the bounded pool owned by `InspectionResources`.
 - `gateway/proxy/BypassProxyService.kt` - transport stage after inspection. Rewrites request headers (upstream scheme/authority/path and hop-by-hop stripping), strips hop-by-hop response headers, preserves exact request replay and streaming responses, and maps upstream failures to stable proxy errors.
 - `gateway/config/AppConfig.kt` - config loading via Hoplite: optional HOCON file (`VIGILANT_CONFIG`, else `./vigilant.conf`, else `/etc/vigilant/vigilant.conf`) with `VIGILANT_*` env overrides on top (env > file > defaults), then strict post-decode validation. Unit-tested directly without a running server.

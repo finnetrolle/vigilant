@@ -128,7 +128,7 @@ class ChatCompletionsResponseParserTest {
         assertFalse("secret" in uninspectable.toString())
     }
 
-    /** Known optional response fields accept explicit null without producing normalized content. */
+    /** Known optional nulls and an entirely empty SSE logical buffer produce no normalized content. */
     @Test
     fun `optional null response fields produce no fragments or gaps`() {
         val cases =
@@ -140,6 +140,10 @@ class ChatCompletionsResponseParserTest {
                 "SSE" to
                     parseSse(
                         "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":null,\"refusal\":null,\"tool_calls\":null,\"function_call\":null}}]}\n\ndata: [DONE]\n\n",
+                    ),
+                "SSE empty buffer" to
+                    parseSse(
+                        "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\"}}]}\n\ndata: [DONE]\n\n",
                     ),
             )
 

@@ -8,7 +8,7 @@ Vigilant загружает один неизменяемый снимок по�
 политика по умолчанию отсутствуют.
 
 Текущий производственный этап сохраняет request phase в теневом режиме и
-разрешает enforcement для ordinary JSON response:
+разрешает enforcement для ordinary JSON и SSE response:
 
 - хотя бы одна действующая включённая политика обязана глобально покрывать все
   контексты `REQUEST` с помощью детектора `fast-pii`;
@@ -56,11 +56,11 @@ policies = [
 ]
 ```
 
-Это минимальное mandatory request shadow coverage. Для ordinary-response enforcement
+Это минимальное mandatory request shadow coverage. Для response enforcement
 к тому же snapshot добавляется политика с `match.phase = "RESPONSE"`. Например,
 `detected { disposition = "ALLOW", transformations = ["MASK"] }` маскирует
 findings, а `detected { disposition = "BLOCK", transformations = [] }` блокирует
-весь ordinary response. `REMOVE` и transformations для `clean`/`error` невалидны.
+весь ordinary или SSE response. `REMOVE` и transformations для `clean`/`error` невалидны.
 
 Рабочий пример находится в
 [`politics.conf.example`](../politics.conf.example).
@@ -89,7 +89,7 @@ findings, а `detected { disposition = "BLOCK", transformations = [] }` блок
 |---|---|---|
 | `url` | Нормализованный итоговый URL вышестоящего сервера | Точное совпадение без учёта регистра или `*`; строка запроса, фрагмент и учётные данные отсутствуют |
 | `model` | Непустое поле `model` из тела запроса | Точное совпадение без учёта регистра или `*` |
-| `phase` | Фаза обработки | `REQUEST` для shadow request analysis или `RESPONSE` для ordinary JSON enforcement; SSE enforcement пока не подключено |
+| `phase` | Фаза обработки | `REQUEST` для shadow request analysis или `RESPONSE` для ordinary JSON и SSE enforcement |
 | `subject.type` | Режим идентификации | `USER`, `GROUP` или глобальное значение `*` |
 | `subject.id` | Нормализованные пользователь и группы | Точное совпадение без учёта регистра или `*` |
 
@@ -146,8 +146,8 @@ validated `sub`/`groups`. Raw token не входит в policy context. Пол�
 
 Aggregation создаёт typed irreversible instructions из selected `MASK`
 reactions и `FindingType`; transport-neutral `TextMasker` применяет только
-готовые instructions. Ordinary-response rewriter применяет их к exact JSON
-string source ranges без повторного detector execution. Request policy с
+готовые instructions. Transport-specific ordinary JSON и SSE rewriters применяют
+их к exact JSON string source ranges без повторного detector execution. Request policy с
 non-`ALLOW` или transformation по-прежнему завершает startup с кодом `2`;
 валидные response reactions загружаются. Response detector timeout/error даёт
 fail-closed `503`, не `error` reaction fallback.
@@ -179,7 +179,7 @@ fail-closed `503`, не `error` reaction fallback.
 - среда проверки политик, пользовательский интерфейс и воспроизведение
   исторических трасс;
 - внешний реестр детекторов и подключаемых модулей;
-- изменение или enforcement запросов, а также SSE response enforcement.
+- изменение или enforcement запросов.
 
 Статус целевых требований приведён в
 [карте покрытия требований](requirements-coverage.md).

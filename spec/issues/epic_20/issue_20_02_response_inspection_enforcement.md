@@ -20,8 +20,8 @@ response analysis.
 Прежний scope VIG-20-02, включавший одновременно non-stream JSON, SSE framing,
 cross-chunk masking, audit и полный lifecycle, сохранён на нормативном уровне
 [EPIC-20](../../epics/epic_20_atomic_in_memory_response_analysis.md). SSE framing
-завершён в VIG-06-03; SSE enforcement опубликован как отдельный ready узкий
-leaf VIG-20-05.
+завершён в VIG-06-03; отдельный узкий SSE enforcement leaf позднее закрыт
+VIG-20-05 через тот же workflow.
 
 ## Принятые решения
 
@@ -167,7 +167,7 @@ invalid_upstream_response`.
 ## Не входит
 
 - SSE framing, `data: [DONE]` и text assembly по `choice.index` завершены в
-  VIG-06-03; cross-chunk findings и SSE response rewrite принадлежат отдельному
+  VIG-06-03; cross-chunk findings и SSE response rewrite закрыты отдельным
   enforcement leaf VIG-20-05.
 - Response source ownership и memory lifecycle: VIG-20-01.
 - Audit persistence, custom queue, WAL, file handoff или Collector.

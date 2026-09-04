@@ -113,7 +113,7 @@ identity, user/groups, session и raw inbound propagation values запреще�
 Existing Logback `AsyncAppender` с `neverBlock=true` остаётся единственной
 queue. Request path не ждёт logging delivery, stdout write или durable
 acknowledgement. Ordinary JSON RESPONSE pair реализована VIG-20-02; SSE pair
-остаётся future behavior VIG-20-05.
+реализована VIG-20-05 через тот же stdout seam.
 
 ### Historical durable subsystem
 
@@ -403,8 +403,8 @@ in-memory response source lifecycle и enforcement для ordinary и SSE
 responses, а EPIC-06 владеет protocol parsing; EPIC-21 закрыт без
 дублирующего future scope. VIG-20-04 и VIG-20-01 имеют status
 `Done`: guardrail route удерживает ordinary/SSE response до terminal protocol
-validation. VIG-20-02 добавляет ordinary JSON reactions и response audit;
-cross-event SSE enforcement остаётся в VIG-20-05.
+validation. VIG-20-02 добавил ordinary JSON reactions и response audit;
+VIG-20-05 добавил cross-event SSE enforcement через тот же workflow.
 
 Post-milestone closure EPIC-21 завершён. В EPIC-22 local durable store
 [VIG-22-01](issues/epic_22/issue_22_01_local_durable_audit_store.md), mandatory
@@ -429,8 +429,8 @@ consumers.
 
 - OpenAI Responses API, Realtime и Batch.
 - Response content inspection и atomic retained in-memory response source
-  lifecycle для SSE, принадлежащие future
-  [EPIC-20](epics/epic_20_atomic_in_memory_response_analysis.md).
+  lifecycle для SSE не входили в этот исторический increment и позднее
+  завершены [EPIC-20](epics/epic_20_atomic_in_memory_response_analysis.md).
 - `BLOCK`, `MASK`, `REMOVE` и изменение protocol source.
 - historical scope первого milestone не включал user/group identity
   extraction и trusted ingress model. Это temporal boundary, а не current

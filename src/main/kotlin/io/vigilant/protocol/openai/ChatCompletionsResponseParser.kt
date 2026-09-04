@@ -11,7 +11,8 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.node.ArrayNode
 import com.fasterxml.jackson.databind.node.ObjectNode
 import java.io.InputStream
-import java.io.InputStreamReader
+import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
 import java.nio.charset.CharacterCodingException
 import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
@@ -150,10 +151,11 @@ object ChatCompletionsResponseParser {
         )
     }
 
-    /** Parses a complete SSE stream without materializing the complete response as one value. */
+    /** Parses a complete SSE stream once while retaining only selected string source coordinates. */
     private fun parseSse(input: InputStream): ChatCompletionsResponseParseResult {
+        val sourceBytes = input.readAllBytes()
         val parser = SseStreamParser()
-        val reader = StrictSseLineReader(input)
+        val reader = StrictSseLineReader(sourceBytes)
         while (true) {
             val completeLine = reader.readLine() ?: break
             parser.accept(completeLine)
@@ -167,17 +169,17 @@ object ChatCompletionsResponseParser {
         private val collector = SseResponseCollector()
 
         /** Lines belonging to the current event. */
-        private val eventLines = ArrayList<String>()
+        private val eventLines = ArrayList<SseSourceLine>()
 
         /** Terminal outcome, once a standalone terminal event is consumed. */
         private var terminalOutcome: SseEventOutcome? = null
 
         /** Accepts one decoded SSE line without its delimiter. */
-        fun accept(line: String) {
-            if (terminalOutcome != null && line.isNotEmpty()) {
+        fun accept(line: SseSourceLine) {
+            if (terminalOutcome != null && line.text.isNotEmpty()) {
                 malformed()
             }
-            if (line.isEmpty()) {
+            if (line.text.isEmpty()) {
                 consumeBufferedEvent()
             } else {
                 eventLines += line
@@ -210,42 +212,68 @@ object ChatCompletionsResponseParser {
         }
     }
 
-    /** Reads strict UTF-8 SSE lines while accepting only LF and CRLF delimiters. */
-    private class StrictSseLineReader(input: InputStream) {
-        /** Decoder that reports malformed input instead of replacing source bytes. */
-        private val reader =
-            InputStreamReader(
-                input,
-                StandardCharsets.UTF_8
-                    .newDecoder()
-                    .onMalformedInput(CodingErrorAction.REPORT)
-                    .onUnmappableCharacter(CodingErrorAction.REPORT),
-            )
+    /** Reads strict UTF-8 SSE lines while retaining absolute raw line positions. */
+    private class StrictSseLineReader(
+        /** Complete parser-local SSE bytes. */
+        private val source: ByteArray,
+    ) {
+        /** Next unread absolute raw byte position. */
+        private var position = 0
 
-        /** Returns the next line without its delimiter, or null at a clean end of input. */
-        fun readLine(): String? {
-            val line = StringBuilder()
-            while (true) {
+        /** Returns the next decoded line and its raw range, or null at a clean end of input. */
+        fun readLine(): SseSourceLine? {
+            if (position == source.size) return null
+            val start = position
+            while (position < source.size) {
                 checkCancellation()
-                when (val next = reader.read()) {
-                    -1 -> return line.takeIf(StringBuilder::isNotEmpty)?.toString()
-                    '\n'.code -> return line.toString()
+                when (source[position].toInt() and UNSIGNED_BYTE_MASK) {
+                    '\n'.code ->
+                        return decodeLine(start, position).also {
+                            position++
+                        }
+
                     '\r'.code -> {
-                        if (reader.read() != '\n'.code) {
+                        if (position + 1 >= source.size || source[position + 1].toInt() != '\n'.code) {
                             malformed()
                         }
-                        return line.toString()
+                        return decodeLine(start, position).also {
+                            position += 2
+                        }
                     }
 
-                    else -> line.append(next.toChar())
+                    else -> position++
                 }
             }
+            return decodeLine(start, position)
         }
+
+        /** Strictly decodes one line without its transport delimiter. */
+        private fun decodeLine(start: Int, end: Int): SseSourceLine =
+            SseSourceLine(
+                text =
+                    StandardCharsets.UTF_8.newDecoder()
+                        .onMalformedInput(CodingErrorAction.REPORT)
+                        .onUnmappableCharacter(CodingErrorAction.REPORT)
+                        .decode(ByteBuffer.wrap(source, start, end - start))
+                        .toString(),
+                rawStart = start.toLong(),
+                rawEnd = end.toLong(),
+            )
     }
+
+    /** One decoded SSE line plus its absolute raw source range. */
+    private data class SseSourceLine(
+        /** Strictly decoded line text without delimiter. */
+        val text: String,
+        /** Inclusive raw byte offset. */
+        val rawStart: Long,
+        /** Exclusive raw byte offset. */
+        val rawEnd: Long,
+    )
 
     /** Consumes one complete SSE event and reports whether it is terminal. */
     private fun consumeSseEvent(
-        lines: List<String>,
+        lines: List<SseSourceLine>,
         collector: SseResponseCollector,
     ): SseEventOutcome {
         val event = SseEventFields.from(lines)
@@ -255,14 +283,16 @@ object ChatCompletionsResponseParser {
             }
             return SseEventOutcome.CONTINUE
         }
-        val data = event.dataValues.joinToString("\n")
+        val data = event.dataValues.joinToString("\n", transform = SseDataValue::text)
         if (data == DONE_SENTINEL) {
             if (event.dataValues.size != 1 || event.eventType != null || event.hasOtherField) {
                 malformed()
             }
             return SseEventOutcome.DONE
         }
-        val eventRoot = MAPPER.readTree(data)
+        val payload = SseEventPayload.from(event.dataValues)
+        val parsedPayload = parseSsePayload(payload)
+        val eventRoot = parsedPayload.root
         if (event.eventType == ERROR_EVENT) {
             val errorEnvelope = eventRoot as? ObjectNode ?: malformed()
             if (errorEnvelope.get(ERROR_FIELD) !is ObjectNode) {
@@ -273,14 +303,14 @@ object ChatCompletionsResponseParser {
         if (event.eventType != null && event.eventType != MESSAGE_EVENT) {
             ambiguous()
         }
-        collector.collectChunk(eventRoot)
+        collector.collectChunk(parsedPayload)
         return SseEventOutcome.CONTINUE
     }
 
     /** Parsed structural fields of one SSE event before payload interpretation. */
     private class SseEventFields private constructor() {
         /** Ordered values of all data fields. */
-        val dataValues = ArrayList<String>()
+        val dataValues = ArrayList<SseDataValue>()
 
         /** Optional explicit event type. */
         var eventType: String? = null
@@ -291,16 +321,25 @@ object ChatCompletionsResponseParser {
             private set
 
         /** Adds one non-comment line to this event structure. */
-        private fun accept(line: String) {
-            if (line.startsWith(':')) {
+        private fun accept(line: SseSourceLine) {
+            if (line.text.startsWith(':')) {
                 return
             }
-            val separator = line.indexOf(':')
-            val field = if (separator < 0) line else line.substring(0, separator)
-            val rawValue = if (separator < 0) "" else line.substring(separator + 1)
+            val separator = line.text.indexOf(':')
+            val field = if (separator < 0) line.text else line.text.substring(0, separator)
+            val rawValue = if (separator < 0) "" else line.text.substring(separator + 1)
             val value = rawValue.removePrefix(" ")
             when (field) {
-                DATA_FIELD -> dataValues += value
+                DATA_FIELD ->
+                    dataValues +=
+                        SseDataValue(
+                            value,
+                            if (separator < 0) {
+                                line.rawEnd
+                            } else {
+                                line.rawStart + separator + 1L + if (rawValue.startsWith(' ')) 1L else 0L
+                            },
+                        )
                 EVENT_FIELD -> setEventType(value)
                 else -> hasOtherField = true
             }
@@ -317,10 +356,80 @@ object ChatCompletionsResponseParser {
         /** Creates event fields from complete decoded lines. */
         companion object {
             /** Parses [lines] while ignoring SSE comments. */
-            fun from(lines: List<String>): SseEventFields =
+            fun from(lines: List<SseSourceLine>): SseEventFields =
                 SseEventFields().apply {
                     lines.forEach(::accept)
                 }
+        }
+    }
+
+    /** One decoded SSE data value and the absolute raw start of its value bytes. */
+    private data class SseDataValue(
+        /** Decoded field value after the optional single SSE space. */
+        val text: String,
+        /** Inclusive absolute raw byte offset of [text]. */
+        val rawStart: Long,
+    )
+
+    /** One joined SSE event payload and translation back to its original data fields. */
+    private class SseEventPayload private constructor(
+        /** Exact UTF-8 JSON payload consumed by Jackson. */
+        val bytes: ByteArray,
+        /** Direct-source payload ranges excluding synthetic inter-field newlines. */
+        private val rawRanges: List<SsePayloadRawRange>,
+    ) {
+        /** Maps one direct payload byte boundary to its absolute retained-source offset. */
+        fun sourceOffset(payloadOffset: Long): Long? {
+            val range = rawRanges.firstOrNull { payloadOffset in it.payloadStart..it.payloadEnd } ?: return null
+            return range.sourceStart + payloadOffset - range.payloadStart
+        }
+
+        /** Creates one payload with an independent mapping for every original data field. */
+        companion object {
+            /** Joins data values with SSE newlines while retaining direct raw-coordinate ranges. */
+            fun from(values: List<SseDataValue>): SseEventPayload {
+                val output = ByteArrayOutputStream()
+                val ranges = ArrayList<SsePayloadRawRange>()
+                values.forEachIndexed { index, value ->
+                    if (index > 0) output.write('\n'.code)
+                    val start = output.size().toLong()
+                    val bytes = value.text.toByteArray(StandardCharsets.UTF_8)
+                    output.write(bytes)
+                    ranges += SsePayloadRawRange(start, output.size().toLong(), value.rawStart)
+                }
+                return SseEventPayload(output.toByteArray(), ranges)
+            }
+        }
+    }
+
+    /** One direct payload range and its corresponding absolute retained-source start. */
+    private data class SsePayloadRawRange(
+        /** Inclusive payload offset. */
+        val payloadStart: Long,
+        /** Exclusive payload offset, also a valid decoded boundary. */
+        val payloadEnd: Long,
+        /** Absolute source offset corresponding to [payloadStart]. */
+        val sourceStart: Long,
+    )
+
+    /** Parsed SSE JSON plus the selected raw string token starts from the same parse pass. */
+    private data class ParsedSsePayload(
+        /** Complete structural JSON root for existing field validation. */
+        val root: JsonNode,
+        /** Joined event bytes and their direct retained-source translation. */
+        val payload: SseEventPayload,
+        /** Raw string token starts keyed by event-local JSON Pointer. */
+        val stringTokens: Map<String, RawJsonStringToken>,
+    )
+
+    /** Parses one joined event payload once and retains selected-string token starts. */
+    private fun parseSsePayload(payload: SseEventPayload): ParsedSsePayload {
+        val stringTokens = LinkedHashMap<String, RawJsonStringToken>()
+        MAPPER.factory.createParser(payload.bytes).use { parser ->
+            val first = parser.nextToken() ?: malformed()
+            val root = readJsonNode(parser, first, "", stringTokens)
+            if (parser.nextToken() != null) malformed()
+            return ParsedSsePayload(root, payload, stringTokens)
         }
     }
 
@@ -489,14 +598,14 @@ object ChatCompletionsResponseParser {
     /** Accumulates logical SSE field buffers in first-observed protocol order. */
     private class SseResponseCollector {
         /** Logical fields keyed independently by choice and semantic source. */
-        private val buffers = LinkedHashMap<SseFieldKey, StringBuilder>()
+        private val buffers = LinkedHashMap<SseFieldKey, SseLogicalField>()
 
         /** Collects one valid Chat Completions chunk event. */
-        fun collectChunk(root: JsonNode?) {
-            val chunk = root as? ObjectNode ?: malformed()
+        fun collectChunk(event: ParsedSsePayload) {
+            val chunk = event.root as? ObjectNode ?: malformed()
             val choices = chunk.get(CHOICES_FIELD) as? ArrayNode ?: malformed()
             val eventChoiceIndexes = HashSet<Int>()
-            choices.forEach { choiceNode ->
+            choices.forEachIndexed { choicePosition, choiceNode ->
                 val choice = choiceNode as? ObjectNode ?: malformed()
                 val indexNode = choice.get(INDEX_FIELD) ?: malformed()
                 if (!indexNode.isIntegralNumber || !indexNode.canConvertToInt()) {
@@ -508,13 +617,42 @@ object ChatCompletionsResponseParser {
                 }
                 val delta = choice.get(DELTA_FIELD) as? ObjectNode ?: malformed()
                 validateDeltaFields(delta)
-                collectOptionalDeltaText(delta, CONTENT_FIELD, choiceIndex, FragmentSemanticKind.OUTPUT_TEXT)
-                collectOptionalDeltaText(delta, REFUSAL_FIELD, choiceIndex, FragmentSemanticKind.REFUSAL)
+                val pointerBase = "/choices/$choicePosition/delta"
+                collectOptionalDeltaText(
+                    delta,
+                    choiceIndex,
+                    SseSelectedText(
+                        CONTENT_FIELD,
+                        FragmentSemanticKind.OUTPUT_TEXT,
+                        "$pointerBase/content",
+                    ),
+                    event,
+                )
+                collectOptionalDeltaText(
+                    delta,
+                    choiceIndex,
+                    SseSelectedText(
+                        REFUSAL_FIELD,
+                        FragmentSemanticKind.REFUSAL,
+                        "$pointerBase/refusal",
+                    ),
+                    event,
+                )
                 delta.get(TOOL_CALLS_FIELD)?.takeUnless(JsonNode::isNull)?.let {
-                    collectToolCallDeltas(it, choiceIndex)
+                    collectToolCallDeltas(
+                        it,
+                        choiceIndex,
+                        "$pointerBase/tool_calls",
+                        event,
+                    )
                 }
                 delta.get(FUNCTION_CALL_FIELD)?.takeUnless(JsonNode::isNull)?.let {
-                    collectFunctionCallDelta(it, choiceIndex)
+                    collectFunctionCallDelta(
+                        it,
+                        choiceIndex,
+                        "$pointerBase/function_call",
+                        event,
+                    )
                 }
             }
         }
@@ -541,14 +679,20 @@ object ChatCompletionsResponseParser {
         /** Appends one optional scalar delta to its logical field buffer. */
         private fun collectOptionalDeltaText(
             delta: ObjectNode,
-            field: String,
             choiceIndex: Int,
-            kind: FragmentSemanticKind,
+            selected: SseSelectedText,
+            event: ParsedSsePayload,
         ) {
-            val value = delta.get(field) ?: return
+            val value = delta.get(selected.field) ?: return
             when {
                 value.isNull -> Unit
-                value.isTextual -> append(choiceIndex, kind, field, value.textValue())
+                value.isTextual ->
+                    append(
+                        SseFieldKey(choiceIndex, selected.kind, selected.field),
+                        value.textValue(),
+                        selected.pointer,
+                        event,
+                    )
                 else -> malformed()
             }
         }
@@ -557,10 +701,12 @@ object ChatCompletionsResponseParser {
         private fun collectToolCallDeltas(
             value: JsonNode,
             choiceIndex: Int,
+            pointerBase: String,
+            event: ParsedSsePayload,
         ) {
             val calls = value as? ArrayNode ?: malformed()
             val eventCallIndexes = HashSet<Int>()
-            calls.forEach { callNode ->
+            calls.forEachIndexed { callPosition, callNode ->
                 val call = callNode as? ObjectNode ?: malformed()
                 val indexNode = call.get(INDEX_FIELD) ?: malformed()
                 if (!indexNode.isIntegralNumber || !indexNode.canConvertToInt()) {
@@ -584,10 +730,14 @@ object ChatCompletionsResponseParser {
                         malformed()
                     }
                     append(
-                        choiceIndex,
-                        FragmentSemanticKind.TOOL_ARGUMENT,
-                        "tool_calls/$callIndex/function/arguments",
+                        SseFieldKey(
+                            choiceIndex,
+                            FragmentSemanticKind.TOOL_ARGUMENT,
+                            "tool_calls/$callIndex/function/arguments",
+                        ),
                         arguments.textValue(),
+                        "$pointerBase/$callPosition/function/arguments",
+                        event,
                     )
                 }
             }
@@ -597,6 +747,8 @@ object ChatCompletionsResponseParser {
         private fun collectFunctionCallDelta(
             value: JsonNode,
             choiceIndex: Int,
+            pointerBase: String,
+            event: ParsedSsePayload,
         ) {
             val function = value as? ObjectNode ?: malformed()
             function.get(ARGUMENTS_FIELD)?.let { arguments ->
@@ -604,49 +756,87 @@ object ChatCompletionsResponseParser {
                     malformed()
                 }
                 append(
-                    choiceIndex,
-                    FragmentSemanticKind.TOOL_ARGUMENT,
-                    "function_call/arguments",
+                    SseFieldKey(
+                        choiceIndex,
+                        FragmentSemanticKind.TOOL_ARGUMENT,
+                        "function_call/arguments",
+                    ),
                     arguments.textValue(),
+                    "$pointerBase/arguments",
+                    event,
                 )
             }
         }
 
         /** Appends text to one first-observed logical response field. */
         private fun append(
-            choiceIndex: Int,
-            kind: FragmentSemanticKind,
-            fieldPath: String,
+            key: SseFieldKey,
             text: String,
+            pointer: String,
+            event: ParsedSsePayload,
         ) {
-            val key = SseFieldKey(choiceIndex, kind, fieldPath)
-            buffers.getOrPut(key, ::StringBuilder).append(text)
+            val token = event.stringTokens[pointer] ?: malformed()
+            val decoded = decodeJsonStringAt(event.payload.bytes, token.startByteOffset, text) ?: malformed()
+            val rawBoundaries =
+                decoded.rawOffsetsByUtf8Boundary.mapValues { (_, payloadOffset) ->
+                    event.payload.sourceOffset(payloadOffset) ?: malformed()
+                }
+            val field = buffers.getOrPut(key, ::SseLogicalField)
+            val start = field.decodedUtf8Length
+            val end = start + decoded.decodedUtf8Length
+            field.text.append(text)
+            field.decodedUtf8Length = end
+            field.segments +=
+                SseDeltaSegmentSourceCoordinates(
+                    decodedStartUtf8 = start,
+                    decodedEndUtf8 = end,
+                    rawContentStart = rawBoundaries[0L] ?: malformed(),
+                    rawContentEnd = rawBoundaries[decoded.decodedUtf8Length] ?: malformed(),
+                    rawOffsetsByUtf8Boundary = rawBoundaries,
+                )
         }
 
         /** Builds the immutable terminal response from completed non-empty buffers. */
         fun result(): NormalizedChatCompletionsResponse {
             val fragments = ArrayList<TextFragment>()
+            val coordinates = ArrayList<SseFragmentSourceCoordinates>()
             buffers.forEach { (key, buffer) ->
-                if (buffer.isNotEmpty()) {
+                if (buffer.text.isNotEmpty()) {
+                    val ordinal = fragments.size
+                    val locator = ProtocolLocator("/choices/${key.choiceIndex}/delta/${key.fieldPath}")
                     fragments +=
                         TextFragment(
-                            buffer.toString(),
+                            buffer.text.toString(),
                             FragmentProvenance(
-                                ordinal = fragments.size,
+                                ordinal = ordinal,
                                 direction = ProtocolDirection.RESPONSE,
                                 semanticKind = key.kind,
                                 role = MessageRole.ASSISTANT,
-                                locator = ProtocolLocator("/choices/${key.choiceIndex}/delta/${key.fieldPath}"),
+                                locator = locator,
                             ),
                         )
+                    coordinates += SseFragmentSourceCoordinates(ordinal, locator, buffer.segments)
                 }
             }
             return NormalizedChatCompletionsResponse(
                 fragments = fragments,
                 inspectionGaps = emptyList(),
                 coverage = InspectionCoverage.FULLY_INSPECTABLE,
+                sourceMap = ResponseSourceMap(emptyList(), coordinates),
             )
         }
+    }
+
+    /** Mutable parse-local text and coordinate accumulation for one logical SSE field. */
+    private class SseLogicalField {
+        /** Complete decoded logical text in event order. */
+        val text = StringBuilder()
+
+        /** Ordered parser-owned coordinates for every observed delta value. */
+        val segments = ArrayList<SseDeltaSegmentSourceCoordinates>()
+
+        /** Current exclusive decoded UTF-8 end of [text]. */
+        var decodedUtf8Length = 0L
     }
 
     /** Identity of one independently accumulated SSE semantic field. */
@@ -657,6 +847,16 @@ object ChatCompletionsResponseParser {
         val kind: FragmentSemanticKind,
         /** Adapter-owned logical field path. */
         val fieldPath: String,
+    )
+
+    /** One selected optional delta field and its event-local source pointer. */
+    private data class SseSelectedText(
+        /** JSON delta field name. */
+        val field: String,
+        /** Independent inspection semantics. */
+        val kind: FragmentSemanticKind,
+        /** Event-local JSON Pointer used to recover raw string coordinates. */
+        val pointer: String,
     )
 
     /** Returns whether [this] exactly selects [canonical], allowing media-type parameters. */
@@ -792,6 +992,9 @@ object ChatCompletionsResponseParser {
     /** Complete set of recognized fields inside a Chat Completions delta. */
     private val KNOWN_DELTA_FIELDS =
         setOf(ROLE_FIELD, CONTENT_FIELD, REFUSAL_FIELD, TOOL_CALLS_FIELD, FUNCTION_CALL_FIELD)
+
+    /** Mask used to compare one signed JVM byte as an unsigned protocol octet. */
+    private const val UNSIGNED_BYTE_MASK = 0xff
 
     /** Raw start location retained only until selected source coordinates are constructed. */
     private data class RawJsonStringToken(

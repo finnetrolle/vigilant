@@ -51,9 +51,9 @@ safe structured `request_completed` event с method, path без query, HTTP sta
 и upstream/gateway durations. Health/readiness probes этим decorator не
 обрабатываются.
 
-## Safe request analysis pair and ordinary response counterpart
+## Safe request analysis pair and response counterpart
 
-Для каждой request или ordinary-response фазы, где после parse,
+Для каждой request, ordinary-response или SSE-response фазы, где после parse,
 identity/context assembly и policy selection действительно начинается detector
 execution, logger best-effort
 публикует ровно одну пару:
@@ -70,8 +70,8 @@ Terminal event дополнительно
 содержит `outcome=CLEAN|DETECTED|INSPECTION_GAP|ERROR`, `coverage`,
 `fragments.inspected`, `findings.total`, canonical `findings.by_type` и
 `findings.by_evidence_strength`, а также non-negative `analysis.duration_ms`.
-Successful request shadow analysis содержит `reaction=ALLOW`; ordinary response
-публикует final `reaction=ALLOW|MASK|BLOCK`. ERROR не содержит reaction и
+Successful request shadow analysis содержит `reaction=ALLOW`; ordinary и SSE
+response paths публикуют final `reaction=ALLOW|MASK|BLOCK`. ERROR не содержит reaction и
 публикует только stable `error.code`. Response outcome сохраняет precedence
 `DETECTED` > `INSPECTION_GAP` > `CLEAN` независимо от partial coverage.
 

@@ -21,9 +21,9 @@ contract=openai-chat-completions-request@2026-08-26
 `400 {"error":"unsupported_schema"}` без чтения тела, записи аудита и запроса
 к вышестоящему серверу.
 
-Поле `stream=true` не меняет разбор запроса. Оно выбирает потоковый ответ
-вышестоящего сервера, который текущая система передаёт клиенту без проверки
-содержимого.
+Поле `stream=true` не меняет разбор запроса. Оно выбирает SSE response,
+который gateway полностью удерживает до standalone `data: [DONE]`,
+атомарно анализирует и только затем применяет `ALLOW`, `MASK` или `BLOCK`.
 
 Полная диаграмма последовательности обработки запроса в нотации UML 2.0:
 [request-inspection-sequence.puml](diagrams/request-inspection-sequence.puml).
@@ -169,20 +169,25 @@ detector execution и без stdout audit pair. Исходное тело, ис�
 ## Не поддерживается
 
 - API OpenAI Responses, Realtime и Batch;
-- SSE response policy enforcement до VIG-20-05;
 - внешний механизм разрешения разговора или системной инструкции;
 - request-side `BLOCK`/`MASK`, `REMOVE` и изменение исходного запроса;
 - произвольные OpenAI-совместимые конечные точки и резервное распознавание по
   телу запроса.
 
 Combined response parser VIG-06-03 поддерживает ordinary JSON и SSE response
-через единый public typed result. Runtime полностью удерживает ordinary/SSE
-response до EOF или standalone `data: [DONE]` и проверяет protocol. Ordinary JSON
+через единый public typed result и один parse pass. Runtime полностью
+удерживает ordinary/SSE response до EOF или standalone `data: [DONE]`,
+проверяет protocol и применяет один response policy workflow. Ordinary JSON
 извлекает каждый string `choices[].message.content`, `refusal`, modern/deprecated
-function arguments и `audio.transcript` как independent fragment. Response policy
-выбирает exact byte-for-byte `ALLOW`, source-patched `MASK` или whole-response
-`BLOCK` до первого client byte. Audio data остаётся gap и при `MASK` сохраняется
-byte-for-byte. SSE пока replay-ит valid source без policy evaluation. Missing/malformed terminal,
-malformed protocol и upstream interruption дают safe `502
-invalid_upstream_response` без partial disclosure. Cross-event SSE `MASK`/`BLOCK` и response
-audit для SSE остаются за VIG-20-05.
+function arguments и `audio.transcript`. SSE собирает independent
+`delta.content`, `delta.refusal`, modern tool arguments и deprecated function
+arguments, не смешивая choices, semantic fields и tool calls.
+
+Response policy выбирает exact byte-for-byte `ALLOW`, source-patched `MASK` или
+whole-response `BLOCK` до первого client byte. SSE `MASK` может
+патчить exact span через несколько delta events, сохраняя остальные
+event bytes. Audio data остаётся gap и при `MASK` сохраняется byte-for-byte.
+Missing/malformed terminal, malformed protocol и upstream interruption дают safe
+`502 invalid_upstream_response` без partial disclosure. Detector/rewrite failure или
+timeout дают safe `503 response_inspection_unavailable`. Каждый реально
+проанализированный ordinary/SSE response публикует safe RESPONSE audit pair.

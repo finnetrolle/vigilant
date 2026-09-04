@@ -10,10 +10,7 @@ import io.opentelemetry.api.trace.SpanKind
 import io.opentelemetry.api.trace.StatusCode
 import io.vigilant.gateway.tracing.RequestTracing
 import io.vigilant.lifecycle.runAllCleanupActions
-import io.vigilant.protocol.openai.ChatCompletionsResponseParseResult
-import io.vigilant.protocol.openai.ChatCompletionsResponseParser
 import io.vigilant.protocol.openai.OpenAiOperationDescriptor
-import io.vigilant.protocol.openai.ProtocolTransport
 import io.vigilant.source.ResponseSourceIngestResult
 import io.vigilant.source.RetainedResponseSource
 import java.util.concurrent.CancellationException
@@ -25,11 +22,11 @@ import java.util.concurrent.atomic.AtomicReference
 /**
  * Owns retained-response ingest, typed inspection handoff and terminal cleanup.
  *
- * Ordinary JSON enters [responseWorkflow] only after complete retention. SSE retains the existing
- * VIG-06-03 protocol-validation and exact-replay behavior until VIG-20-05 adds enforcement.
+ * Ordinary JSON and SSE enter [responseWorkflow] only after complete retention and content-coding
+ * validation, so neither upstream metadata nor body bytes escape before the final reaction.
  *
  * @param inspectionExecutor blocking-safe executor used for response parsing and inspection.
- * @param responseWorkflow ordinary JSON response analysis and final-reaction boundary.
+ * @param responseWorkflow shared ordinary JSON/SSE response analysis and final-reaction boundary.
  * @param sourceFactory internal construction seam used to observe source ownership in tests.
  */
 @Suppress("ReturnCount", "TooGenericExceptionCaught")
@@ -117,7 +114,7 @@ internal class RetainedResponseHandler(
         }
     }
 
-    /** Maps one complete source to the ordinary workflow or the unchanged SSE validation path. */
+    /** Maps one complete retained source into the shared response inspection workflow. */
     private fun processCompleteResponse(
         source: RetainedResponseSource,
         headers: ResponseHeaders,
@@ -126,23 +123,19 @@ internal class RetainedResponseHandler(
         inspectionSpan: Span?,
     ): HttpResponse {
         val descriptor = responseDescriptor(headers) ?: return invalidUpstreamResponse(source)
-        if (descriptor.transport == ProtocolTransport.JSON && !hasSupportedContentEncoding(headers)) {
+        if (!hasSupportedContentEncoding(headers)) {
             return invalidUpstreamResponse(source)
         }
-        return if (descriptor.transport == ProtocolTransport.JSON) {
-            mapWorkflowOutcome(
-                responseWorkflow.execute(
-                    source,
-                    descriptor,
-                    headers,
-                    trailers,
-                    serviceContext,
-                    inspectionSpan,
-                ),
-            )
-        } else {
-            validateSseAndReplay(source, descriptor, headers, trailers)
-        }
+        return mapWorkflowOutcome(
+            responseWorkflow.execute(
+                source,
+                descriptor,
+                headers,
+                trailers,
+                serviceContext,
+                inspectionSpan,
+            ),
+        )
     }
 
     /** Maps the workflow's exhaustive typed outcome without repeating policy decisions. */
@@ -161,25 +154,6 @@ internal class RetainedResponseHandler(
             }
         }
 
-    /** Preserves the completed VIG-20-01 SSE protocol gate without response policy enforcement. */
-    private fun validateSseAndReplay(
-        source: RetainedResponseSource,
-        descriptor: OpenAiOperationDescriptor,
-        headers: ResponseHeaders,
-        trailers: HttpHeaders,
-    ): HttpResponse {
-        val view = source.acquireView() ?: return invalidUpstreamResponse(source)
-        val parseResult = view.use { ChatCompletionsResponseParser.parse(it, descriptor) }
-        if (parseResult !is ChatCompletionsResponseParseResult.Success) {
-            return invalidUpstreamResponse(source)
-        }
-        return try {
-            transfer(ReplayReadyResponse.original(source, headers, trailers))
-        } catch (_: ResponseHandoffException) {
-            invalidUpstreamResponse(source)
-        }
-    }
-
     /** Selects the existing VIG-06-03 response descriptor from retained Content-Type. */
     private fun responseDescriptor(headers: ResponseHeaders): OpenAiOperationDescriptor? {
         val mediaType = headers.contentType()?.toString() ?: return null
@@ -197,7 +171,7 @@ internal class RetainedResponseHandler(
         return canonical.copy(mediaType = mediaType)
     }
 
-    /** Accepts only absent or exact identity encoding for ordinary retained JSON inspection. */
+    /** Accepts only absent or exact identity encoding for retained JSON and SSE inspection. */
     private fun hasSupportedContentEncoding(headers: ResponseHeaders): Boolean =
         headers.get(CONTENT_ENCODING)?.let { it == IDENTITY_ENCODING } ?: true
 
@@ -221,7 +195,7 @@ internal class RetainedResponseHandler(
         const val JSON_MEDIA_TYPE = "application/json"
         const val SSE_MEDIA_TYPE = "text/event-stream"
 
-        /** Exact supported ordinary response content coding. */
+        /** Exact supported retained-response content coding. */
         const val IDENTITY_ENCODING = "identity"
 
         /** Stable INTERNAL span name for retained response protocol and policy work. */
@@ -230,7 +204,7 @@ internal class RetainedResponseHandler(
         /** Canonical tracing attribute shared by every request-scoped span. */
         val SESSION_ID = io.opentelemetry.api.common.AttributeKey.stringKey("session.id")
 
-        /** Header governing whether ordinary bytes can be inspected without decoding. */
+        /** Header governing whether retained response bytes can be inspected without decoding. */
         val CONTENT_ENCODING = com.linecorp.armeria.common.HttpHeaderNames.of("content-encoding")
     }
 }

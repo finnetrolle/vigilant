@@ -26,14 +26,16 @@ Hop-by-hop headers, authority, `Host` и `Content-Length` обрабатывае
 upstream с исходным значением без изменений.
 
 Guardrail-enabled response, включая SSE, полностью удерживается в RAM до
-protocol completion. Клиент до этого не получает upstream status, headers или
-body. Ordinary JSON считается complete по end-of-stream, разбирается один раз с
-immutable source coordinates и проходит response policy evaluation. `ALLOW`
-replay-ит original status, разрешённые headers/trailers и exact body. `MASK` меняет
-только selected decoded UTF-8 spans в исходных JSON string literals, сохраняя
-остальные bytes; `BLOCK` скрывает весь upstream response. SSE завершается
-только после standalone `data: [DONE]` и до VIG-20-05 replay-ится byte-for-byte
-без policy enforcement.
+protocol completion и final response-policy decision. Клиент до этого не
+получает upstream status, headers или body. Ordinary JSON считается
+complete по end-of-stream, SSE только после standalone `data: [DONE]`.
+Единый parser разбирает каждый transport один раз с immutable source
+coordinates, после чего общий workflow выполняет response policy
+evaluation. `ALLOW` replay-ит original status, разрешённые headers/trailers и
+exact body. `MASK` меняет только selected decoded UTF-8 spans в исходных
+JSON string literals; SSE span может пересекать несколько delta events одного
+logical field. Остальные bytes сохраняются, а `BLOCK` скрывает весь
+upstream response.
 
 Request URL, model и normalized identity сохраняются в request-scoped handoff.
 Response context использует тот же snapshot и отличается только phase
@@ -130,19 +132,26 @@ source и не публикует пару. Cancellation после start best-e
 upstream handoff запрещён. Отменённому соединению delivery HTTP error не
 гарантируется.
 
-## Ordinary response enforcement
+## Response enforcement
 
 Ordinary JSON parser извлекает independent `content`, `refusal`, modern/deprecated
-function arguments и audio transcript fragments. Recognized audio data остаётся
-inspection gap; `null` не создаёт fragment или gap. Audit outcome использует
-precedence `DETECTED` > `INSPECTION_GAP` > `CLEAN`.
+function arguments и audio transcript fragments. SSE parser собирает
+independent `delta.content`, `delta.refusal`, modern tool arguments и
+deprecated function arguments по choice, semantic field и tool-call index.
+Recognized audio data остаётся inspection gap; `null` и empty SSE buffer не
+создают fragment или gap. Audit outcome использует precedence `DETECTED` >
+`INSPECTION_GAP` > `CLEAN`.
 
 `MASK` проверяет все locators и decoded UTF-8 boundaries до первой записи,
-применяет patches в descending raw-offset order и не пересериализует JSON.
+применяет patches в descending raw-offset order и не пересериализует JSON
+объекты. Для SSE cross-event span marker появляется ровно в первом
+затронутом value, а covered text удаляется из последующих values.
 `Content-Length` пересчитывается; hop-by-hop headers, `ETag`, `Content-MD5` и
 `Digest` удаляются, остальные end-to-end metadata сохраняются.
 Absent или exact `Content-Encoding: identity` поддерживаются; gzip и любое
 другое encoding дают safe `502` без декодирования.
+Полная таблица status и headers для `ALLOW`, `MASK`, `BLOCK`, `502` и
+`503` приведена в [response masking reference](response-masking-headers.md).
 
 Missing/non-array `choices`, malformed/ambiguous content и unsupported content type дают
 exact `502 invalid_upstream_response`. Detector/policy deadline и failure, invalid masking

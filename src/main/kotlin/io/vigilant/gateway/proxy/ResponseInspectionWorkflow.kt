@@ -15,11 +15,14 @@ import io.vigilant.policy.selection.PolicySelection
 import io.vigilant.protocol.openai.ChatCompletionsResponseParseResult
 import io.vigilant.protocol.openai.ChatCompletionsResponseParser
 import io.vigilant.protocol.openai.CompleteByteSource
-import io.vigilant.protocol.openai.JsonFragmentMaskingPlan
-import io.vigilant.protocol.openai.JsonResponseRewriteResult
 import io.vigilant.protocol.openai.JsonResponseRewriter
 import io.vigilant.protocol.openai.NormalizedChatCompletionsResponse
 import io.vigilant.protocol.openai.OpenAiOperationDescriptor
+import io.vigilant.protocol.openai.ProtocolTransport
+import io.vigilant.protocol.openai.ResponseFragmentMaskingPlan
+import io.vigilant.protocol.openai.ResponseRewriteResult
+import io.vigilant.protocol.openai.SseResponseRewriter
+import io.vigilant.protocol.openai.TextFragment
 import io.vigilant.source.RetainedResponseSource
 import java.time.Duration
 import java.util.concurrent.CancellationException
@@ -46,7 +49,7 @@ internal sealed interface ResponseInspectionOutcome {
 }
 
 /**
- * Complete-source ordinary response policy orchestration boundary.
+ * Complete-source Chat Completions response policy orchestration boundary.
  *
  * Parsing, request-derived response context, independent fragment evaluation, final reaction,
  * exact source rewriting and safe stdout lifecycle remain inside this typed workflow. The HTTP
@@ -55,6 +58,7 @@ internal sealed interface ResponseInspectionOutcome {
  * @param policyEngine existing policy selection, detector execution and reaction boundary.
  * @param auditLogger shared safe request/response stdout lifecycle projection.
  * @param rewriteJson internal all-or-nothing rewriter seam used to prove caller failure mapping.
+ * @param rewriteSse SSE all-or-nothing rewriter using parser-owned event segment coordinates.
  */
 internal class ResponseInspectionWorkflow(
     private val policyEngine: PolicyEngine,
@@ -62,11 +66,16 @@ internal class ResponseInspectionWorkflow(
     private val rewriteJson: (
         CompleteByteSource,
         NormalizedChatCompletionsResponse,
-        Collection<JsonFragmentMaskingPlan>,
-    ) -> JsonResponseRewriteResult = JsonResponseRewriter()::rewrite,
+        Collection<ResponseFragmentMaskingPlan>,
+    ) -> ResponseRewriteResult = JsonResponseRewriter()::rewrite,
+    private val rewriteSse: (
+        CompleteByteSource,
+        NormalizedChatCompletionsResponse,
+        Collection<ResponseFragmentMaskingPlan>,
+    ) -> ResponseRewriteResult = SseResponseRewriter()::rewrite,
 ) {
     /**
-     * Inspects one complete ordinary JSON source and transfers source ownership only on success.
+     * Inspects one complete JSON or SSE source and transfers source ownership only on success.
      *
      * Parser and context failures before detector execution publish no audit pair. Every terminal
      * path after analysis start attempts one safe completion event before forwarding or rejection.
@@ -111,19 +120,13 @@ internal class ResponseInspectionWorkflow(
                 return ResponseInspectionOutcome.Reject(OpenAiErrorOutcome.RESPONSE_BLOCKED)
             }
 
-            val maskingPlans =
+            val maskedFragments =
                 normalized.fragments.zip(decisions)
-                    .mapNotNull { (fragment, decision) ->
-                        decision.reactionPlan.maskingInstructions.takeIf { it.isNotEmpty() }?.let { instructions ->
-                            JsonFragmentMaskingPlan(
-                                fragment.provenance.ordinal,
-                                fragment.provenance.locator,
-                                instructions,
-                            )
-                        }
+                    .filter { (_, decision) ->
+                        decision.reactionPlan.maskingInstructions.isNotEmpty()
                     }
             val outcome =
-                if (maskingPlans.isEmpty()) {
+                if (maskedFragments.isEmpty()) {
                     handoff = ReplayReadyResponse.original(source, headers, trailers)
                     lifecycle.complete(normalized, decisions, RESPONSE_REACTION_ALLOW)
                     ResponseInspectionOutcome.ForwardOriginal(handoff)
@@ -132,12 +135,10 @@ internal class ResponseInspectionWorkflow(
                         ?: return ResponseInspectionOutcome.Reject(
                             OpenAiErrorOutcome.RESPONSE_INSPECTION_UNAVAILABLE,
                         ).also { lifecycle.completeFailure(normalized, decisions, RESPONSE_REWRITE_FAILED) }
-                    val rewrite = view.use { rewriteJson(it, normalized, maskingPlans) }
-                    val rewritten = rewrite as? JsonResponseRewriteResult.Success
+                    val bytes = view.use { rewriteMaskedSource(it, descriptor.transport, normalized, maskedFragments) }
                         ?: return ResponseInspectionOutcome.Reject(
                             OpenAiErrorOutcome.RESPONSE_INSPECTION_UNAVAILABLE,
                         ).also { lifecycle.completeFailure(normalized, decisions, RESPONSE_REWRITE_FAILED) }
-                    val bytes = rewritten.bytes()
                     handoff =
                         ReplayReadyResponse.masked(
                             source,
@@ -158,6 +159,32 @@ internal class ResponseInspectionWorkflow(
             ResponseInspectionOutcome.Reject(OpenAiErrorOutcome.RESPONSE_INSPECTION_UNAVAILABLE)
         } finally {
             if (!ownershipTransferred) handoff?.close() ?: source.close()
+        }
+    }
+
+    /** Dispatches one MASK result to the selected transport rewriter without another parse pass. */
+    private fun rewriteMaskedSource(
+        source: CompleteByteSource,
+        transport: ProtocolTransport,
+        normalized: NormalizedChatCompletionsResponse,
+        maskedFragments: List<Pair<TextFragment, PolicyDecision>>,
+    ): ByteArray? {
+        val plans =
+            maskedFragments.map { (fragment, decision) ->
+                ResponseFragmentMaskingPlan(
+                    fragment.provenance.ordinal,
+                    fragment.provenance.locator,
+                    decision.reactionPlan.maskingInstructions,
+                )
+            }
+        return when (transport) {
+            ProtocolTransport.JSON -> {
+                (rewriteJson(source, normalized, plans) as? ResponseRewriteResult.Success)?.bytes()
+            }
+
+            ProtocolTransport.SSE -> {
+                (rewriteSse(source, normalized, plans) as? ResponseRewriteResult.Success)?.bytes()
+            }
         }
     }
 

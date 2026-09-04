@@ -36,8 +36,8 @@ import io.vigilant.policy.execution.DetectorExecutionCoordinator
 import io.vigilant.policy.execution.DetectorExecutor
 import io.vigilant.policy.provider.DummyPolicyProvider
 import io.vigilant.policy.selection.PolicySelector
-import io.vigilant.protocol.openai.JsonResponseRewriteFailure
-import io.vigilant.protocol.openai.JsonResponseRewriteResult
+import io.vigilant.protocol.openai.ResponseRewriteFailure
+import io.vigilant.protocol.openai.ResponseRewriteResult
 import io.vigilant.protocol.openai.OpenAiOperationDescriptor
 import io.vigilant.source.ResponseSourceIngestResult
 import io.vigilant.source.RetainedResponseSource
@@ -148,7 +148,7 @@ class ResponseInspectionWorkflowTest {
                 ShadowAuditLogger(),
                 rewriteJson = { _, _, _ ->
                     rewriteInvocations.incrementAndGet()
-                    JsonResponseRewriteResult.Failure(JsonResponseRewriteFailure.INVALID_SOURCE_MAP)
+                    ResponseRewriteResult.Failure(ResponseRewriteFailure.INVALID_SOURCE_MAP)
                 },
             )
 

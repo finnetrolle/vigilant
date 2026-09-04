@@ -11,37 +11,6 @@ import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets.UTF_8
 import java.util.LinkedHashMap
 
-/** Stable failure categories for all-or-nothing ordinary JSON source rewriting. */
-enum class JsonResponseRewriteFailure {
-    /** Parser coordinates or supplied fragment identities are invalid or ambiguous. */
-    INVALID_SOURCE_MAP,
-
-    /** A masking instruction cannot be applied to its decoded fragment. */
-    INVALID_MASKING_INSTRUCTION,
-}
-
-/** Typed all-or-nothing result of pure ordinary JSON source rewriting. */
-sealed interface JsonResponseRewriteResult {
-    /**
-     * Exact rewritten bytes held as an immutable defensive snapshot.
-     *
-     * @param bytes complete rewritten representation copied on entry.
-     */
-    class Success(bytes: ByteArray) : JsonResponseRewriteResult {
-        /** Privately owned representation returned only through defensive copies. */
-        private val snapshot = bytes.copyOf()
-
-        /** Returns a defensive copy of the exact rewritten response bytes. */
-        fun bytes(): ByteArray = snapshot.copyOf()
-    }
-
-    /** Safe typed failure with no partial output. */
-    data class Failure(
-        /** Stable failure category. */
-        val code: JsonResponseRewriteFailure,
-    ) : JsonResponseRewriteResult
-}
-
 /** Pure ordinary JSON source patcher over parser-owned coordinates. */
 class JsonResponseRewriter {
     /** Existing transport-neutral validator for canonical decoded-text instructions. */
@@ -52,8 +21,8 @@ class JsonResponseRewriter {
     fun rewrite(
         source: CompleteByteSource,
         response: NormalizedChatCompletionsResponse,
-        plans: Collection<JsonFragmentMaskingPlan>,
-    ): JsonResponseRewriteResult {
+        plans: Collection<ResponseFragmentMaskingPlan>,
+    ): ResponseRewriteResult {
         val sourceBytes = source.openStream().use { input -> input.readAllBytes() }
         val fragmentsByOrdinal = response.fragments.associateBy { fragment -> fragment.provenance.ordinal }
         val coordinatesByOrdinal =
@@ -67,8 +36,8 @@ class JsonResponseRewriter {
         }
         val planSnapshot = plans.toList()
         if (
-            planSnapshot.map(JsonFragmentMaskingPlan::fragmentOrdinal).distinct().size != planSnapshot.size ||
-            planSnapshot.map(JsonFragmentMaskingPlan::locator).distinct().size != planSnapshot.size
+            planSnapshot.map(ResponseFragmentMaskingPlan::fragmentOrdinal).distinct().size != planSnapshot.size ||
+            planSnapshot.map(ResponseFragmentMaskingPlan::locator).distinct().size != planSnapshot.size
         ) {
             return invalidSourceMap()
         }
@@ -81,7 +50,7 @@ class JsonResponseRewriter {
                 return invalidSourceMap()
             }
             val decoded = validateCoordinates(sourceBytes, fragment, coordinates) ?: return invalidSourceMap()
-            if (!plan.instructions.isCanonical()) {
+            if (!plan.instructions.haveCanonicalMaskingOrder()) {
                 return invalidMaskingInstruction()
             }
             try {
@@ -94,13 +63,13 @@ class JsonResponseRewriter {
                     ?: return invalidSourceMap()
                 val rawEnd = decoded.rawOffsetsByUtf8Boundary[instruction.span.endUtf8]
                     ?: return invalidSourceMap()
-                patches += RawJsonPatch(rawStart, rawEnd, jsonStringContent(instruction.marker))
+                patches += RawJsonPatch(rawStart, rawEnd, encodeJsonStringContent(instruction.marker))
             }
         }
-        if (!patches.areDisjoint()) {
+        if (!patches.areDisjointWithin(sourceBytes.size)) {
             return invalidSourceMap()
         }
-        return JsonResponseRewriteResult.Success(applyPatches(sourceBytes, patches))
+        return ResponseRewriteResult.Success(applyRawJsonPatches(sourceBytes, patches))
     }
 
     /** Re-decodes one selected raw literal and compares it with parser-owned immutable metadata. */
@@ -118,35 +87,10 @@ class JsonResponseRewriter {
         }
     }
 
-    /** Applies already validated non-overlapping patches from the end toward the beginning. */
-    private fun applyPatches(source: ByteArray, patches: Collection<RawJsonPatch>): ByteArray {
-        var rewritten = source.copyOf()
-        patches.sortedByDescending(RawJsonPatch::start).forEach { patch ->
-            val start = patch.start.toIntExact()
-            val end = patch.end.toIntExact()
-            val next = ByteArray(rewritten.size - (end - start) + patch.replacement.size)
-            rewritten.copyInto(next, 0, 0, start)
-            patch.replacement.copyInto(next, start)
-            rewritten.copyInto(next, start + patch.replacement.size, end, rewritten.size)
-            rewritten = next
-        }
-        return rewritten
-    }
-
-    /** Produces JSON string-content bytes for a canonical marker without adding surrounding quotes. */
-    private fun jsonStringContent(marker: String): ByteArray = marker.toByteArray(UTF_8)
-
-    /** Creates the stable no-output source-map failure. */
-    private fun invalidSourceMap(): JsonResponseRewriteResult.Failure =
-        JsonResponseRewriteResult.Failure(JsonResponseRewriteFailure.INVALID_SOURCE_MAP)
-
-    /** Creates the stable no-output masking-instruction failure. */
-    private fun invalidMaskingInstruction(): JsonResponseRewriteResult.Failure =
-        JsonResponseRewriteResult.Failure(JsonResponseRewriteFailure.INVALID_MASKING_INSTRUCTION)
 }
 
 /** One complete raw replacement range validated before output allocation. */
-private data class RawJsonPatch(
+internal data class RawJsonPatch(
     /** Inclusive absolute raw source offset. */
     val start: Long,
     /** Exclusive absolute raw source offset. */
@@ -157,7 +101,7 @@ private data class RawJsonPatch(
 
 /** Returns whether instructions are non-empty, ordered, disjoint and already canonically merged. */
 @Suppress("ReturnCount")
-private fun Collection<MaskingInstruction>.isCanonical(): Boolean {
+internal fun Collection<MaskingInstruction>.haveCanonicalMaskingOrder(): Boolean {
     if (isEmpty()) return false
     var priorEnd = -1L
     for (instruction in this) {
@@ -168,14 +112,36 @@ private fun Collection<MaskingInstruction>.isCanonical(): Boolean {
 }
 
 /** Returns whether raw patches are valid, in bounds relative to each other, and non-overlapping. */
-private fun Collection<RawJsonPatch>.areDisjoint(): Boolean {
+internal fun Collection<RawJsonPatch>.areDisjointWithin(sourceSize: Int): Boolean {
     var priorEnd = -1L
     for (patch in sortedBy(RawJsonPatch::start)) {
-        if (patch.start < 0L || patch.end <= patch.start || patch.start < priorEnd) return false
+        val hasInvalidBounds = patch.start < 0L || patch.end < patch.start
+        val isOutOfBoundsOrOverlapping = patch.end > sourceSize.toLong() || patch.start < priorEnd
+        if (hasInvalidBounds || isOutOfBoundsOrOverlapping) {
+            return false
+        }
         priorEnd = patch.end
     }
     return true
 }
+
+/** Applies validated non-overlapping JSON-content patches in descending raw-offset order. */
+internal fun applyRawJsonPatches(source: ByteArray, patches: Collection<RawJsonPatch>): ByteArray {
+    var rewritten = source.copyOf()
+    patches.sortedByDescending(RawJsonPatch::start).forEach { patch ->
+        val start = patch.start.toIntExact()
+        val end = patch.end.toIntExact()
+        val next = ByteArray(rewritten.size - (end - start) + patch.replacement.size)
+        rewritten.copyInto(next, 0, 0, start)
+        patch.replacement.copyInto(next, start)
+        rewritten.copyInto(next, start + patch.replacement.size, end, rewritten.size)
+        rewritten = next
+    }
+    return rewritten
+}
+
+/** Encodes one canonical marker as JSON string content without surrounding quotes. */
+internal fun encodeJsonStringContent(marker: String): ByteArray = marker.toByteArray(UTF_8)
 
 /** Converts a raw offset to a JVM array index without truncation. */
 private fun Long.toIntExact(): Int {
