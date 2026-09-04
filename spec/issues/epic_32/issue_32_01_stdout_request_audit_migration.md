@@ -97,9 +97,10 @@ contract; [EPIC-32](../../epics/epic_32_best_effort_stdout_audit.md).
   path/query, headers, credentials, identity, user/groups, session и inbound
   propagation, затем доказывают их отсутствие в обоих stdout events и client
   errors.
-- [x] `MVP-06`, `OBS-01`, `OBS-02` и current observability/coverage docs
-  описывают реализованную REQUEST pair, сохраняя RESPONSE pair как future
-  behavior owning leaves EPIC-20.
+- [x] На момент закрытия VIG-32-01 `MVP-06`, `OBS-01`, `OBS-02` и
+  observability/coverage docs описывали реализованную REQUEST pair, сохраняя
+  RESPONSE pair за owning leaves EPIC-20; ordinary pair позднее закрыта
+  VIG-20-02.
 - [x] Все добавленные и изменённые Kotlin declarations, lifecycle helpers и
   test methods имеют актуальный KDoc. Зафиксированы expected RED, focused GREEN,
   affected request/process suite, `./gradlew validateWorkItems` и

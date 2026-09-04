@@ -1,6 +1,6 @@
 # VIG-20-02: Non-stream response inspection and enforcement
 
-**Статус:** Ready for implementation
+**Статус:** Done
 **Epic:** [EPIC-20](../../epics/epic_20_atomic_in_memory_response_analysis.md)
 **Ветка:** Response enforcement > non-stream Chat Completions
 **Зависит от:** [VIG-06-03](../epic_06/issue_06_03_chat_completions_response_parser.md), [VIG-20-01](issue_20_01_retained_memory_response_source.md), [VIG-20-03](issue_20_03_reusable_text_masker.md), [VIG-29](../issue_29_openai_error_contract.md), [VIG-32-01](../epic_32/issue_32_01_stdout_request_audit_migration.md)
@@ -207,61 +207,61 @@ invalid_upstream_response`.
 
 ### Real-Armeria E2E
 
-- [ ] Causal `ALLOW` case удерживает upstream headers и partial JSON до EOF,
+- [x] Causal `ALLOW` case удерживает upstream headers и partial JSON до EOF,
   затем удерживает complete source на detector barrier. В обеих точках client
   не видит headers/body; после decision получает original status, разрешённые
   headers и body byte-for-byte.
-- [ ] Valid Chat Completions bodies со status `200`, `429` и `500` проходят
+- [x] Valid Chat Completions bodies со status `200`, `429` и `500` проходят
   один response workflow; `ALLOW` сохраняет каждый original status/body.
-- [ ] `MASK` case покрывает несколько choices, unknown metadata, JSON escapes
+- [x] `MASK` case покрывает несколько choices, unknown metadata, JSON escapes
   и multibyte UTF-8. Меняются только selected literals; `Content-Length`
   пересчитан, hop-by-hop headers и representation validators удалены, остальные
   end-to-end metadata сохранены.
-- [ ] Finding одного fragment с `BLOCK` блокирует весь response. Client
+- [x] Finding одного fragment с `BLOCK` блокирует весь response. Client
   получает exact VIG-29 `403 policy_blocked` без upstream status, headers или
   body.
-- [ ] Gap matrix покрывает only-gap, clean-plus-gap, detected-plus-gap `MASK`
+- [x] Gap matrix покрывает only-gap, clean-plus-gap, detected-plus-gap `MASK`
   и detected-plus-gap `BLOCK`; assertions проверяют reaction, coverage и audit
   precedence `DETECTED` > `INSPECTION_GAP` > `CLEAN`.
-- [ ] Missing/non-array `choices`, malformed JSON, ambiguous content и
+- [x] Missing/non-array `choices`, malformed JSON, ambiguous content и
   non-identity `Content-Encoding` дают exact VIG-29 `502
   invalid_upstream_response` без partial disclosure.
-- [ ] Detector failure и timeout дают exact VIG-29 `503
+- [x] Detector failure и timeout дают exact VIG-29 `503
   response_inspection_unavailable` с `Retry-After: 1` без partial disclosure.
-- [ ] Client cancellation во время response ingest, analysis и handoff race,
+- [x] Client cancellation во время response ingest, analysis и handoff race,
   а также shutdown освобождают retained source ровно один раз без partial
   disclosure.
-- [ ] Audit assertions покрывают exact ordering, `CLEAN`, `DETECTED`,
+- [x] Audit assertions покрывают exact ordering, `CLEAN`, `DETECTED`,
   `INSPECTION_GAP`, `ERROR`, отсутствие pair до analysis и отсутствие payload,
   spans, credentials, identity и upstream body.
 
 ### Pure domain, source-map и rewrite
 
-- [ ] Cases покрывают derived `ALLOW`/`MASK`/`BLOCK`, global `BLOCK`
+- [x] Cases покрывают derived `ALLOW`/`MASK`/`BLOCK`, global `BLOCK`
   precedence и immutable per-fragment instruction grouping без detector rerun.
-- [ ] Cases покрывают `OUTPUT_TEXT`, `REFUSAL`, modern/deprecated tool
+- [x] Cases покрывают `OUTPUT_TEXT`, `REFUSAL`, modern/deprecated tool
   arguments и audio transcript; fragment offsets никогда не смешиваются.
-- [ ] Cases покрывают ASCII, multibyte UTF-8, JSON escapes, `\uXXXX`, несколько
+- [x] Cases покрывают ASCII, multibyte UTF-8, JSON escapes, `\uXXXX`, несколько
   spans/choices и byte-identical preservation unknown fields/formatting.
-- [ ] Invalid, duplicate или ambiguous locator и невозможное UTF-8/source
+- [x] Invalid, duplicate или ambiguous locator и невозможное UTF-8/source
   mapping, включая `TextMaskingException`, дают typed failure без partial
   output и без mutation input; real response caller отображает failure в exact
   VIG-29 `503 response_inspection_unavailable` без unmasked forwarding.
-- [ ] One-shot response handoff tests покрывают successful transfer, repeated
+- [x] One-shot response handoff tests покрывают successful transfer, repeated
   transfer, close-before-transfer, synchronous handoff failure и cancellation
   races с exact-once cleanup.
 
 ## Критерии выполнения
 
-- [ ] Deterministic real-Armeria E2E покрывает `ALLOW` byte-for-byte replay,
+- [x] Deterministic real-Armeria E2E покрывает `ALLOW` byte-for-byte replay,
   `MASK` с exact replacement и header rewrite, а также `BLOCK` без одного
   upstream byte клиенту.
-- [ ] Tests покрывают independent choices, upstream `4xx`/`5xx`, recognized
+- [x] Tests покрывают independent choices, upstream `4xx`/`5xx`, recognized
   non-text `INSPECTION_GAP`, malformed/ambiguous response, detector/policy
   timeout/failure, cancellation и shutdown cleanup.
-- [ ] Response публикует ровно одну safe VIG-32-01 stdout pair после actual parse
+- [x] Response публикует ровно одну safe VIG-32-01 stdout pair после actual parse
   и policy selection. Payload, spans, credentials и identity не логируются.
-- [ ] Новые и изменённые Kotlin declarations, test methods и lifecycle helpers
+- [x] Новые и изменённые Kotlin declarations, test methods и lifecycle helpers
   имеют KDoc; focused tests, `validateWorkItems` и `./gradlew build` проходят.
 
 ## Ambiguity Report

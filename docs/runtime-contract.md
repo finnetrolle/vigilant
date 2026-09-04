@@ -27,16 +27,19 @@ upstream с исходным значением без изменений.
 
 Guardrail-enabled response, включая SSE, полностью удерживается в RAM до
 protocol completion. Клиент до этого не получает upstream status, headers или
-body. Ordinary JSON считается complete по end-of-stream, SSE только после
-отдельного standalone `data: [DONE]`. Existing Chat Completions response parser
-выполняется на blocking-safe executor. Valid response затем replay-ится с
-client backpressure, исходными status/headers/trailers и byte-identical body.
+body. Ordinary JSON считается complete по end-of-stream, разбирается один раз с
+immutable source coordinates и проходит response policy evaluation. `ALLOW`
+replay-ит original status, разрешённые headers/trailers и exact body. `MASK` меняет
+только selected decoded UTF-8 spans в исходных JSON string literals, сохраняя
+остальные bytes; `BLOCK` скрывает весь upstream response. SSE завершается
+только после standalone `data: [DONE]` и до VIG-20-05 replay-ится byte-for-byte
+без policy enforcement.
 
 Request URL, model и normalized identity сохраняются в request-scoped handoff.
 Response context использует тот же snapshot и отличается только phase
-`RESPONSE`; модель из upstream response его не переопределяет. Текущий retained
-source increment не запускает response policy evaluation, detector, reaction
-или response audit pair.
+`RESPONSE`; модель из upstream response его не переопределяет. Каждое textual
+response field оценивается как независимый fragment; findings не пересекают
+choice, semantic field, tool call или transcript boundaries.
 
 ## Bearer identity
 
@@ -64,10 +67,10 @@ metrics, traces или errors; policy context получает только norm
 user/groups. Принятый Authorization передаётся upstream с исходным значением
 без изменений.
 
-## Shadow PII analysis outcome
+## PII analysis outcome
 
-Policy snapshot выбирает global request policy и запускает `fast-pii` для
-каждого независимого text fragment. Terminal `policy.analysis_completed`
+Policy snapshot выбирает request или response policies и запускает `fast-pii`
+для каждого независимого text fragment. Terminal `policy.analysis_completed`
 публикует outcome:
 
 - `DETECTED` - найден хотя бы один PII finding;
@@ -75,9 +78,10 @@ Policy snapshot выбирает global request policy и запускает `fa
 - `INSPECTION_GAP` - известный non-text content передан без изменений;
 - `ERROR` - inspection не удалось завершить корректно.
 
-Для успешных `CLEAN`, `DETECTED` и `INSPECTION_GAP` текущая reaction всегда
-`ALLOW`: findings не блокируют и не изменяют request. `ERROR` не содержит
-reaction и публикует stable `error.code`.
+Для request phase current startup contract остаётся shadow-only `ALLOW`. Response
+phase разрешает `ALLOW`, detected `MASK` или `BLOCK`; любой fragment с
+`BLOCK` блокирует весь response. `ERROR` не содержит reaction и публикует
+stable `error.code`.
 
 Malformed JSON, неизвестный content discriminator и неоднозначная
 content-bearing structure обрабатываются fail-closed и не достигают upstream.
@@ -126,6 +130,26 @@ source и не публикует пару. Cancellation после start best-e
 upstream handoff запрещён. Отменённому соединению delivery HTTP error не
 гарантируется.
 
+## Ordinary response enforcement
+
+Ordinary JSON parser извлекает independent `content`, `refusal`, modern/deprecated
+function arguments и audio transcript fragments. Recognized audio data остаётся
+inspection gap; `null` не создаёт fragment или gap. Audit outcome использует
+precedence `DETECTED` > `INSPECTION_GAP` > `CLEAN`.
+
+`MASK` проверяет все locators и decoded UTF-8 boundaries до первой записи,
+применяет patches в descending raw-offset order и не пересериализует JSON.
+`Content-Length` пересчитывается; hop-by-hop headers, `ETag`, `Content-MD5` и
+`Digest` удаляются, остальные end-to-end metadata сохраняются.
+Absent или exact `Content-Encoding: identity` поддерживаются; gzip и любое
+другое encoding дают safe `502` без декодирования.
+
+Missing/non-array `choices`, malformed/ambiguous content и unsupported content type дают
+exact `502 invalid_upstream_response`. Detector/policy deadline и failure, invalid masking
+instruction или source-map/rewrite failure дают exact `503
+response_inspection_unavailable` с `Retry-After: 1`. Ни один из этих paths не
+раскрывает upstream status, headers или body.
+
 ## Закрытая матрица VIG-29
 
 Production encoder фиксирует пять исчерпывающих OpenAI-compatible errors из
@@ -144,15 +168,15 @@ credentials, identity, policy references или внутренние причи�
 имеет ровно поле `error`, а оно ровно три string fields: `message`, `type`,
 `code`.
 
-В текущем shadow runtime подключены request technical outcome для capacity,
-executor, source и orchestration failures, а также
-`invalid_upstream_response` для response protocol failure. `BLOCK` и response
-inspection unavailable остаются недоступны до owning enforcement leaves.
+В runtime подключены request technical outcomes, response `BLOCK`, response
+inspection unavailable и `invalid_upstream_response`. Request `BLOCK` остаётся до
+owning request-enforcement work item.
 
 ## Upstream errors
 
-Корректные Chat Completions responses, включая `4xx` и `5xx`, проходят
-retention и protocol validation, затем передаются без изменений. Malformed
+Корректные ordinary Chat Completions responses, включая `4xx` и `5xx`,
+проходят retention, protocol validation и response policy decision. `ALLOW` сохраняет
+их status/body, а `MASK`/`BLOCK` применяются так же, как для `200`. Malformed
 JSON/SSE, missing или malformed standalone `[DONE]`, upstream body interruption
 и transport-generated non-protocol body дают exact VIG-29 `502
 invalid_upstream_response` без upstream disclosure.

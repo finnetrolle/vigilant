@@ -26,7 +26,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 /**
- * Request-side OpenAI Chat Completions shadow-inspection boundary.
+ * OpenAI Chat Completions request-shadow and retained-response enforcement boundary.
  *
  * The complete request body is retained by [requestSourceQuota] before this adapter
  * delegates typed orchestration to [workflow]. Identity is extracted before body demand;
@@ -34,7 +34,7 @@ import java.util.concurrent.atomic.AtomicReference
  * transfer invokes [bypassProxyService] with the accepted Authorization unchanged. Exact
  * request replay and stable upstream transport errors remain owned by the transport proxy;
  * [responseAnalysisLifecycle] prevents a new retained response phase after shutdown starts, and
- * [retainedResponseHandler] owns complete response retention, validation and replay.
+ * [retainedResponseHandler] owns complete response retention, ordinary enforcement and replay.
  */
 @Suppress("LongMethod", "LongParameterList", "ReturnCount", "TooGenericExceptionCaught", "TooManyFunctions")
 class PiiShadowProxyService internal constructor(
@@ -249,7 +249,7 @@ class PiiShadowProxyService internal constructor(
             ready.transferTo { publisher ->
                 retainedResponseHandler.retain(
                     ctx,
-                    bypassProxyService.serve(ctx, replayRequest(request, publisher)),
+                    bypassProxyService.exchange(ctx, replayRequest(request, publisher)),
                 )
             }
         }

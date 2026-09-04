@@ -9,15 +9,18 @@ import io.vigilant.policy.domain.DetectionResult
 import io.vigilant.policy.domain.Finding
 import io.vigilant.policy.domain.PolicyDecision
 import io.vigilant.policy.domain.PolicyReference
+import io.vigilant.policy.domain.PolicyPhase
 import io.vigilant.policy.domain.immutablePolicyReferences
 import io.vigilant.policy.selection.PolicySelection
 import io.vigilant.protocol.openai.InspectionCoverage
 import io.vigilant.protocol.openai.NormalizedChatCompletionsRequest
+import io.vigilant.protocol.openai.NormalizedChatCompletionsResponse
 import java.time.Duration
 import org.slf4j.LoggerFactory
 import org.slf4j.spi.LoggingEventBuilder
 
-/** Publishes the safe best-effort request-analysis lifecycle through the existing logger. */
+/** Publishes safe best-effort request and response analysis lifecycles through one logger. */
+@Suppress("LongParameterList")
 internal class ShadowAuditLogger {
     private val logger = LoggerFactory.getLogger(PiiShadowProxyService::class.java)
 
@@ -31,6 +34,7 @@ internal class ShadowAuditLogger {
             analysisEventBuilder(
                 ctx = ctx,
                 eventName = "policy.analysis_started",
+                phase = PolicyPhase.REQUEST,
                 policies = selection.applied.map { policy -> policy.reference },
                 inspectionSpan = inspectionSpan,
             )
@@ -57,7 +61,7 @@ internal class ShadowAuditLogger {
         emitCompleted(
             ctx = ctx,
             completion =
-                RequestAnalysisCompletion(
+                AnalysisCompletion(
                     outcome = outcome,
                     coverage = normalizedRequest.coverage,
                     policies = decisions.flatMap(PolicyDecision::appliedPolicies),
@@ -65,7 +69,9 @@ internal class ShadowAuditLogger {
                     findings = findings,
                     duration = duration,
                     errorCode = if (outcome == AnalysisOutcome.ERROR) decisions.auditErrorCode() else null,
+                    reaction = if (outcome == AnalysisOutcome.ERROR) null else "ALLOW",
                 ),
+            phase = PolicyPhase.REQUEST,
             inspectionSpan = inspectionSpan,
         )
     }
@@ -81,7 +87,7 @@ internal class ShadowAuditLogger {
         emitCompleted(
             ctx = ctx,
             completion =
-                RequestAnalysisCompletion(
+                AnalysisCompletion(
                     outcome = AnalysisOutcome.ERROR,
                     coverage = InspectionCoverage.UNINSPECTABLE,
                     policies = selection.applied.map { policy -> policy.reference },
@@ -89,21 +95,127 @@ internal class ShadowAuditLogger {
                     findings = emptyList(),
                     duration = duration,
                     errorCode = errorCode,
+                    reaction = null,
                 ),
+            phase = PolicyPhase.REQUEST,
             inspectionSpan = inspectionSpan,
+        )
+    }
+
+    /** Publishes one safe RESPONSE lifecycle start after selection and before detector execution. */
+    fun emitResponseStarted(
+        ctx: ServiceRequestContext,
+        selection: PolicySelection,
+        inspectionSpan: Span?,
+    ) {
+        withRequestTracingMdc(ctx, inspectionSpan, includeUserControlledCorrelation = false) {
+            analysisEventBuilder(
+                ctx = ctx,
+                eventName = "policy.analysis_started",
+                phase = PolicyPhase.RESPONSE,
+                policies = selection.applied.map { policy -> policy.reference },
+                inspectionSpan = inspectionSpan,
+            ).log("Policy analysis started")
+        }
+    }
+
+    /** Publishes one safe successful RESPONSE terminal aggregate with the applied reaction. */
+    fun emitResponseCompleted(
+        ctx: ServiceRequestContext,
+        normalizedResponse: NormalizedChatCompletionsResponse,
+        decisions: List<PolicyDecision>,
+        reaction: String,
+        duration: Duration,
+        inspectionSpan: Span?,
+    ) {
+        val findings = decisions.findings()
+        val outcome =
+            when {
+                findings.isNotEmpty() -> AnalysisOutcome.DETECTED
+                normalizedResponse.inspectionGaps.isNotEmpty() -> AnalysisOutcome.INSPECTION_GAP
+                else -> AnalysisOutcome.CLEAN
+            }
+        emitCompleted(
+            ctx,
+            AnalysisCompletion(
+                outcome = outcome,
+                coverage = normalizedResponse.coverage,
+                policies = decisions.flatMap(PolicyDecision::appliedPolicies),
+                inspectedFragments = normalizedResponse.fragments.size,
+                findings = findings,
+                duration = duration,
+                errorCode = null,
+                reaction = reaction,
+            ),
+            PolicyPhase.RESPONSE,
+            inspectionSpan,
+        )
+    }
+
+    /** Publishes one stable RESPONSE terminal ERROR after detector execution actually began. */
+    fun emitResponseFailed(
+        ctx: ServiceRequestContext,
+        selection: PolicySelection,
+        coverage: InspectionCoverage,
+        duration: Duration,
+        errorCode: String,
+        inspectionSpan: Span?,
+    ) {
+        emitCompleted(
+            ctx,
+            AnalysisCompletion(
+                outcome = AnalysisOutcome.ERROR,
+                coverage = coverage,
+                policies = selection.applied.map { policy -> policy.reference },
+                inspectedFragments = 0,
+                findings = emptyList(),
+                duration = duration,
+                errorCode = errorCode,
+                reaction = null,
+            ),
+            PolicyPhase.RESPONSE,
+            inspectionSpan,
+        )
+    }
+
+    /** Publishes one stable RESPONSE ERROR with the completed normalized decision aggregate. */
+    fun emitResponseFailed(
+        ctx: ServiceRequestContext,
+        normalizedResponse: NormalizedChatCompletionsResponse,
+        decisions: List<PolicyDecision>,
+        duration: Duration,
+        errorCode: String,
+        inspectionSpan: Span?,
+    ) {
+        emitCompleted(
+            ctx,
+            AnalysisCompletion(
+                outcome = AnalysisOutcome.ERROR,
+                coverage = normalizedResponse.coverage,
+                policies = decisions.flatMap(PolicyDecision::appliedPolicies),
+                inspectedFragments = normalizedResponse.fragments.size,
+                findings = decisions.findings(),
+                duration = duration,
+                errorCode = errorCode,
+                reaction = null,
+            ),
+            PolicyPhase.RESPONSE,
+            inspectionSpan,
         )
     }
 
     /** Renders the common terminal schema without payload-derived or request-controlled data. */
     private fun emitCompleted(
         ctx: ServiceRequestContext,
-        completion: RequestAnalysisCompletion,
+        completion: AnalysisCompletion,
+        phase: PolicyPhase,
         inspectionSpan: Span?,
     ) {
         val builder =
             analysisEventBuilder(
                 ctx = ctx,
                 eventName = "policy.analysis_completed",
+                phase = phase,
                 policies = completion.policies,
                 inspectionSpan = inspectionSpan,
             )
@@ -119,7 +231,7 @@ internal class ShadowAuditLogger {
         if (completion.outcome == AnalysisOutcome.ERROR) {
             builder.addKeyValue("error.code", requireNotNull(completion.errorCode))
         } else {
-            builder.addKeyValue("reaction", "ALLOW")
+            builder.addKeyValue("reaction", requireNotNull(completion.reaction))
         }
         withRequestTracingMdc(ctx, inspectionSpan, includeUserControlledCorrelation = false) {
             builder.log(
@@ -133,16 +245,18 @@ internal class ShadowAuditLogger {
     }
 
     /**
-     * Creates the shared safe envelope for one request-analysis lifecycle event.
+     * Creates the shared safe envelope for one analysis lifecycle event.
      *
      * @param ctx owning request scope supplying canonical tracing correlation.
      * @param eventName exact lifecycle event name.
+     * @param phase request or response analysis direction.
      * @param policies policies applied to the analysis in any input order.
      * @param inspectionSpan current INTERNAL inspection span.
      */
     private fun analysisEventBuilder(
         ctx: ServiceRequestContext,
         eventName: String,
+        phase: PolicyPhase,
         policies: List<PolicyReference>,
         inspectionSpan: Span?,
     ): LoggingEventBuilder {
@@ -152,7 +266,7 @@ internal class ShadowAuditLogger {
         return logger.atInfo()
             .addKeyValue("event.name", eventName)
             .addKeyValue("protocol", "openai.chat_completions")
-            .addKeyValue("phase", "REQUEST")
+            .addKeyValue("phase", phase.name)
             .addKeyValue("trace.id", correlation.traceId)
             .addKeyValue("span.id", correlation.spanId)
             .addKeyValue("parent.span.id", correlation.parentSpanId)
@@ -162,8 +276,8 @@ internal class ShadowAuditLogger {
     }
 }
 
-/** Immutable typed aggregate rendered by one terminal request-analysis event. */
-private data class RequestAnalysisCompletion(
+/** Immutable typed aggregate rendered by one terminal request or response analysis event. */
+private data class AnalysisCompletion(
     /** Safe terminal outcome. */
     val outcome: AnalysisOutcome,
     /** Protocol-derived inspection completeness. */
@@ -178,9 +292,11 @@ private data class RequestAnalysisCompletion(
     val duration: Duration,
     /** Stable safe failure code required only for [AnalysisOutcome.ERROR]. */
     val errorCode: String?,
+    /** Applied successful reaction, absent only for [AnalysisOutcome.ERROR]. */
+    val reaction: String?,
 )
 
-/** Safe terminal outcomes exposed by the request-analysis stdout schema. */
+/** Safe terminal outcomes exposed by the shared request/response analysis stdout schema. */
 private enum class AnalysisOutcome {
     /** Every inspectable fragment completed without findings or gaps. */
     CLEAN,

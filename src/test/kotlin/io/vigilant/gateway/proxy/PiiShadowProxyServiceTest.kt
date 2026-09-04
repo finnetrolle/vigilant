@@ -8,6 +8,7 @@ import com.linecorp.armeria.client.ClientFactory
 import com.linecorp.armeria.client.WebClient
 import com.linecorp.armeria.common.AggregatedHttpResponse
 import com.linecorp.armeria.common.HttpData
+import com.linecorp.armeria.common.HttpHeaderNames
 import com.linecorp.armeria.common.HttpMethod
 import com.linecorp.armeria.common.HttpObject
 import com.linecorp.armeria.common.HttpRequest
@@ -53,6 +54,7 @@ import io.vigilant.gateway.identity.validJwtClaims
 import io.vigilant.gateway.tracing.TracingService
 import io.vigilant.policy.adapter.FastPiiPolicyAdapter
 import io.vigilant.policy.decision.ReactionAggregator
+import io.vigilant.policy.domain.DetectionResult
 import io.vigilant.policy.domain.Detector
 import io.vigilant.policy.domain.DetectorId
 import io.vigilant.policy.domain.Disposition
@@ -68,12 +70,18 @@ import io.vigilant.policy.domain.PolicyVersion
 import io.vigilant.policy.domain.Reaction
 import io.vigilant.policy.domain.SubjectId
 import io.vigilant.policy.domain.SubjectType
+import io.vigilant.policy.domain.Transformation
 import io.vigilant.policy.engine.PolicyEngine
 import io.vigilant.policy.execution.DetectorExecutionCoordinator
 import io.vigilant.policy.execution.DetectorExecutor
 import io.vigilant.policy.provider.DummyPolicyProvider
 import io.vigilant.policy.provider.PolicyProvider
 import io.vigilant.policy.selection.PolicySelector
+import io.vigilant.protocol.openai.CompleteByteSource
+import io.vigilant.protocol.openai.JsonFragmentMaskingPlan
+import io.vigilant.protocol.openai.JsonResponseRewriteFailure
+import io.vigilant.protocol.openai.JsonResponseRewriteResult
+import io.vigilant.protocol.openai.NormalizedChatCompletionsResponse
 import io.vigilant.source.RequestSourceLimits
 import io.vigilant.source.RequestSourceOpenResult
 import io.vigilant.source.RequestSourceQuota
@@ -107,7 +115,7 @@ import org.reactivestreams.Subscriber
 import org.reactivestreams.Subscription
 import org.slf4j.LoggerFactory
 
-/** Real HTTP tracer-bullet tests for request-side PII shadow inspection. */
+/** Real HTTP tracer-bullet tests for request shadow inspection and ordinary response enforcement. */
 @Suppress("LargeClass")
 class PiiShadowProxyServiceTest {
     private val fixture = GatewayTestFixture()
@@ -237,16 +245,132 @@ class PiiShadowProxyServiceTest {
         assertRetainedResponseReleased(retained, "ordinary exact replay")
     }
 
+    /** Ordinary ALLOW stays undisclosed through upstream EOF and the final response detector decision. */
+    @Test
+    @Suppress("LongMethod")
+    fun `response ALLOW causally retains headers and body until detector decision`() {
+        val releaseTail = CountDownLatch(1)
+        val detectorEntered = CountDownLatch(1)
+        val releaseDetector = CountDownLatch(1)
+        val responseSource = CompletableFuture<RetainedResponseSource>()
+        val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
+        val disclosureProbe =
+            ResponseDisclosureProbe(responseSource) {
+                events.any {
+                    it.keyValue("phase") == "RESPONSE" &&
+                        it.keyValue("event.name") == "policy.analysis_completed"
+                }
+            }
+        val prefix = "{\"choices\":[{\"message\":{\"content\":\"response-"
+        val suffix = "held\"}}],\"unknown\":1.00}"
+        val detector =
+            Detector { payload ->
+                if (payload == "response-held") {
+                    detectorEntered.countDown()
+                    check(releaseDetector.await(2, TimeUnit.SECONDS)) { "response detector was not released" }
+                }
+                io.vigilant.policy.domain.DetectionResult.Clean
+            }
+        val upstream = fixture.startServer {
+            HttpResponse.streaming().also { response ->
+                thread(name = "response-allow-source") {
+                    response.write(
+                        ResponseHeaders.builder(HttpStatus.TOO_MANY_REQUESTS)
+                            .contentType(MediaType.JSON)
+                            .add("x-response-metadata", "preserved")
+                            .build(),
+                    )
+                    response.write(HttpData.ofUtf8(prefix))
+                    check(releaseTail.await(5, TimeUnit.SECONDS)) { "response tail was not released" }
+                    response.write(HttpData.ofUtf8(suffix))
+                    response.close()
+                }
+            }
+        }
+        val policies =
+            DummyPolicyProvider(
+                listOf(
+                    shadowPolicy(Duration.ofSeconds(2)),
+                    responsePolicy("response-allow", Reaction(Disposition.ALLOW, emptyList())),
+                ),
+            )
+        val gateway =
+            startShadowGateway(
+                fixture.serverUri(upstream),
+                detector = detector,
+                policyProvider = policies,
+                responseSourceCreated = responseSource::complete,
+                responseOutputObserved = disclosureProbe::observe,
+            )
+        val received = ReceivedStream()
+
+        WebClient.of(fixture.serverUri(gateway))
+            .execute(chatCompletionsRequest("request-safe"))
+            .subscribe(received)
+
+        val retained = awaitRetainedResponseSource(responseSource, "response ALLOW prefix")
+        disclosureProbe.assertNoEarlyDisclosure("response ALLOW before EOF")
+        assertEquals(null, received.headers.get())
+        assertTrue(received.chunks.isEmpty())
+        releaseTail.countDown()
+
+        assertTrue(detectorEntered.await(2, TimeUnit.SECONDS), "response detector execution did not begin")
+        disclosureProbe.assertNoEarlyDisclosure("response ALLOW during detector execution")
+        assertEquals(null, received.headers.get())
+        assertTrue(received.chunks.isEmpty())
+        assertEquals(
+            listOf("policy.analysis_started"),
+            events.filter { it.keyValue("phase") == "RESPONSE" }.analysisEventNames(),
+        )
+
+        releaseDetector.countDown()
+        assertTrue(received.completion.await(2, TimeUnit.SECONDS), "response ALLOW did not complete")
+        received.failure?.let { throw AssertionError("response ALLOW failed", it) }
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, received.headers.get()?.status())
+        assertEquals("preserved", received.headers.get()?.get("x-response-metadata"))
+        assertEquals(prefix + suffix, received.chunks.joinToString(""))
+        assertEquals(
+            listOf("policy.analysis_started", "policy.analysis_completed"),
+            events.filter { it.keyValue("phase") == "RESPONSE" }.analysisEventNames(),
+        )
+        val completed =
+            events.single {
+                it.keyValue("phase") == "RESPONSE" &&
+                    it.keyValue("event.name") == "policy.analysis_completed"
+            }
+        assertEquals("CLEAN", completed.keyValue("outcome"))
+        assertEquals("FULLY_INSPECTABLE", completed.keyValue("coverage"))
+        assertEquals("ALLOW", completed.keyValue("reaction"))
+        assertRetainedResponseReleased(retained, "response ALLOW replay")
+    }
+
     /** Valid ordinary responses retain and replay every original status and body, including 4xx/5xx. */
     @Test
     fun `ordinary response preserves valid success and error statuses byte for byte`() {
+        val detectorInvocations = AtomicInteger()
+        val policies =
+            DummyPolicyProvider(
+                listOf(
+                    shadowPolicy(Duration.ofSeconds(2)),
+                    responsePolicy("response-status", Reaction(Disposition.ALLOW, emptyList())),
+                ),
+            )
         listOf(HttpStatus.OK, HttpStatus.TOO_MANY_REQUESTS, HttpStatus.INTERNAL_SERVER_ERROR)
             .forEach { status ->
                 val body =
                     "{ \"choices\" : [ { \"message\" : { \"role\" : \"assistant\", " +
                         "\"content\" : \"status-${status.code()}\" } } ], \"unknown\" : true }"
                 val upstream = fixture.startServer { HttpResponse.of(status, MediaType.JSON, body) }
-                val gateway = startShadowGateway(fixture.serverUri(upstream))
+                val gateway =
+                    startShadowGateway(
+                        fixture.serverUri(upstream),
+                        detector =
+                            Detector { payload ->
+                                if (payload.startsWith("status-")) detectorInvocations.incrementAndGet()
+                                DetectionResult.Clean
+                            },
+                        policyProvider = policies,
+                    )
 
                 val response =
                     WebClient.of(fixture.serverUri(gateway))
@@ -256,6 +380,7 @@ class PiiShadowProxyServiceTest {
                 assertEquals(status, response.status(), status.toString())
                 assertEquals(body, response.contentUtf8(), status.toString())
             }
+        assertEquals(3, detectorInvocations.get(), "each upstream status must enter response detector execution")
     }
 
     /** SSE status, headers, and events stay hidden until a standalone DONE event is retained. */
@@ -365,6 +490,698 @@ class PiiShadowProxyServiceTest {
         }
     }
 
+    /** MASK patches only detected literals and publishes rewritten representation metadata. */
+    @Test
+    @Suppress("LongMethod", "MaxLineLength")
+    fun `response MASK rewrites exact multi fragment bytes and invalidates stale headers`() {
+        val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
+        val original =
+            """{ "choices" : [ { "message" : { "content" : "contact alice@example.com and escaped \"quoted\" 🌍" } }, { "message" : { "content" : "backup bob@example.org" } } ], "unknown" : { "ratio" : 1.00, "flag" : true } }"""
+        val expected =
+            """{ "choices" : [ { "message" : { "content" : "contact [EMAIL_MASKED] and escaped \"quoted\" 🌍" } }, { "message" : { "content" : "backup [EMAIL_MASKED]" } } ], "unknown" : { "ratio" : 1.00, "flag" : true } }"""
+        val upstream = fixture.startServer {
+            HttpResponse.of(
+                ResponseHeaders.builder(HttpStatus.OK)
+                    .contentType(MediaType.JSON)
+                    .contentLength(original.toByteArray().size.toLong())
+                    .add(HttpHeaderNames.ETAG, "\"private-etag\"")
+                    .add("content-md5", "private-content-md5")
+                    .add("digest", "sha-256=private-digest")
+                    .add(HttpHeaderNames.PROXY_AUTHENTICATE, "Basic private-hop")
+                    .add("x-response-metadata", "preserved")
+                    .build(),
+                HttpData.ofUtf8(original),
+            )
+        }
+        val policies =
+            DummyPolicyProvider(
+                listOf(
+                    shadowPolicy(Duration.ofSeconds(2)),
+                    responsePolicy(
+                        "response-mask",
+                        Reaction(Disposition.ALLOW, setOf(Transformation.MASK)),
+                    ),
+                ),
+            )
+        val gateway = startShadowGateway(fixture.serverUri(upstream), policyProvider = policies)
+
+        val response =
+            WebClient.of(fixture.serverUri(gateway))
+                .execute(chatCompletionsRequest("request-safe"))
+                .aggregate().join()
+
+        assertEquals(HttpStatus.OK, response.status())
+        assertEquals(expected, response.contentUtf8())
+        assertEquals(expected.toByteArray().size.toString(), response.headers().get(HttpHeaderNames.CONTENT_LENGTH))
+        assertEquals("preserved", response.headers().get("x-response-metadata"))
+        listOf(
+            HttpHeaderNames.ETAG,
+            HttpHeaderNames.TRANSFER_ENCODING,
+            HttpHeaderNames.PROXY_AUTHENTICATE,
+            HttpHeaderNames.of("content-md5"),
+            HttpHeaderNames.of("digest"),
+        ).forEach { name -> assertFalse(response.headers().contains(name), "MASK retained $name") }
+        assertTrue(
+            fixture.awaitUntil(Duration.ofSeconds(2)) {
+                events.count {
+                    it.keyValue("phase") == "RESPONSE" &&
+                        it.keyValue("event.name") == "policy.analysis_completed"
+                } == 1
+            },
+            "response MASK audit completion was not observed",
+        )
+        val completed =
+            events.single {
+                it.keyValue("phase") == "RESPONSE" &&
+                    it.keyValue("event.name") == "policy.analysis_completed"
+            }
+        assertEquals("MASK", completed.keyValue("reaction"))
+        assertEquals("DETECTED", completed.keyValue("outcome"))
+        assertEquals(2, completed.keyValue("fragments.inspected"))
+        assertEquals(2, completed.keyValue("findings.total"))
+    }
+
+    /** BLOCK replaces every upstream surface with the exact safe VIG-29 response contract. */
+    @Test
+    @Suppress("MaxLineLength")
+    fun `response BLOCK rejects whole upstream response without disclosure`() {
+        val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
+        val upstreamBody =
+            """{"choices":[{"message":{"content":"safe"}},{"message":{"content":"private blocked@example.com"}}],"private":"upstream-body-sentinel"}"""
+        val upstream = fixture.startServer {
+            HttpResponse.of(
+                ResponseHeaders.builder(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .contentType(MediaType.JSON)
+                    .add("x-upstream-private", "header-sentinel")
+                    .build(),
+                HttpData.ofUtf8(upstreamBody),
+            )
+        }
+        val policies =
+            DummyPolicyProvider(
+                listOf(
+                    shadowPolicy(Duration.ofSeconds(2)),
+                    responsePolicy("response-block", Reaction(Disposition.BLOCK, emptyList())),
+                ),
+            )
+        val gateway = startShadowGateway(fixture.serverUri(upstream), policyProvider = policies)
+
+        val response =
+            WebClient.of(fixture.serverUri(gateway))
+                .execute(chatCompletionsRequest("request-safe"))
+                .aggregate().join()
+
+        assertEquals(HttpStatus.FORBIDDEN, response.status())
+        assertEquals(RESPONSE_BLOCKED_BODY, response.contentUtf8())
+        assertEquals(null, response.headers().get("x-upstream-private"))
+        assertFalse(response.contentUtf8().contains("upstream-body-sentinel"))
+        assertTrue(
+            fixture.awaitUntil(Duration.ofSeconds(2)) {
+                events.count {
+                    it.keyValue("phase") == "RESPONSE" &&
+                        it.keyValue("event.name") == "policy.analysis_completed"
+                } == 1
+            },
+            "response BLOCK audit completion was not observed",
+        )
+        val completed =
+            events.single {
+                it.keyValue("phase") == "RESPONSE" &&
+                    it.keyValue("event.name") == "policy.analysis_completed"
+            }
+        assertEquals("BLOCK", completed.keyValue("reaction"))
+        assertEquals("DETECTED", completed.keyValue("outcome"))
+    }
+
+    /** Gap-only and mixed responses preserve coverage while findings keep outcome precedence. */
+    @Test
+    @Suppress("LongMethod", "MaxLineLength")
+    fun `response gap matrix preserves reaction coverage and audit precedence`() {
+        val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
+        val cases =
+            listOf(
+                ResponseGapCase(
+                    name = "only gap",
+                    original =
+                        """{"choices":[{"message":{"content":null,"audio":{"data":"audio-only-sentinel","transcript":""}}}]}""",
+                    expectedStatus = HttpStatus.OK,
+                    expectedBody =
+                        """{"choices":[{"message":{"content":null,"audio":{"data":"audio-only-sentinel","transcript":""}}}]}""",
+                    reaction = "ALLOW",
+                    outcome = "INSPECTION_GAP",
+                    coverage = "UNINSPECTABLE",
+                    fragments = 0,
+                ),
+                ResponseGapCase(
+                    name = "clean plus gap",
+                    original =
+                        """{"choices":[{"message":{"audio":{"data":"audio-clean-sentinel","transcript":"ordinary speech"}}}]}""",
+                    expectedStatus = HttpStatus.OK,
+                    expectedBody =
+                        """{"choices":[{"message":{"audio":{"data":"audio-clean-sentinel","transcript":"ordinary speech"}}}]}""",
+                    reaction = "ALLOW",
+                    outcome = "INSPECTION_GAP",
+                    coverage = "PARTIALLY_INSPECTABLE",
+                    fragments = 1,
+                ),
+                ResponseGapCase(
+                    name = "detected plus gap MASK",
+                    original =
+                        """{"choices":[{"message":{"audio":{"data":"audio-mask-sentinel","transcript":"mail gap@example.com"}}}]}""",
+                    expectedStatus = HttpStatus.OK,
+                    expectedBody =
+                        """{"choices":[{"message":{"audio":{"data":"audio-mask-sentinel","transcript":"mail [EMAIL_MASKED]"}}}]}""",
+                    reaction = "MASK",
+                    outcome = "DETECTED",
+                    coverage = "PARTIALLY_INSPECTABLE",
+                    fragments = 1,
+                    transformation = Transformation.MASK,
+                ),
+                ResponseGapCase(
+                    name = "detected plus gap BLOCK",
+                    original =
+                        """{"choices":[{"message":{"audio":{"data":"audio-block-sentinel","transcript":"mail gap@example.com"}}}]}""",
+                    expectedStatus = HttpStatus.FORBIDDEN,
+                    expectedBody = RESPONSE_BLOCKED_BODY,
+                    reaction = "BLOCK",
+                    outcome = "DETECTED",
+                    coverage = "PARTIALLY_INSPECTABLE",
+                    fragments = 1,
+                    block = true,
+                ),
+            )
+
+        cases.forEachIndexed { index, case ->
+            val upstream = fixture.startServer { HttpResponse.of(HttpStatus.OK, MediaType.JSON, case.original) }
+            val detected =
+                if (case.block) {
+                    Reaction(Disposition.BLOCK, emptyList())
+                } else {
+                    Reaction(Disposition.ALLOW, listOfNotNull(case.transformation))
+                }
+            val policies =
+                DummyPolicyProvider(
+                    listOf(
+                        shadowPolicy(Duration.ofSeconds(2)),
+                        responsePolicy("response-gap-$index", detected),
+                    ),
+                )
+            val gateway = startShadowGateway(fixture.serverUri(upstream), policyProvider = policies)
+
+            val response =
+                WebClient.of(fixture.serverUri(gateway))
+                    .execute(chatCompletionsRequest("request-safe-$index"))
+                    .aggregate().join()
+
+            assertEquals(case.expectedStatus, response.status(), case.name)
+            assertEquals(case.expectedBody, response.contentUtf8(), case.name)
+            assertTrue(
+                fixture.awaitUntil(Duration.ofSeconds(2)) {
+                    events.count { event ->
+                        event.keyValue("phase") == "RESPONSE" &&
+                            event.keyValue("event.name") == "policy.analysis_completed"
+                    } == index + 1
+                },
+                "${case.name}: response audit completion was not observed",
+            )
+            val completed =
+                events.filter { event ->
+                    event.keyValue("phase") == "RESPONSE" &&
+                        event.keyValue("event.name") == "policy.analysis_completed"
+                }.last()
+            assertEquals(case.reaction, completed.keyValue("reaction"), case.name)
+            assertEquals(case.outcome, completed.keyValue("outcome"), case.name)
+            assertEquals(case.coverage, completed.keyValue("coverage"), case.name)
+            assertEquals(case.fragments, completed.keyValue("fragments.inspected"), case.name)
+        }
+    }
+
+    /** Invalid JSON shapes, media type, and encoded bodies fail closed before response analysis. */
+    @Test
+    @Suppress("LongMethod")
+    fun `invalid ordinary response matrix returns exact safe upstream error without disclosure`() {
+        val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
+        val cases =
+            listOf(
+                InvalidOrdinaryResponseCase("missing choices", "{}"),
+                InvalidOrdinaryResponseCase("non-array choices", "{\"choices\":\"private-non-array\"}"),
+                InvalidOrdinaryResponseCase("malformed JSON", "{\"choices\":[private-malformed"),
+                InvalidOrdinaryResponseCase(
+                    "ambiguous content",
+                    """{"choices":[{"message":{"content":{"type":"future","text":"private-ambiguous"}}}]}""",
+                ),
+                InvalidOrdinaryResponseCase(
+                    "unsupported content type",
+                    """{"choices":[{"message":{"content":"private-content-type"}}]}""",
+                    contentType = "application/problem+json",
+                ),
+                InvalidOrdinaryResponseCase(
+                    "gzip content encoding",
+                    """{"choices":[{"message":{"content":"private-gzip"}}]}""",
+                    contentEncoding = "gzip",
+                ),
+                InvalidOrdinaryResponseCase(
+                    "mixed-case identity content encoding",
+                    """{"choices":[{"message":{"content":"private-identity"}}]}""",
+                    contentEncoding = "Identity",
+                ),
+            )
+
+        cases.forEach { case ->
+            val upstream = fixture.startServer {
+                val headers =
+                    ResponseHeaders.builder(HttpStatus.valueOf(418))
+                        .add(HttpHeaderNames.CONTENT_TYPE, case.contentType)
+                        .add("x-upstream-private", case.name)
+                        .apply {
+                            case.contentEncoding?.let { value -> add(HttpHeaderNames.CONTENT_ENCODING, value) }
+                        }.build()
+                HttpResponse.of(headers, HttpData.ofUtf8(case.body))
+            }
+            val policies =
+                DummyPolicyProvider(
+                    listOf(
+                        shadowPolicy(Duration.ofSeconds(2)),
+                        responsePolicy("response-invalid", Reaction(Disposition.ALLOW, emptyList())),
+                    ),
+                )
+            val gateway = startShadowGateway(fixture.serverUri(upstream), policyProvider = policies)
+            val responseEventsBefore = events.count { event -> event.keyValue("phase") == "RESPONSE" }
+
+            val response =
+                WebClient.of(fixture.serverUri(gateway))
+                    .execute(chatCompletionsRequest("request-safe"))
+                    .aggregate().join()
+
+            assertEquals(HttpStatus.BAD_GATEWAY, response.status(), case.name)
+            assertEquals(INVALID_UPSTREAM_RESPONSE_BODY, response.contentUtf8(), case.name)
+            assertEquals(null, response.headers().get("x-upstream-private"), case.name)
+            assertFalse(response.contentUtf8().contains("private"), "${case.name} disclosed upstream bytes")
+            assertEquals(
+                responseEventsBefore,
+                events.count { event -> event.keyValue("phase") == "RESPONSE" },
+                "${case.name} unexpectedly started response analysis",
+            )
+        }
+    }
+
+    /** Detector failure and deadline return one safe 503 and one exact RESPONSE error pair. */
+    @Test
+    @Suppress("LongMethod", "MaxLineLength")
+    fun `response detector failure and timeout fail closed with exact audit aggregate`() {
+        val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
+        val timeoutEntered = CountDownLatch(1)
+        val timeoutCancelled = CountDownLatch(1)
+        val cases =
+            listOf(
+                ResponseInspectionFailureCase(
+                    name = "detector failure",
+                    payload = "response-detector-failure-private",
+                    detector = Detector { payload ->
+                        if (payload == "response-detector-failure-private") {
+                            error("private response detector failure")
+                        }
+                        io.vigilant.policy.domain.DetectionResult.Clean
+                    },
+                    deadline = Duration.ofSeconds(2),
+                    errorCode = "DETECTOR_EXECUTION_FAILED",
+                ),
+                ResponseInspectionFailureCase(
+                    name = "policy deadline",
+                    payload = "response-timeout-private",
+                    detector =
+                        Detector { payload ->
+                            if (payload == "response-timeout-private") {
+                                timeoutEntered.countDown()
+                                try {
+                                    Thread.sleep(Duration.ofSeconds(30))
+                                } catch (interrupted: InterruptedException) {
+                                    Thread.currentThread().interrupt()
+                                    timeoutCancelled.countDown()
+                                    throw CancellationException("cancelled").also { it.initCause(interrupted) }
+                                }
+                            }
+                            io.vigilant.policy.domain.DetectionResult.Clean
+                        },
+                    deadline = Duration.ofMillis(30),
+                    errorCode = "POLICY_DEADLINE_EXCEEDED",
+                ),
+            )
+
+        cases.forEachIndexed { index, case ->
+            val upstreamBody =
+                """{"choices":[{"message":{"content":"${case.payload}"}}],"private":"upstream-failure-$index"}"""
+            val upstream = fixture.startServer {
+                HttpResponse.of(
+                    ResponseHeaders.builder(HttpStatus.valueOf(418))
+                        .contentType(MediaType.JSON)
+                        .add("x-upstream-private", "failure-$index")
+                        .build(),
+                    HttpData.ofUtf8(upstreamBody),
+                )
+            }
+            val policies =
+                DummyPolicyProvider(
+                    listOf(
+                        shadowPolicy(case.deadline),
+                        responsePolicy("response-failure-$index", Reaction(Disposition.ALLOW, emptyList()), case.deadline),
+                    ),
+                )
+            val gateway =
+                startShadowGateway(
+                    fixture.serverUri(upstream),
+                    detector = case.detector,
+                    policyDeadline = case.deadline,
+                    policyProvider = policies,
+                )
+
+            val response =
+                WebClient.of(fixture.serverUri(gateway))
+                    .execute(chatCompletionsRequest("request-safe"))
+                    .aggregate().join()
+
+            assertEquals(HttpStatus.SERVICE_UNAVAILABLE, response.status(), case.name)
+            assertEquals("1", response.headers().get(HttpHeaderNames.RETRY_AFTER), case.name)
+            assertEquals(RESPONSE_INSPECTION_UNAVAILABLE_BODY, response.contentUtf8(), case.name)
+            assertEquals(null, response.headers().get("x-upstream-private"), case.name)
+            assertFalse(response.contentUtf8().contains(case.payload), case.name)
+            assertTrue(
+                fixture.awaitUntil(Duration.ofSeconds(2)) {
+                    events.count { event ->
+                        event.keyValue("phase") == "RESPONSE" && event.isAnalysisEvent()
+                    } == (index + 1) * 2
+                },
+                "${case.name}: response audit pair was not observed",
+            )
+            val pair =
+                events.filter { event -> event.keyValue("phase") == "RESPONSE" && event.isAnalysisEvent() }
+                    .takeLast(2)
+            assertEquals(listOf("policy.analysis_started", "policy.analysis_completed"), pair.analysisEventNames())
+            assertEquals("ERROR", pair.last().keyValue("outcome"), case.name)
+            assertEquals(case.errorCode, pair.last().keyValue("error.code"), case.name)
+            assertEquals(1, pair.last().keyValue("fragments.inspected"), case.name)
+            assertEquals(null, pair.last().keyValue("reaction"), case.name)
+        }
+        assertTrue(timeoutEntered.await(2, TimeUnit.SECONDS), "deadline detector never started")
+        assertTrue(timeoutCancelled.await(2, TimeUnit.SECONDS), "deadline detector remained active")
+    }
+
+    /** Response lifecycle uses the exact shared schema without any private source or identity data. */
+    @Test
+    @Suppress("LongMethod", "MaxLineLength")
+    fun `response audit pair is exact correlated and private data free`() {
+        val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
+        val upstreamBody =
+            """{"choices":[{"message":{"content":"body-span-sentinel private@example.com"}}],"private":"upstream-body-sentinel"}"""
+        val upstream = fixture.startServer { HttpResponse.of(HttpStatus.OK, MediaType.JSON, upstreamBody) }
+        val policies =
+            DummyPolicyProvider(
+                listOf(
+                    responsePolicy(
+                        "response-audit",
+                        Reaction(Disposition.ALLOW, setOf(Transformation.MASK)),
+                    ),
+                ),
+            )
+        val gateway =
+            startShadowGateway(
+                fixture.serverUri(upstream),
+                identitySettings =
+                    DummyIdentitySettings(
+                        "identity-user-sentinel",
+                        setOf("identity-group-sentinel"),
+                    ),
+                policyProvider = policies,
+            )
+        val request =
+            HttpRequest.of(
+                RequestHeaders.builder(HttpMethod.POST, "/v1/chat/completions?query-private-sentinel")
+                    .contentType(MediaType.JSON)
+                    .add("authorization", "Bearer credential-private-sentinel")
+                    .add("x-private", "header-private-sentinel")
+                    .add("x-session-id", "session-private-sentinel")
+                    .build(),
+                HttpData.ofUtf8(chatCompletionsBody("request-body-private-sentinel")),
+            )
+
+        val response = WebClient.of(fixture.serverUri(gateway)).execute(request).aggregate().join()
+
+        assertEquals(HttpStatus.OK, response.status())
+        assertTrue(
+            fixture.awaitUntil(Duration.ofSeconds(2)) {
+                events.count { event -> event.keyValue("phase") == "RESPONSE" && event.isAnalysisEvent() } == 2
+            },
+            "exact response audit pair was not observed",
+        )
+        val pair = events.filter { event -> event.keyValue("phase") == "RESPONSE" && event.isAnalysisEvent() }
+        assertEquals(listOf("policy.analysis_started", "policy.analysis_completed"), pair.analysisEventNames())
+        assertEquals(RequestAuditTestContract.STARTED_FIELDS, pair.first().auditFieldNames())
+        assertEquals(RequestAuditTestContract.SUCCESS_FIELDS, pair.last().auditFieldNames())
+        pair.forEach { event ->
+            assertEquals("openai.chat_completions", event.keyValue("protocol"))
+            assertEquals("RESPONSE", event.keyValue("phase"))
+            assertEquals("response-audit@1", event.keyValue("policies"))
+            assertEquals("fast-pii", event.keyValue("detector.id"))
+            assertEquals("fast-pii@1", event.keyValue("detector.version"))
+            assertTrue(event.keyValue("trace.id").toString().matches(Regex("[0-9a-f]{32}")))
+            assertTrue(event.keyValue("span.id").toString().matches(Regex("[0-9a-f]{16}")))
+            assertTrue(event.keyValue("parent.span.id").toString().matches(Regex("[0-9a-f]{16}")))
+            assertFalse(event.keyValuePairs.orEmpty().any { field -> field.key in FORBIDDEN_AUDIT_FIELDS })
+        }
+        assertEquals(pair.first().keyValue("trace.id"), pair.last().keyValue("trace.id"))
+        assertEquals(pair.first().keyValue("span.id"), pair.last().keyValue("span.id"))
+        assertEquals(pair.first().keyValue("parent.span.id"), pair.last().keyValue("parent.span.id"))
+        assertEquals("DETECTED", pair.last().keyValue("outcome"))
+        assertEquals("FULLY_INSPECTABLE", pair.last().keyValue("coverage"))
+        assertEquals("MASK", pair.last().keyValue("reaction"))
+        assertEquals(1, pair.last().keyValue("fragments.inspected"))
+        assertEquals(1, pair.last().keyValue("findings.total"))
+        assertTrue(
+            fixture.awaitUntil(Duration.ofSeconds(5)) {
+                spans.any { span -> span.name == "vigilant.response.inspect" }
+            },
+            "response inspection span was not exported",
+        )
+        val responseSpan = spans.single { span -> span.name == "vigilant.response.inspect" }
+        assertEquals(responseSpan.spanId, pair.last().keyValue("span.id"))
+        val rendered = pair.joinToString("\n") { event -> event.formattedMessage + event.keyValuePairs + event.mdcPropertyMap }
+        listOf(
+            upstreamBody,
+            "body-span-sentinel",
+            "private@example.com",
+            "upstream-body-sentinel",
+            "request-body-private-sentinel",
+            "query-private-sentinel",
+            "credential-private-sentinel",
+            "header-private-sentinel",
+            "session-private-sentinel",
+            "identity-user-sentinel",
+            "identity-group-sentinel",
+        ).forEach { sentinel -> assertFalse(rendered.contains(sentinel), "response audit leaked $sentinel") }
+    }
+
+    /** Typed rewrite failure reaches the client as exact 503 without unmasked fallback. */
+    @Test
+    fun `response rewrite failure maps to exact unavailable response without disclosure`() {
+        val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
+        val responseSource = CompletableFuture<RetainedResponseSource>()
+        val rewriteInvocations = AtomicInteger()
+        val upstreamBody =
+            """{"choices":[{"message":{"content":"private rewrite@example.com"}}],"private":"rewrite-body-sentinel"}"""
+        val upstream = fixture.startServer {
+            HttpResponse.of(
+                ResponseHeaders.builder(HttpStatus.valueOf(418))
+                    .contentType(MediaType.JSON)
+                    .add("x-upstream-private", "rewrite-header-sentinel")
+                    .build(),
+                HttpData.ofUtf8(upstreamBody),
+            )
+        }
+        val policies =
+            DummyPolicyProvider(
+                listOf(
+                    responsePolicy(
+                        "response-rewrite-failure",
+                        Reaction(Disposition.ALLOW, setOf(Transformation.MASK)),
+                    ),
+                ),
+            )
+        val gateway =
+            startShadowGateway(
+                fixture.serverUri(upstream),
+                policyProvider = policies,
+                responseSourceCreated = responseSource::complete,
+                responseRewrite = { _, _, _ ->
+                    rewriteInvocations.incrementAndGet()
+                    JsonResponseRewriteResult.Failure(JsonResponseRewriteFailure.INVALID_SOURCE_MAP)
+                },
+            )
+
+        val response =
+            WebClient.of(fixture.serverUri(gateway))
+                .execute(chatCompletionsRequest("request-safe"))
+                .aggregate().join()
+
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, response.status())
+        assertEquals("1", response.headers().get(HttpHeaderNames.RETRY_AFTER))
+        assertEquals(RESPONSE_INSPECTION_UNAVAILABLE_BODY, response.contentUtf8())
+        assertEquals(null, response.headers().get("x-upstream-private"))
+        assertFalse(response.contentUtf8().contains("rewrite-body-sentinel"))
+        assertEquals(1, rewriteInvocations.get())
+        assertRetainedResponseReleased(responseSource.get(2, TimeUnit.SECONDS), "response rewrite failure")
+        assertTrue(
+            fixture.awaitUntil(Duration.ofSeconds(2)) {
+                events.any { event ->
+                    event.keyValue("phase") == "RESPONSE" &&
+                        event.keyValue("event.name") == "policy.analysis_completed" &&
+                        event.keyValue("outcome") == "ERROR" &&
+                        event.keyValue("error.code") == "RESPONSE_REWRITE_FAILED"
+                }
+            },
+            "response rewrite ERROR audit was not observed",
+        )
+    }
+
+    /** Client cancellation interrupts active response analysis and releases the retained owner. */
+    @Test
+    fun `client cancellation during response analysis releases source without disclosure`() {
+        val detectorEntered = CountDownLatch(1)
+        val detectorCancelled = CountDownLatch(1)
+        val responseSource = CompletableFuture<RetainedResponseSource>()
+        val disclosureProbe = ResponseDisclosureProbe(responseSource) { false }
+        val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
+        val upstreamBody =
+            """{"choices":[{"message":{"content":"private-analysis-cancel"}}]}"""
+        val upstream = fixture.startServer { HttpResponse.of(HttpStatus.OK, MediaType.JSON, upstreamBody) }
+        val policies =
+            DummyPolicyProvider(
+                listOf(
+                    responsePolicy(
+                        "response-analysis-cancel",
+                        Reaction(Disposition.ALLOW, emptyList()),
+                        Duration.ofSeconds(30),
+                    ),
+                ),
+            )
+        val gateway =
+            startShadowGateway(
+                fixture.serverUri(upstream),
+                detector = slowInterruptibleDetector(detectorEntered::countDown, detectorCancelled::countDown),
+                policyDeadline = Duration.ofSeconds(30),
+                policyProvider = policies,
+                responseSourceCreated = responseSource::complete,
+                responseOutputObserved = disclosureProbe::observe,
+            )
+        val response = WebClient.of(fixture.serverUri(gateway)).execute(chatCompletionsRequest("request-safe"))
+        val received = ReceivedStream()
+        response.subscribe(received)
+
+        val retained = awaitRetainedResponseSource(responseSource, "response analysis cancellation")
+        assertTrue(detectorEntered.await(2, TimeUnit.SECONDS), "response analysis detector never started")
+        response.abort()
+
+        assertTrue(detectorCancelled.await(2, TimeUnit.SECONDS), "response analysis detector remained active")
+        assertTrue(received.completion.await(2, TimeUnit.SECONDS), "cancelled response analysis remained active")
+        disclosureProbe.assertNoEarlyDisclosure("response analysis cancellation")
+        assertEquals(null, received.headers.get())
+        assertTrue(received.chunks.isEmpty())
+        assertRetainedResponseReleased(retained, "response analysis cancellation")
+        assertTrue(
+            fixture.awaitUntil(Duration.ofSeconds(2)) {
+                events.any { event ->
+                    event.keyValue("phase") == "RESPONSE" &&
+                        event.keyValue("event.name") == "policy.analysis_completed" &&
+                        event.keyValue("error.code") == "RESPONSE_ANALYSIS_CANCELLED"
+                }
+            },
+            "response cancellation ERROR audit was not observed",
+        )
+    }
+
+    /** Cancellation at final audit publication wins the one-shot handoff without disclosure. */
+    @Test
+    fun `client cancellation at response handoff race releases source without disclosure`() {
+        val responseSource = CompletableFuture<RetainedResponseSource>()
+        val disclosureProbe = ResponseDisclosureProbe(responseSource) { false }
+        val barrier = attachResponseCompletionBarrier()
+        val upstreamBody =
+            """{"choices":[{"message":{"content":"private-handoff-cancel"}}]}"""
+        val upstream = fixture.startServer { HttpResponse.of(HttpStatus.OK, MediaType.JSON, upstreamBody) }
+        val policies =
+            DummyPolicyProvider(
+                listOf(
+                    responsePolicy("response-handoff-cancel", Reaction(Disposition.ALLOW, emptyList())),
+                ),
+            )
+        val gateway =
+            startShadowGateway(
+                fixture.serverUri(upstream),
+                policyProvider = policies,
+                responseSourceCreated = responseSource::complete,
+                responseOutputObserved = disclosureProbe::observe,
+            )
+        val response = WebClient.of(fixture.serverUri(gateway)).execute(chatCompletionsRequest("request-safe"))
+        val received = ReceivedStream()
+        response.subscribe(received)
+
+        val retained = awaitRetainedResponseSource(responseSource, "response handoff cancellation")
+        assertTrue(barrier.entered.await(2, TimeUnit.SECONDS), "response completion boundary was not reached")
+        response.abort()
+        barrier.release.countDown()
+
+        assertTrue(received.completion.await(2, TimeUnit.SECONDS), "handoff-race cancellation remained active")
+        disclosureProbe.assertNoEarlyDisclosure("response handoff cancellation")
+        assertEquals(null, received.headers.get())
+        assertTrue(received.chunks.isEmpty())
+        assertRetainedResponseReleased(retained, "response handoff cancellation")
+    }
+
+    /** Forced server shutdown interrupts active response analysis and frees retained bytes. */
+    @Test
+    fun `shutdown cancels active response analysis without disclosure`() {
+        val detectorEntered = CountDownLatch(1)
+        val detectorCancelled = CountDownLatch(1)
+        val responseSource = CompletableFuture<RetainedResponseSource>()
+        val disclosureProbe = ResponseDisclosureProbe(responseSource) { false }
+        val upstreamBody =
+            """{"choices":[{"message":{"content":"private-analysis-shutdown"}}]}"""
+        val upstream = fixture.startServer { HttpResponse.of(HttpStatus.OK, MediaType.JSON, upstreamBody) }
+        val policies =
+            DummyPolicyProvider(
+                listOf(
+                    responsePolicy(
+                        "response-analysis-shutdown",
+                        Reaction(Disposition.ALLOW, emptyList()),
+                        Duration.ofSeconds(30),
+                    ),
+                ),
+            )
+        val gateway =
+            startShadowGateway(
+                fixture.serverUri(upstream),
+                detector = slowInterruptibleDetector(detectorEntered::countDown, detectorCancelled::countDown),
+                policyDeadline = Duration.ofSeconds(30),
+                policyProvider = policies,
+                responseSourceCreated = responseSource::complete,
+                responseOutputObserved = disclosureProbe::observe,
+            ) {
+                gracefulShutdownTimeout(Duration.ofMillis(100), Duration.ofMillis(300))
+            }
+        val response = WebClient.of(fixture.serverUri(gateway)).execute(chatCompletionsRequest("request-safe"))
+        val received = ReceivedStream()
+        response.subscribe(received)
+
+        val retained = awaitRetainedResponseSource(responseSource, "response analysis shutdown")
+        assertTrue(detectorEntered.await(2, TimeUnit.SECONDS), "shutdown response detector never started")
+        gateway.stop().get(3, TimeUnit.SECONDS)
+
+        assertTrue(detectorCancelled.await(2, TimeUnit.SECONDS), "shutdown left response detector active")
+        assertTrue(received.completion.await(2, TimeUnit.SECONDS), "shutdown left response exchange active")
+        disclosureProbe.assertNoEarlyDisclosure("response analysis shutdown")
+        assertSafeUndisclosedShutdownOutcome(received)
+        assertRetainedResponseReleased(retained, "response analysis shutdown")
+    }
+
     /** Client cancellation before terminal response state cancels upstream with zero disclosure. */
     @Test
     fun `client cancellation during response ingest cancels upstream without disclosure`() {
@@ -470,7 +1287,7 @@ class PiiShadowProxyServiceTest {
         )
     }
 
-    /** Verifies exact forwarding and one safe aggregate PII detection lifecycle pair. */
+    /** Verifies exact forwarding, one request audit pair, and both inspection span siblings. */
     @Test
     @Suppress("LongMethod")
     fun `PII request is forwarded byte identical and emits one safe detected event`() {
@@ -552,13 +1369,15 @@ class PiiShadowProxyServiceTest {
         assertFalse(event.mdcPropertyMap.values.contains("vendor=tracestate-secret-sentinel"))
         assertEquals("4bf92f3577b34da6a3ce929d0e0e4736", event.mdcPropertyMap["trace_id"])
         assertTrue(
-            fixture.awaitUntil(Duration.ofSeconds(5)) { spans.size >= 3 },
-            "expected request spans, saw: ${spans.map { it.kind to it.name }}",
+            fixture.awaitUntil(Duration.ofSeconds(5)) { spans.size >= 4 },
+            "expected request and response spans, saw: ${spans.map { it.kind to it.name }}",
         )
         val serverSpan = spans.single { it.kind == SpanKind.SERVER }
-        val inspectionSpan = spans.single { it.kind == SpanKind.INTERNAL }
-        assertEquals(inspectionSpan.spanId, event.mdcPropertyMap["span_id"])
+        val requestInspectionSpan = spans.single { it.name == "vigilant.request.inspect" }
+        val responseInspectionSpan = spans.single { it.name == "vigilant.response.inspect" }
+        assertEquals(requestInspectionSpan.spanId, event.mdcPropertyMap["span_id"])
         assertEquals(serverSpan.spanId, event.mdcPropertyMap["parent_span_id"])
+        assertEquals(serverSpan.spanId, responseInspectionSpan.parentSpanId)
 
         val rendered =
             events.joinToString("\n") { logged ->
@@ -1162,7 +1981,7 @@ class PiiShadowProxyServiceTest {
         assertEquals(0, upstreamRequests.get())
     }
 
-    /** Verifies SERVER, INTERNAL inspection and CLIENT upstream parentage. */
+    /** Verifies SERVER parentage for request inspection, upstream, and response inspection siblings. */
     @Test
     fun `shadow request produces sibling inspection and upstream spans`() {
         val upstream = fixture.startServer { validChatCompletionsResponse() }
@@ -1182,14 +2001,17 @@ class PiiShadowProxyServiceTest {
 
         assertEquals(HttpStatus.OK, response.status())
         assertTrue(
-            fixture.awaitUntil(Duration.ofSeconds(5)) { spans.size >= 3 },
-            "expected SERVER, INTERNAL and CLIENT spans, saw: ${spans.map { it.kind to it.name }}",
+            fixture.awaitUntil(Duration.ofSeconds(5)) { spans.size >= 4 },
+            "expected SERVER, two INTERNAL and CLIENT spans, saw: ${spans.map { it.kind to it.name }}",
         )
         val serverSpan = spans.single { it.kind == SpanKind.SERVER }
-        val inspectionSpan = spans.single { it.kind == SpanKind.INTERNAL }
+        val requestInspectionSpan = spans.single { it.name == "vigilant.request.inspect" }
+        val responseInspectionSpan = spans.single { it.name == "vigilant.response.inspect" }
         val clientSpan = spans.single { it.kind == SpanKind.CLIENT }
-        assertEquals("vigilant.request.inspect", inspectionSpan.name)
-        assertEquals(serverSpan.spanId, inspectionSpan.parentSpanId)
+        assertEquals(SpanKind.INTERNAL, requestInspectionSpan.kind)
+        assertEquals(SpanKind.INTERNAL, responseInspectionSpan.kind)
+        assertEquals(serverSpan.spanId, requestInspectionSpan.parentSpanId)
+        assertEquals(serverSpan.spanId, responseInspectionSpan.parentSpanId)
         assertEquals(serverSpan.spanId, clientSpan.parentSpanId)
         assertTrue(spans.all { it.traceId == serverSpan.traceId })
         assertTrue(spans.all { it.attributes.get(stringKey("session.id")) == "task-42" })
@@ -1994,6 +2816,56 @@ class PiiShadowProxyServiceTest {
         val interrupt: Boolean = false,
     )
 
+    /** One complete ordinary-response gap and final reaction expectation. */
+    private data class ResponseGapCase(
+        /** Diagnostic matrix row. */
+        val name: String,
+        /** Exact upstream JSON before policy evaluation. */
+        val original: String,
+        /** Expected client status after the final response reaction. */
+        val expectedStatus: HttpStatus,
+        /** Exact client bytes after the final response reaction. */
+        val expectedBody: String,
+        /** Expected terminal audit reaction. */
+        val reaction: String,
+        /** Expected audit precedence outcome. */
+        val outcome: String,
+        /** Expected parser coverage retained by the audit aggregate. */
+        val coverage: String,
+        /** Exact independently inspected fragment count. */
+        val fragments: Int,
+        /** Optional transformation selected for a detected finding. */
+        val transformation: Transformation? = null,
+        /** Whether a detected finding rejects the entire upstream response. */
+        val block: Boolean = false,
+    )
+
+    /** One upstream ordinary-response protocol input that must fail before analysis starts. */
+    private data class InvalidOrdinaryResponseCase(
+        /** Diagnostic matrix row. */
+        val name: String,
+        /** Raw upstream bytes carrying a private sentinel. */
+        val body: String,
+        /** Upstream Content-Type supplied to the real gateway. */
+        val contentType: String = "application/json",
+        /** Optional exact upstream Content-Encoding. */
+        val contentEncoding: String? = null,
+    )
+
+    /** One response detector technical-failure outcome and exact safe audit code. */
+    private data class ResponseInspectionFailureCase(
+        /** Diagnostic matrix row. */
+        val name: String,
+        /** Exact response fragment evaluated by the controlled detector. */
+        val payload: String,
+        /** Detector behavior used for this failure row. */
+        val detector: Detector,
+        /** Bounded policy deadline for response analysis. */
+        val deadline: Duration,
+        /** Stable safe terminal audit code. */
+        val errorCode: String,
+    )
+
     /**
      * Starts the production shadow service with real policy components and bounded executors.
      *
@@ -2005,10 +2877,11 @@ class PiiShadowProxyServiceTest {
      * @param inspectionExecutor optional deterministic executor supplied by lifecycle tests.
      * @param responseSourceCreated optional owner-state observer invoked for each retained source.
      * @param responseOutputObserved optional server-boundary observer invoked for disclosed headers or body.
+     * @param responseRewrite optional all-or-nothing response rewriter used by failure-mapping tests.
      * @param requestTransform optional server-side request replacement for transport-failure tests.
      * @param configureServer optional Armeria settings for lifecycle scenarios.
      */
-    @Suppress("LongParameterList")
+    @Suppress("LongMethod", "LongParameterList")
     private fun startShadowGateway(
         upstreamUri: URI,
         quota: RequestSourceQuota = RequestSourceQuota(),
@@ -2024,6 +2897,13 @@ class PiiShadowProxyServiceTest {
         inspectionExecutor: ExecutorService? = null,
         responseSourceCreated: ((RetainedResponseSource) -> Unit)? = null,
         responseOutputObserved: (() -> Unit)? = null,
+        responseRewrite: (
+            (
+                CompleteByteSource,
+                NormalizedChatCompletionsResponse,
+                Collection<JsonFragmentMaskingPlan>,
+            ) -> JsonResponseRewriteResult
+        )? = null,
         requestTransform: ((HttpRequest) -> HttpRequest)? = null,
         configureServer: ServerBuilder.() -> Unit = {},
     ): com.linecorp.armeria.server.Server {
@@ -2058,7 +2938,12 @@ class PiiShadowProxyServiceTest {
                 identityExtractor = identityExtractor,
                 responseAnalysisLifecycle = responseAnalysisLifecycle,
                 retainedResponseHandler =
-                    RetainedResponseHandler(requestExecutor) {
+                    RetainedResponseHandler(
+                        requestExecutor,
+                        responseRewrite?.let { rewrite ->
+                            ResponseInspectionWorkflow(policyEngine, auditLogger, rewriteJson = rewrite)
+                        } ?: ResponseInspectionWorkflow(policyEngine, auditLogger),
+                    ) {
                         val source = RetainedResponseSource()
                         responseSourceCreated?.invoke(source)
                         source
@@ -2234,6 +3119,24 @@ class PiiShadowProxyServiceTest {
             }
     }
 
+    /** Installs a synchronous barrier at the actual RESPONSE terminal audit publication boundary. */
+    private fun attachResponseCompletionBarrier(): ResponseCompletionBarrierAppender {
+        val logger = LoggerFactory.getLogger(PiiShadowProxyService::class.java) as Logger
+        val barrier =
+            ResponseCompletionBarrierAppender().apply {
+                context = logger.loggerContext
+                start()
+            }
+        logger.addAppender(barrier)
+        closeables +=
+            AutoCloseable {
+                barrier.release.countDown()
+                logger.detachAppender(barrier)
+                barrier.stop()
+            }
+        return barrier
+    }
+
     /**
      * Waits until a created response source demonstrably owns retained upstream bytes.
      *
@@ -2355,12 +3258,36 @@ class PiiShadowProxyServiceTest {
         )
     }
 
+    /** Creates one enabled response policy with the supplied detected reaction. */
+    private fun responsePolicy(
+        id: String,
+        detected: Reaction,
+        deadline: Duration = Duration.ofSeconds(2),
+    ): Policy {
+        val allow = Reaction(Disposition.ALLOW, emptyList())
+        return Policy(
+            reference = PolicyReference(PolicyId(id), PolicyVersion("1")),
+            enabled = true,
+            match =
+                PolicyMatch(
+                    url = "*",
+                    model = "*",
+                    phase = PolicyPhase.RESPONSE,
+                    subject = PolicySubject(SubjectType.ANY, SubjectId("*")),
+                ),
+            detectors = listOf(DetectorId("fast-pii")),
+            deadline = deadline,
+            reactions = PolicyReactions(detected, allow, allow),
+            overrides = emptyList(),
+        )
+    }
+
     /** Fixed validation instant shared by real-Armeria JWT cases. */
     private companion object {
         /** Exact clock instant used by the production HTTP seam. */
         val JWT_NOW: Instant = Instant.parse("2026-01-01T00:00:00Z")
 
-        /** Field names forbidden by the safe request-analysis stdout schema. */
+        /** Field names forbidden by the safe request/response analysis stdout schema. */
         val FORBIDDEN_AUDIT_FIELDS: Set<String> =
             setOf(
                 "payload",
@@ -2388,6 +3315,15 @@ class PiiShadowProxyServiceTest {
             """{"error":{"message":"Request inspection unavailable.","type":"server_error",""" +
                 """"code":"request_inspection_unavailable"}}"""
 
+        /** Exact VIG-29 response policy BLOCK body shared by real HTTP cases. */
+        const val RESPONSE_BLOCKED_BODY =
+            """{"error":{"message":"Response blocked: PII detected.","type":"policy_violation",""" +
+                """"code":"policy_blocked"}}"""
+
+        /** Exact VIG-29 response technical-failure body shared by real HTTP cases. */
+        const val RESPONSE_INSPECTION_UNAVAILABLE_BODY =
+            """{"error":{"message":"Response inspection unavailable.","type":"server_error",""" +
+                """"code":"response_inspection_unavailable"}}"""
     }
 
     /** Controlled sink that holds its async worker after observing the first audit event. */
@@ -2427,6 +3363,30 @@ class PiiShadowProxyServiceTest {
         override fun append(eventObject: ILoggingEvent) {
             attempted.countDown()
             error("controlled logging sink failure")
+        }
+    }
+
+    /** Observation-owning latch that pauses one RESPONSE completion before HTTP handoff. */
+    private class ResponseCompletionBarrierAppender : AppenderBase<ILoggingEvent>() {
+        /** Signals that the final response outcome reached synchronous audit publication. */
+        val entered = CountDownLatch(1)
+
+        /** Releases the inspection thread after the client-side cancellation action. */
+        val release = CountDownLatch(1)
+
+        /** Blocks only the target response completion event with a bounded wait. */
+        override fun append(eventObject: ILoggingEvent) {
+            if (
+                eventObject.keyValue("phase") == "RESPONSE" &&
+                eventObject.keyValue("event.name") == "policy.analysis_completed"
+            ) {
+                entered.countDown()
+                try {
+                    check(release.await(5, TimeUnit.SECONDS)) { "response handoff barrier was not released" }
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                }
+            }
         }
     }
 

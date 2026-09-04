@@ -30,6 +30,7 @@ import io.vigilant.gateway.proxy.InspectionResources
 import io.vigilant.gateway.proxy.PiiShadowProxyService
 import io.vigilant.gateway.proxy.PiiShadowProtocol
 import io.vigilant.gateway.proxy.ResponseAnalysisLifecycle
+import io.vigilant.gateway.proxy.ResponseInspectionWorkflow
 import io.vigilant.gateway.proxy.RetainedResponseHandler
 import io.vigilant.gateway.proxy.ShadowAuditLogger
 import io.vigilant.gateway.proxy.ShadowInspectionWorkflow
@@ -142,6 +143,7 @@ interface AppComponent {
             val protocol = PiiShadowProtocol(appConfig.upstreamUri)
             val auditLogger = ShadowAuditLogger()
             val workflow = ShadowInspectionWorkflow(protocol, policyEngine, auditLogger)
+            val responseWorkflow = ResponseInspectionWorkflow(policyEngine, auditLogger)
             return PiiShadowProxyService(
                 bypassProxyService = bypassProxyService,
                 requestSourceQuota = inspectionResources.requestSourceQuota,
@@ -150,7 +152,11 @@ interface AppComponent {
                 inspectionExecutor = inspectionResources.requestExecutor,
                 identityExtractor = identityExtractor,
                 responseAnalysisLifecycle = responseAnalysisLifecycle,
-                retainedResponseHandler = RetainedResponseHandler(inspectionResources.requestExecutor),
+                retainedResponseHandler =
+                    RetainedResponseHandler(
+                        inspectionResources.requestExecutor,
+                        responseWorkflow,
+                    ),
             )
         }
 

@@ -43,8 +43,8 @@ internal fun loadPolicySnapshot(
     require(coveragePolicies.any { policy -> policy.reference.id !in overriddenByEnabledPolicies }) {
         "Global Fast PII coverage policy must not be overridden"
     }
-    require(policies.all(Policy::hasShadowOnlyReactions)) {
-        "Shadow-only policy configuration requires ALLOW reactions without transformations"
+    require(policies.all(Policy::hasRuntimeAllowedReactions)) {
+        "Request policies require ALLOW reactions without transformations"
     }
     return policies
 }
@@ -59,11 +59,12 @@ private fun Policy.providesGlobalFastPiiRequestCoverage(): Boolean =
         match.subject.id.value == "*" &&
         FAST_PII_DETECTOR_ID in detectors
 
-/** Returns whether every configured outcome allows the original payload unchanged. */
-private fun Policy.hasShadowOnlyReactions(): Boolean =
-    listOf(reactions.detected, reactions.clean, reactions.error).all { reaction ->
-        reaction.disposition == Disposition.ALLOW && reaction.transformations.isEmpty()
-    }
+/** Allows existing enforcement reactions only for response phase; requests remain shadow-only. */
+private fun Policy.hasRuntimeAllowedReactions(): Boolean =
+    match.phase == PolicyPhase.RESPONSE ||
+        listOf(reactions.detected, reactions.clean, reactions.error).all { reaction ->
+            reaction.disposition == Disposition.ALLOW && reaction.transformations.isEmpty()
+        }
 
 /** Reads [configPath] while converting filesystem details into a stable safe startup error. */
 private fun readPolicyConfig(configPath: Path): String =

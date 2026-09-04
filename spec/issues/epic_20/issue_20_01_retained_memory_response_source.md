@@ -58,10 +58,10 @@ gateway не вводит свой response quota или admission rejection.
 
 ## Не входит
 
-- Response policy evaluation и `ALLOW`/`MASK`/`BLOCK` integration принадлежат
-  следующим enforcement leaves; response protocol parser завершён в VIG-06-03.
-- Исходящая `analysis_started`/`analysis_completed` audit pair; она использует
-  VIG-32-01 stdout schema после появления real response analysis.
+- На момент реализации VIG-20-01 response policy evaluation,
+  `ALLOW`/`MASK`/`BLOCK` integration и response audit pair оставались за
+  следующими enforcement leaves; ordinary JSON path позднее закрыт VIG-20-02,
+  SSE остаётся VIG-20-05.
 - Audit persistence, WAL, file handoff, Collector protocol, disk spill или
   external object storage.
 - Изменение завершённого request source EPIC-08.

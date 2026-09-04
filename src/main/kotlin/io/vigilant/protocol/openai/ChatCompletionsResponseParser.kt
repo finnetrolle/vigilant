@@ -1,7 +1,9 @@
 package io.vigilant.protocol.openai
 
 import com.fasterxml.jackson.core.JsonParseException
+import com.fasterxml.jackson.core.JsonParser
 import com.fasterxml.jackson.core.JsonProcessingException
+import com.fasterxml.jackson.core.JsonToken
 import com.fasterxml.jackson.core.StreamReadFeature
 import com.fasterxml.jackson.databind.DeserializationFeature
 import com.fasterxml.jackson.databind.JsonNode
@@ -56,15 +58,96 @@ object ChatCompletionsResponseParser {
         }
     }
 
+    /** Parses ordinary JSON once while retaining only selected string source coordinates. */
+    private fun parseJson(input: InputStream): ChatCompletionsResponseParseResult {
+        val sourceBytes = input.readAllBytes()
+        val stringTokens = LinkedHashMap<String, RawJsonStringToken>()
+        val parser = MAPPER.factory.createParser(sourceBytes)
+        parser.use {
+            val first = parser.nextToken() ?: malformed()
+            val root = readJsonNode(parser, first, "", stringTokens)
+            if (parser.nextToken() != null) {
+                malformed()
+            }
+            return parseJsonRoot(root, sourceBytes, stringTokens)
+        }
+    }
+
+    /** Builds one JSON tree while recording the raw start of every decoded string value. */
+    private fun readJsonNode(
+        parser: JsonParser,
+        token: JsonToken,
+        pointer: String,
+        stringTokens: MutableMap<String, RawJsonStringToken>,
+    ): JsonNode =
+        when (token) {
+            JsonToken.START_OBJECT -> {
+                val objectNode = MAPPER.nodeFactory.objectNode()
+                while (parser.nextToken() != JsonToken.END_OBJECT) {
+                    if (parser.currentToken() != JsonToken.FIELD_NAME) malformed()
+                    val field = parser.currentName()
+                    val valueToken = parser.nextToken() ?: malformed()
+                    objectNode.set<JsonNode>(
+                        field,
+                        readJsonNode(parser, valueToken, "$pointer/${field.toJsonPointerSegment()}", stringTokens),
+                    )
+                }
+                objectNode
+            }
+
+            JsonToken.START_ARRAY -> {
+                val arrayNode = MAPPER.nodeFactory.arrayNode()
+                var index = 0
+                while (parser.nextToken() != JsonToken.END_ARRAY) {
+                    arrayNode.add(readJsonNode(parser, parser.currentToken(), "$pointer/$index", stringTokens))
+                    index++
+                }
+                arrayNode
+            }
+
+            JsonToken.VALUE_STRING -> {
+                stringTokens[pointer] = RawJsonStringToken(parser.currentTokenLocation().byteOffset)
+                MAPPER.nodeFactory.textNode(parser.text)
+            }
+
+            JsonToken.VALUE_NUMBER_INT -> MAPPER.nodeFactory.numberNode(parser.bigIntegerValue)
+            JsonToken.VALUE_NUMBER_FLOAT -> MAPPER.nodeFactory.numberNode(parser.decimalValue)
+            JsonToken.VALUE_TRUE -> MAPPER.nodeFactory.booleanNode(true)
+            JsonToken.VALUE_FALSE -> MAPPER.nodeFactory.booleanNode(false)
+            JsonToken.VALUE_NULL -> MAPPER.nodeFactory.nullNode()
+            else -> malformed()
+        }
+
+    /** Escapes one JSON Pointer path segment without changing parser field semantics. */
+    private fun String.toJsonPointerSegment(): String = replace("~", "~0").replace("/", "~1")
+
     /** Validates and normalizes one ordinary JSON response object. */
-    private fun parseJsonRoot(root: JsonNode?): ChatCompletionsResponseParseResult {
+    private fun parseJsonRoot(
+        root: JsonNode?,
+        sourceBytes: ByteArray,
+        stringTokens: Map<String, RawJsonStringToken>,
+    ): ChatCompletionsResponseParseResult {
         val response = root as? ObjectNode ?: malformed()
         val choices = response.get(CHOICES_FIELD) as? ArrayNode ?: malformed()
         val collector = ResponseCollector()
         choices.forEachIndexed { choicePosition, choiceNode ->
             collector.collectChoice(choiceNode, choicePosition)
         }
-        return ChatCompletionsResponseParseResult.Success(collector.result())
+        val normalized = collector.result()
+        val coordinates =
+            normalized.fragments.map { fragment ->
+                val token = stringTokens[fragment.provenance.locator.value] ?: malformed()
+                val decoded = decodeJsonStringAt(sourceBytes, token.startByteOffset, fragment.text) ?: malformed()
+                JsonStringSourceCoordinates(
+                    fragmentOrdinal = fragment.provenance.ordinal,
+                    locator = fragment.provenance.locator,
+                    decodedUtf8Length = decoded.decodedUtf8Length,
+                    rawOffsetsByUtf8Boundary = decoded.rawOffsetsByUtf8Boundary,
+                )
+            }
+        return ChatCompletionsResponseParseResult.Success(
+            collector.result(ResponseSourceMap(coordinates)),
+        )
     }
 
     /** Parses a complete SSE stream without materializing the complete response as one value. */
@@ -390,7 +473,7 @@ object ChatCompletionsResponseParser {
         private val inspectionGaps = ArrayList<InspectionGap>()
 
         /** Builds the immutable ordinary response result with explicit terminal coverage. */
-        fun result(): NormalizedChatCompletionsResponse =
+        fun result(sourceMap: ResponseSourceMap = ResponseSourceMap.EMPTY): NormalizedChatCompletionsResponse =
             NormalizedChatCompletionsResponse(
                 fragments = fragments,
                 inspectionGaps = inspectionGaps,
@@ -399,6 +482,7 @@ object ChatCompletionsResponseParser {
                         hasTextFragments = fragments.isNotEmpty(),
                         hasInspectionGaps = inspectionGaps.isNotEmpty(),
                     ),
+                sourceMap = sourceMap,
             )
     }
 
@@ -627,7 +711,7 @@ object ChatCompletionsResponseParser {
         mapOf(
             ProtocolTransport.JSON to
                 ResponseAdapter(OpenAiOperationDescriptor.CHAT_COMPLETIONS_JSON_RESPONSE) { input ->
-                    parseJsonRoot(MAPPER.readTree(input))
+                    parseJson(input)
                 },
             ProtocolTransport.SSE to
                 ResponseAdapter(
@@ -708,4 +792,10 @@ object ChatCompletionsResponseParser {
     /** Complete set of recognized fields inside a Chat Completions delta. */
     private val KNOWN_DELTA_FIELDS =
         setOf(ROLE_FIELD, CONTENT_FIELD, REFUSAL_FIELD, TOOL_CALLS_FIELD, FUNCTION_CALL_FIELD)
+
+    /** Raw start location retained only until selected source coordinates are constructed. */
+    private data class RawJsonStringToken(
+        /** Jackson byte offset at the selected value token. */
+        val startByteOffset: Long,
+    )
 }

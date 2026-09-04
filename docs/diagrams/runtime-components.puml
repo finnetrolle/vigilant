@@ -25,6 +25,9 @@ node "Процесс Vigilant" as Vigilant {
   component "RetainedResponseHandler" as ResponseHandler
   component "RetainedResponseSource" as ResponseSource
   component "ChatCompletionsResponseParser" as ResponseParser
+  component "ResponseInspectionWorkflow" as ResponseWorkflow
+  component "JSON source-map rewriter" as ResponseRewriter
+  component "ReplayReadyResponse" as ResponseReplay
   component "ResponseAnalysisLifecycle" as ResponseLifecycle
 }
 
@@ -45,13 +48,20 @@ Workflow --> Replay : решение Forward
 Replay --> Transport : одноразовая передача владения
 Transport --> Upstream : точное воспроизведение запроса
 Upstream --> Transport : потоковый ответ
-Transport --> ShadowProxy : streaming HttpResponse
+Transport --> ShadowProxy : gateway-owned exchange handle
 ShadowProxy --> ResponseHandler : upstream response
 ResponseHandler --> ResponseSource : one-item demand
-ResponseSource --> ResponseParser : полный read-only view
-ResponseParser --> ResponseHandler : protocol success/failure
-ResponseSource --> ResponseHandler : exact replay после success
-ResponseHandler --> Client : атомарный ответ
+ResponseHandler --> ResponseWorkflow : complete ordinary source
+ResponseWorkflow --> ResponseSource : полный read-only view
+ResponseWorkflow --> ResponseParser : parse + source map
+ResponseParser --> ResponseWorkflow : ordinary fragments + gaps
+ResponseWorkflow --> PolicyEngine : response context + fragments
+ResponseWorkflow --> AuditLogger : RESPONSE started/completed pair
+ResponseWorkflow --> ResponseRewriter : MASK only
+ResponseWorkflow --> ResponseReplay : ForwardOriginal / ForwardMasked
+ResponseReplay --> ResponseHandler : one-shot transport claim
+ResponseHandler --> Client : атомарный ответ или safe reject
+ResponseHandler --> ResponseParser : SSE protocol validation
 ResponseLifecycle --> ShadowProxy : запрет нового handoff при shutdown
 
 note bottom of ShadowProxy
@@ -66,6 +76,6 @@ end note
 
 note bottom of ResponseSource
 Нет application quota, disk spill или persistence.
-Policy evaluation и response audit ещё не подключены.
+SSE enforcement ещё не подключён.
 end note
 @enduml

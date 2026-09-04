@@ -4,16 +4,16 @@
 **Тип:** Epic
 **Статус:** In progress
 **Приоритет:** High
-**Предварительная оценка:** 7-10 инженерных дней; 3/5 issues завершены
+**Предварительная оценка:** 4-5 инженерных дней осталось; 4/5 issues завершены
 **Связанные требования:** `PROXY-01`, `PROXY-02`, `CONC-01`, `CONC-02`, `CONC-03`
 
 ## Контекст
 
 Первый production increment реализовал и проверил bounded in-memory request
 source в завершённом [EPIC-08](epic_08_message_spooling_replay.md). VIG-20-01
-добавил retained in-memory source и protocol gate для ordinary и SSE
-response. Response policy evaluation, reactions и audit остаются в
-enforcement leaves этого epic.
+добавил retained in-memory source и protocol gate для ordinary и SSE response.
+VIG-20-02 завершил ordinary JSON policy evaluation, reactions и audit;
+cross-event SSE enforcement остаётся в VIG-20-05.
 
 Этот epic принял response/SSE scope из EPIC-08. Он не
 переоткрывает завершённый request contract и сохраняет response source
@@ -58,7 +58,7 @@ EPIC-20 Atomic in-memory response analysis
 │   ├── ordinary response lifecycle
 │   ├── status/header disclosure boundary
 │   └── cancellation and upstream failure
-├── non-stream response enforcement (Ready: VIG-20-02)
+├── non-stream response enforcement (Done: VIG-20-02)
 │   ├── complete JSON parse and policy decision
 │   ├── byte-identical ALLOW replay
 │   ├── exact MASK rewrite
@@ -80,11 +80,11 @@ EPIC-20 Atomic in-memory response analysis
 - [x] [VIG-20-04: Retained in-memory response contract](../issues/epic_20/issue_20_04_retained_memory_response_contract.md) - `Done`
 - [x] [VIG-20-01: In-memory response source](../issues/epic_20/issue_20_01_retained_memory_response_source.md) - `Done`
 - [x] [VIG-20-03: Reusable text masker](../issues/epic_20/issue_20_03_reusable_text_masker.md) - `Done`
-- [ ] [VIG-20-02: Non-stream response inspection and enforcement](../issues/epic_20/issue_20_02_response_inspection_enforcement.md) - `Ready for implementation`
+- [x] [VIG-20-02: Non-stream response inspection and enforcement](../issues/epic_20/issue_20_02_response_inspection_enforcement.md) - `Done`
 - [ ] [VIG-20-05: SSE response inspection and enforcement](../issues/epic_20/issue_20_05_sse_response_enforcement.md) - `Ready for implementation`
 
-VIG-20-02 является первым узким enforcement leaf. Его прежний полный
-response/SSE contract поднят в этот epic. VIG-20-05 публикует отдельный ready
+VIG-20-02 завершил первый узкий enforcement leaf. Его прежний полный
+response/SSE contract поднят в этот epic. VIG-20-05 остаётся отдельным ready
 SSE enforcement leaf; framing и terminal parsing завершены в
 [VIG-06-03](../issues/epic_06/issue_06_03_chat_completions_response_parser.md).
 

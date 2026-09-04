@@ -104,7 +104,7 @@ Issue является листом mind map, если:
 | [EPIC-08: Bounded in-memory request source and replay](epics/epic_08_message_spooling_replay.md) | `Done` | 2/2 | 0 дней осталось |
 | [EPIC-09: Закрытие архитектурных рисков v0](epics/epic_09_v0_architecture_closure.md) | `Done` | 9/9 | 0 дней осталось |
 | [EPIC-10: Повышение качества детерминированного PII-распознавания](epics/epic_10_pii_detection_quality.md) | `Done` | 8/8 | 0 дней осталось |
-| [EPIC-20: Atomic in-memory response analysis](epics/epic_20_atomic_in_memory_response_analysis.md) | `In progress` | 3/5 | 7-10 дней; далее VIG-20-02 и VIG-20-05 |
+| [EPIC-20: Atomic in-memory response analysis](epics/epic_20_atomic_in_memory_response_analysis.md) | `In progress` | 4/5 | 4-5 дней; далее VIG-20-05 |
 | [EPIC-21: Post-milestone architecture closure](epics/epic_21_post_milestone_architecture_closure.md) | `Done` | 5/5 | 0 дней осталось |
 | [EPIC-22: Durable minimum audit trail](epics/epic_22_durable_minimum_audit_trail.md) | `Done` | 5/5 | 0 дней осталось |
 | [VIG-11: Fast PII policy adapter](issues/issue_11_fast_pii_policy_adapter.md) | `Done` | завершена | 0 дней осталось |
@@ -201,9 +201,9 @@ Issue является листом mind map, если:
   [VIG-20-01](issues/epic_20/issue_20_01_retained_memory_response_source.md).
 - [x] Независимо реализовать
   [VIG-20-03](issues/epic_20/issue_20_03_reusable_text_masker.md).
-- [ ] После VIG-20-03 реализовать
-  [VIG-20-02](issues/epic_20/issue_20_02_response_inspection_enforcement.md),
-  затем
+- [x] После VIG-20-03 реализовать
+  [VIG-20-02](issues/epic_20/issue_20_02_response_inspection_enforcement.md).
+- [ ] Переиспользуя VIG-20-02, реализовать
   [VIG-20-05](issues/epic_20/issue_20_05_sse_response_enforcement.md).
 
 ### Phase 5: уточнить и реализовать Draft capabilities
@@ -226,8 +226,8 @@ Issue является листом mind map, если:
 - [ ] После стабилизации identity, enforcement и observability уточнить
   [VIG-33](issues/issue_33_availability_slo_and_operations.md).
 
-Текущий следующий шаг: реализовать VIG-20-02, затем VIG-20-05.
-VIG-29 завершён: exact error matrix реализована без подключения enforcement.
+Текущий следующий шаг: реализовать VIG-20-05 поверх общего response workflow.
+VIG-29 завершён: ordinary response использует exact `403`/`502`/`503` matrix.
 
 ## Как закрывать work item
 

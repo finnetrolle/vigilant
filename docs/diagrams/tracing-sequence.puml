@@ -4,24 +4,35 @@ autonumber
 
 actor "Клиент" as Client
 participant "SERVER span Vigilant" as Server
-participant "INTERNAL span\nvigilant.request.inspect" as Inspect
+participant "INTERNAL span\nvigilant.request.inspect" as RequestInspect
 participant "HTTP CLIENT span\nвышестоящего запроса" as UpstreamSpan
 participant "Вышестоящий сервер OpenAI" as Upstream
+participant "INTERNAL span\nvigilant.response.inspect" as ResponseInspect
 
 Client -> Server : запрос с необязательными traceparent, tracestate и сеансом
 activate Server
-Server -> Inspect : создать непосредственный дочерний span
-activate Inspect
-Inspect -> Inspect : parse/context/select
-Inspect -> Inspect : stdout analysis_started,\ndetector execution, stdout analysis_completed
-Inspect --> Server : теневое решение
-deactivate Inspect
+Server -> RequestInspect : создать непосредственный дочерний span
+activate RequestInspect
+RequestInspect -> RequestInspect : parse/context/select
+RequestInspect -> RequestInspect : stdout analysis_started,\ndetector execution, stdout analysis_completed
+RequestInspect --> Server : теневое решение
+deactivate RequestInspect
 Server -> UpstreamSpan : создать непосредственный дочерний span
 activate UpstreamSpan
 UpstreamSpan -> Upstream : запрос с итоговым контекстом трассы
-Upstream --> UpstreamSpan : потоковый ответ или завершение
-UpstreamSpan --> Server : результат вышестоящего запроса
+Upstream --> UpstreamSpan : response удерживается до terminal state
+UpstreamSpan --> Server : gateway-owned complete response
 deactivate UpstreamSpan
+Server -> ResponseInspect : создать непосредственный дочерний span
+activate ResponseInspect
+ResponseInspect -> ResponseInspect : protocol parse
+alt ordinary JSON с detector execution
+  ResponseInspect -> ResponseInspect : stdout analysis_started,\ndetectors/reaction, stdout analysis_completed
+else SSE до VIG-20-05
+  ResponseInspect -> ResponseInspect : только terminal protocol validation
+end
+ResponseInspect --> Server : exact forward / masked forward / safe reject
+deactivate ResponseInspect
 Server --> Client : ответ с итоговым сеансом и SERVER traceparent
 deactivate Server
 @enduml

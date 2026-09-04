@@ -16,12 +16,6 @@ import io.vigilant.source.BoundedRequestSourceOwner
 import io.vigilant.source.RequestSourceOutcomeCode
 import java.time.Duration
 import java.util.concurrent.CancellationException
-import java.util.concurrent.CompletableFuture
-import java.util.concurrent.CompletionException
-import java.util.concurrent.ExecutionException
-import kotlin.coroutines.Continuation
-import kotlin.coroutines.EmptyCoroutineContext
-import kotlin.coroutines.startCoroutine
 
 /** Mutually exclusive complete-source workflow result. */
 internal sealed interface ShadowInspectionOutcome {
@@ -200,28 +194,4 @@ private class RequestAnalysisLifecycle(
 
     /** Returns non-negative monotonic elapsed analysis time. */
     private fun elapsed(): Duration = Duration.ofNanos((System.nanoTime() - startedAtNanos).coerceAtLeast(0L))
-}
-
-/** Runs one suspension boundary on the current blocking-safe inspection thread. */
-private fun <T> runSuspending(block: suspend () -> T): T {
-    val completion = CompletableFuture<T>()
-    block.startCoroutine(
-        object : Continuation<T> {
-            override val context = EmptyCoroutineContext
-
-            /** Publishes the terminal coroutine result to the blocking bridge. */
-            override fun resumeWith(result: Result<T>) {
-                result.fold(completion::complete, completion::completeExceptionally)
-            }
-        },
-    )
-    return try {
-        completion.get()
-    } catch (interrupted: InterruptedException) {
-        completion.cancel(true)
-        Thread.currentThread().interrupt()
-        throw CancellationException("Policy evaluation was cancelled").also { it.initCause(interrupted) }
-    } catch (failed: ExecutionException) {
-        throw CompletionException(failed.cause ?: failed)
-    }
 }

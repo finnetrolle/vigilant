@@ -51,17 +51,18 @@ safe structured `request_completed` event с method, path без query, HTTP sta
 и upstream/gateway durations. Health/readiness probes этим decorator не
 обрабатываются.
 
-## Safe request analysis pair
+## Safe request analysis pair and ordinary response counterpart
 
-Для каждого request, где после parse, identity/context assembly и policy
-selection действительно начинается detector execution, logger best-effort
+Для каждой request или ordinary-response фазы, где после parse,
+identity/context assembly и policy selection действительно начинается detector
+execution, logger best-effort
 публикует ровно одну пару:
 
 - `policy.analysis_started` непосредственно перед первым detector execution;
 - `policy.analysis_completed` после всех запущенных fragment evaluations и до
   разрешённого transport handoff.
 
-Оба event содержат `protocol=openai.chat_completions`, `phase=REQUEST`,
+Оба event содержат `protocol=openai.chat_completions`, `phase=REQUEST|RESPONSE`,
 `trace.id`, server-generated `span.id` и `parent.span.id`, canonical sorted
 policy references `id@version` и detector ID/version. Trace ID либо генерируется
 server-side, либо продолжает валидный W3C parent по current tracing contract.
@@ -69,11 +70,12 @@ Terminal event дополнительно
 содержит `outcome=CLEAN|DETECTED|INSPECTION_GAP|ERROR`, `coverage`,
 `fragments.inspected`, `findings.total`, canonical `findings.by_type` и
 `findings.by_evidence_strength`, а также non-negative `analysis.duration_ms`.
-Successful shadow analysis содержит
-`reaction=ALLOW`; ERROR не содержит reaction и публикует только stable
-`error.code`.
+Successful request shadow analysis содержит `reaction=ALLOW`; ordinary response
+публикует final `reaction=ALLOW|MASK|BLOCK`. ERROR не содержит reaction и
+публикует только stable `error.code`. Response outcome сохраняет precedence
+`DETECTED` > `INSPECTION_GAP` > `CLEAN` независимо от partial coverage.
 
-Unsupported/malformed request, identity/context/source failure, empty policy
+Unsupported/malformed request или response, identity/context/source failure, empty policy
 selection и cancellation до detector execution не публикуют пару. Cancellation
 после start best-effort публикует terminal ERROR. Ни один event не содержит
 payload, PII values/spans, path/query, headers, credentials, identity,
@@ -82,7 +84,7 @@ propagation values. Policy/detector references остаются stdout-only.
 
 Пара не является durable acceptance. Existing Logback `AsyncAppender` с
 `neverBlock=true` остаётся единственной queue и может отбросить оба INFO event.
-Request path не ждёт queue delivery, stdout write или external delivery;
+Request/response path не ждёт queue delivery, stdout write или external delivery;
 logging overload/failure не меняет HTTP outcome и upstream handoff.
 
 ## Upstream failure event
@@ -147,15 +149,17 @@ CLIENT span также под тем же настроенным именем. �
 
 ### Span model
 
-Один поддержанный запрос прокси создаёт SERVER span и два непосредственных
-дочерних span: INTERNAL span `vigilant.request.inspect` и HTTP CLIENT span
-вышестоящего запроса. Полное происхождение и момент передачи контекста показаны
+Один поддержанный запрос прокси создаёт SERVER span и три непосредственных
+дочерних span: INTERNAL `vigilant.request.inspect`, HTTP CLIENT span вышестоящего
+запроса и INTERNAL `vigilant.response.inspect` после retained response ingest. Полное
+происхождение и момент передачи контекста показаны
 на диаграмме последовательности UML 2.0
 [tracing-sequence.puml](diagrams/tracing-sequence.puml).
 
-INTERNAL и CLIENT являются прямыми children SERVER span. Inspection
+Both INTERNAL spans и CLIENT являются прямыми children SERVER span. Request inspection
 завершается после принятия решения и создания upstream response exchange;
-CLIENT span живёт до завершения upstream exchange. Все три span несут один
+CLIENT span живёт до завершения upstream exchange, response inspection span — до final
+response outcome. Все четыре span несут один
 trace ID и attribute `session.id`.
 
 SERVER span также содержит method, path без query, status,

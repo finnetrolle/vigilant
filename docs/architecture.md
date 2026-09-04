@@ -4,10 +4,10 @@
 
 Vigilant - однопроцессный HTTP gateway на Kotlin и Armeria. Текущий
 production increment поддерживает request-side PII inspection для OpenAI Chat
-Completions в shadow mode. Он проверяет запрос и best-effort публикует
-безопасную audit lifecycle pair, но не блокирует и не изменяет payload.
-Upstream response полностью удерживается в памяти и проверяется existing
-Chat Completions JSON/SSE parser до раскрытия клиенту.
+Completions в shadow mode и ordinary JSON response enforcement. Request не блокируется
+и не изменяется. Upstream response полностью удерживается в памяти; ordinary JSON
+проходит policy `ALLOW`/`MASK`/`BLOCK`, а SSE до VIG-20-05 только protocol
+validation. Обе фазы не раскрывают client status, headers или body до terminal outcome.
 
 Поддерживаемый маршрут:
 
@@ -16,8 +16,8 @@ Chat Completions JSON/SSE parser до раскрытия клиенту.
 - schema-tolerant Chat Completions JSON, который можно однозначно разобрать для
   проверки.
 
-Response policy evaluation, response audit pair, `MASK`/`BLOCK`, OpenAI
-Responses API и другие enforcement reactions пока не подключены к runtime.
+SSE response enforcement, request-side `MASK`/`BLOCK`, OpenAI Responses API и
+`REMOVE` пока не подключены к runtime.
 Подробные границы HTTP-контракта приведены в
 [runtime contract](runtime-contract.md).
 
@@ -107,8 +107,9 @@ Context содержит:
 Armeria `ServiceRequestContext`. Public handoff создаёт response context,
 изменяя только phase на `RESPONSE`; reported model из upstream ответа не
 участвует. Snapshot очищается при completion, error или cancellation и не
-использует thread-local или global map. Retained response protocol validation
-пока не запускает response policy context или detector execution.
+использует thread-local или global map. Ordinary response workflow использует
+этот response context для selection и detector execution; response fields его не
+переопределяют.
 
 `PolicySelector` выбирает enabled policies по точному значению или wildcard,
 затем одновременно применяет явные overrides. `PolicyEngine` дедуплицирует
@@ -118,12 +119,10 @@ detector execution между policies, соблюдает deadline каждой
 Строгая структура HOCON, точное сопоставление и ограничения теневого режима при
 запуске описаны в [руководстве по политикам](policies.md).
 
-Policy domain поддерживает `ALLOW`/`BLOCK` и transformation plans, но startup
-validation текущего shadow increment разрешает только `ALLOW` без
-transformations для всех outcomes. Поэтому runtime всегда пересылает исходный
-request, включая случаи `DETECTED`, `CLEAN` и `INSPECTION_GAP`. Detector error
-фиксируется как audit outcome `ERROR`, но при валидной shadow policy также не
-включает enforcement.
+Policy domain поддерживает `ALLOW`/`BLOCK` и `MASK` transformation plans. Startup
+validation сохраняет `REQUEST` policies shadow-only, но разрешает existing valid
+enforcement reactions для `RESPONSE`. Detector error/deadline в request остаётся
+shadow audit `ERROR`; response даёт fail-closed `503` без reaction fallback.
 
 ### 5. Fast PII detector
 
@@ -148,7 +147,7 @@ metadata, но не matched text. PII-free `WindowedInspectionExecutor` разб
 свидетельства качества и явные ограничения описаны в
 [руководстве по обнаружению PII](pii-detection.md).
 
-### 6. Best-effort audit, request replay и retained response
+### 6. Best-effort audit, request replay и response enforcement
 
 Complete-source orchestration выполняет синхронный
 `ShadowInspectionWorkflow` на существующем blocking-safe inspection executor.
@@ -158,10 +157,13 @@ request context и оценивает каждый независимый text f
 best-effort публикует `policy.analysis_started`. После terminal outcome и до
 transport handoff он публикует `policy.analysis_completed` с safe aggregate
 coverage/counts и stable ERROR code либо successful `reaction=ALLOW`.
+Тот же logger обрамляет actual ordinary-response detector execution парой с
+`phase=RESPONSE`; terminal reaction может быть `ALLOW`, `MASK` или `BLOCK`.
 
 Оба event идут через existing Logback `AsyncAppender` с `neverBlock=true`.
 Payload, matched text, locators, identity, session, headers и raw
 user-controlled correlation values в них не попадают. Эти request-analysis records
+и ordinary response-analysis records
 остаются только в stdout; workflow не ждёт queue delivery или stdout write.
 Slow/full/throwing logging sink не меняет response, readiness или upstream
 handoff. Application-owned audit storage, delivery worker и persistence
@@ -185,22 +187,30 @@ handoff owner освобождается только terminal signal replay. Э
   stable `504`;
 - не агрегирует response body и сохраняет streaming/backpressure, включая SSE.
 
-`RetainedResponseHandler` принимает transport response в отдельный
+`RetainedResponseHandler` принимает gateway-owned response handle внутреннего
+upstream exchange в отдельный
 `RetainedResponseSource`. Source требует у upstream по одному body item,
 копирует exact bytes только в RAM и скрывает upstream status, headers и body
 до protocol completion. Ordinary JSON завершается по end-of-stream, а SSE
 только отдельным standalone `data: [DONE]`. Existing response parser работает
-на blocking-safe executor. Valid response любого upstream status, включая
-`4xx` и `5xx`, replay-ится byte-for-byte по client demand. Malformed JSON/SSE,
+на blocking-safe executor. Ordinary JSON success переходит в `ResponseInspectionWorkflow`,
+который строит request-derived context, оценивает independent fragments, выбирает
+final reaction и публикует safe RESPONSE audit pair. `ALLOW` передаёт original
+source, `MASK` сверяет parser source map и точечно патчит raw JSON, `BLOCK`
+закрывает source без replay. Тот же path применяется к любому upstream status,
+включая `4xx` и `5xx`. SSE success до VIG-20-05 replay-ится byte-for-byte. Malformed JSON/SSE,
 missing или malformed terminal event и upstream interruption очищают source и
 возвращают exact VIG-29 `502 invalid_upstream_response` без partial disclosure.
+
+`ReplayReadyResponse` обеспечивает one-shot handoff: до successful transport claim source
+принадлежит workflow, после claim terminal publisher владеет cleanup. `BLOCK`,
+failure, cancellation и rejected/repeated handoff закрывают source без replay.
 
 Retained response не имеет application-level byte limit, shared quota, disk
 spill, temporary file или persistent representation. Success, protocol
 failure, client cancellation, replay cancellation и forced shutdown очищают
 owned buffers и references. JVM heap sizing и OOM policy остаются
-deployment-owned. Этот increment не запускает response detectors, не применяет
-response policy reaction и не публикует response audit pair.
+deployment-owned. SSE-specific detector/rewrite behavior остаётся за VIG-20-05.
 
 ## Выполнение и resource ownership
 
@@ -249,7 +259,7 @@ Quiet period и force timeout настраиваются. Полный опер�
 | Application configuration | `gateway/config/AppConfig.kt` |
 | Admission и probes | `gateway/health/*` |
 | Request inspection | `gateway/proxy/PiiShadowProxyService.kt`, `ShadowInspectionWorkflow.kt`, `ReplayReadyRequest.kt`, `InspectionResources.kt` |
-| Response retention и lifecycle | `gateway/proxy/RetainedResponseHandler.kt`, `gateway/proxy/ResponseAnalysisLifecycle.kt`, `source/RetainedResponseSource.kt` |
+| Response inspection и lifecycle | `gateway/proxy/RetainedResponseHandler.kt`, `gateway/proxy/ResponseInspectionWorkflow.kt`, `gateway/proxy/ReplayReadyResponse.kt`, `gateway/proxy/ResponseAnalysisLifecycle.kt`, `source/RetainedResponseSource.kt` |
 | Transport proxy | `gateway/proxy/BypassProxyService.kt`, `UpstreamClientResources.kt` |
 | OpenAI normalization | `protocol/openai/*` |
 | Bounded request source | `source/*` |

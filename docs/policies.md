@@ -7,15 +7,16 @@ Vigilant загружает один неизменяемый снимок по�
 `./politics.conf`. Горячая перезагрузка, удалённый поставщик политик и скрытая
 политика по умолчанию отсутствуют.
 
-Текущий производственный этап работает только в теневом режиме:
+Текущий производственный этап сохраняет request phase в теневом режиме и
+разрешает enforcement для ordinary JSON response:
 
 - хотя бы одна действующая включённая политика обязана глобально покрывать все
   контексты `REQUEST` с помощью детектора `fast-pii`;
-- реакции `detected`, `clean` и `error` во всех политиках обязаны иметь
+- реакции `detected`, `clean` и `error` во всех `REQUEST` политиках обязаны иметь
   `disposition = "ALLOW"` и пустые `transformations`;
-- доменная модель содержит `BLOCK`, `MASK` и immutable canonical
-  `MaskingInstruction`; `REMOVE` отвергается semantic validation, а startup
-  по-прежнему запрещает non-`ALLOW` и любые transformations в shadow runtime;
+- `RESPONSE` политика может выбрать detected `ALLOW`, `ALLOW+MASK` или `BLOCK`;
+  clean/error сохраняют existing legal `ALLOW|BLOCK` combinations;
+- `REMOVE` отвергается semantic validation;
 - решение политики не изменяет тело запроса и не блокирует срабатывание PII.
 
 Диаграмма деятельности UML 2.0:
@@ -55,6 +56,12 @@ policies = [
 ]
 ```
 
+Это минимальное mandatory request shadow coverage. Для ordinary-response enforcement
+к тому же snapshot добавляется политика с `match.phase = "RESPONSE"`. Например,
+`detected { disposition = "ALLOW", transformations = ["MASK"] }` маскирует
+findings, а `detected { disposition = "BLOCK", transformations = [] }` блокирует
+весь ordinary response. `REMOVE` и transformations для `clean`/`error` невалидны.
+
 Рабочий пример находится в
 [`politics.conf.example`](../politics.conf.example).
 
@@ -82,7 +89,7 @@ policies = [
 |---|---|---|
 | `url` | Нормализованный итоговый URL вышестоящего сервера | Точное совпадение без учёта регистра или `*`; строка запроса, фрагмент и учётные данные отсутствуют |
 | `model` | Непустое поле `model` из тела запроса | Точное совпадение без учёта регистра или `*` |
-| `phase` | Фаза обработки | `REQUEST` или `RESPONSE`; сейчас проверяются только запросы |
+| `phase` | Фаза обработки | `REQUEST` для shadow request analysis или `RESPONSE` для ordinary JSON enforcement; SSE enforcement пока не подключено |
 | `subject.type` | Режим идентификации | `USER`, `GROUP` или глобальное значение `*` |
 | `subject.id` | Нормализованные пользователь и группы | Точное совпадение без учёта регистра или `*` |
 
@@ -137,13 +144,13 @@ validated `sub`/`groups`. Raw token не входит в policy context. Пол�
 - `clean`: `ALLOW` или `BLOCK`, преобразования запрещены;
 - `error`: `ALLOW` или `BLOCK`, преобразования запрещены.
 
-Aggregation уже создаёт typed irreversible instructions из selected `MASK`
+Aggregation создаёт typed irreversible instructions из selected `MASK`
 reactions и `FindingType`; transport-neutral `TextMasker` применяет только
-готовые instructions. Эти возможности пока не подключены к HTTP gateway.
-Сейчас любое значение `disposition`, отличное от `ALLOW`, или непустое
-преобразование завершает запуск с кодом `2`. Тайм-аут или ошибка детектора
-создаёт stdout audit outcome `ERROR`, но logging delivery не ожидается и запрос
-получает теневое решение `ALLOW`.
+готовые instructions. Ordinary-response rewriter применяет их к exact JSON
+string source ranges без повторного detector execution. Request policy с
+non-`ALLOW` или transformation по-прежнему завершает startup с кодом `2`;
+валидные response reactions загружаются. Response detector timeout/error даёт
+fail-closed `503`, не `error` reaction fallback.
 
 ## Проверка и безопасные ошибки
 
@@ -157,7 +164,7 @@ reactions и `FindingType`; transport-neutral `TextMasker` применяет т
 - условие сопоставления, субъект, срок или реакция недопустимы;
 - переопределение ссылается на себя, неизвестно, повторяется или образует цикл;
 - отсутствует действующее глобальное покрытие `REQUEST` через `fast-pii`;
-- указана реакция принудительного ограничения или преобразование.
+- в `REQUEST` policy указана enforcement reaction или преобразование.
 
 При этом сервер приложения не начинает принимать запросы. В `stderr` не
 выводятся тело политики, исходные значения, учётные данные и путь к файлу; код
@@ -172,7 +179,7 @@ reactions и `FindingType`; transport-neutral `TextMasker` применяет т
 - среда проверки политик, пользовательский интерфейс и воспроизведение
   исторических трасс;
 - внешний реестр детекторов и подключаемых модулей;
-- изменение запросов и принудительное применение решений.
+- изменение или enforcement запросов, а также SSE response enforcement.
 
 Статус целевых требований приведён в
 [карте покрытия требований](requirements-coverage.md).

@@ -38,12 +38,13 @@ maps, terminal semantics, transport contracts и implementation issues.
 - любой другой method/path/media type получает stable `UNSUPPORTED_SCHEMA` и
   не проходит через молчаливый bypass guardrail-enabled route.
 
-Текущий runtime после VIG-20-01 полностью удерживает Chat Completions response,
-включая SSE при `stream=true`, и protocol-validates complete source до раскрытия
-клиенту. Runtime response policy inspection и enforcement остаются последующими
-leaves EPIC-20. Retained source и protocol gate завершены в VIG-20-01, pure Chat
-Completions JSON/SSE response parsing завершён в VIG-06-03; OpenAI Responses
-scope не реализован и не получает невыбранные terminal semantics.
+Текущий runtime полностью удерживает Chat Completions response, включая SSE при
+`stream=true`, и protocol-validates complete source до раскрытия клиенту.
+VIG-20-02 добавил ordinary JSON policy inspection и enforcement; cross-event
+SSE enforcement остаётся VIG-20-05. Retained source и protocol gate завершены
+в VIG-20-01, pure Chat Completions JSON/SSE response parsing завершён в
+VIG-06-03; OpenAI Responses scope не реализован и не получает невыбранные
+terminal semantics.
 
 Парсер возвращает payload как упорядоченную immutable-коллекцию независимых
 текстовых фрагментов. Каждый фрагмент относится ровно к одному логическому
@@ -219,12 +220,11 @@ Final snapshot fields не переопределяют и не сверяют �
 content после него дают typed failure без partial result. Иные canonical
 snapshot и mismatch rules остаются открыты только для OpenAI Responses API.
 
-В future response-inspection increment SSE является одной атомарной
-policy-транзакцией. Parser может возвращать завершённые fragments внутреннему
-evaluation flow по мере разбора, но integration layer не отправляет клиенту
-upstream status, headers или body до terminal event и итогового policy
-decision. Это решение не активно в первом production increment, где response
-остаётся streaming pass-through без inspection.
+В response-inspection contract SSE является одной атомарной policy-транзакцией.
+Parser может возвращать завершённые fragments внутреннему evaluation flow по
+мере разбора, но integration layer не отправляет клиенту upstream status,
+headers или body до terminal event. Retained protocol gate уже активен;
+итоговый SSE policy decision и rewrite принадлежат VIG-20-05.
 
 Атомарное удержание retained in-memory response source, replay, cleanup и
 backpressure принадлежат
@@ -488,8 +488,8 @@ OpenAI formats.
   fragment.
 - [EPIC-08](epic_08_message_spooling_replay.md) владеет bounded in-memory
   request source, replay, cleanup и request forwarding lifecycle.
-- [EPIC-20](epic_20_atomic_in_memory_response_analysis.md) владеет future atomic
-  retained in-memory response source lifecycle для ordinary и SSE responses.
+- [EPIC-20](epic_20_atomic_in_memory_response_analysis.md) владеет atomic
+  retained in-memory response lifecycle и enforcement для ordinary и SSE responses.
 
 ## Нормативные protocol sources
 

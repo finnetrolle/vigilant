@@ -5,7 +5,7 @@ Vigilant - OpenAI-совместимый guardrails gateway для платфо�
 формирует безопасный audit event, не раскрывая содержимое запроса.
 
 > Статус: pre-release, версия `0.1.0-SNAPSHOT`. Первый production milestone
-> request-side PII inspection в shadow mode закрыт. Измерения и safety evidence
+> request-side PII inspection в shadow mode и ordinary-response enforcement закрыты. Измерения и safety evidence
 > опубликованы в [inspection-load report](docs/inspection-load-result.md), а
 > следующий frontier перечислен в [roadmap](spec/ROADMAP.md#текущий-roadmap-frontier).
 
@@ -14,22 +14,25 @@ Vigilant - OpenAI-совместимый guardrails gateway для платфо�
 - `POST /v1/chat/completions` с `Content-Type: application/json`.
 - Bounded приём request body и детерминированная проверка встроенным
   `fast-pii` detector по `politics.conf`.
-- Shadow-only решение: найденный PII фиксируется как `DETECTED`, но текущая
-  disposition всегда `ALLOW`.
+- Request-side shadow decision: найденный PII фиксируется как `DETECTED`,
+  но request disposition остаётся `ALLOW`.
 - Byte-identical replay исходного body и сохранение неизвестных полей.
 - Development/test Dummy Bearer identity с configured normalized user/groups,
   unchanged upstream Authorization и request-to-response context handoff.
 - Streaming/backpressure в низкоуровневом bypass transport. Guardrail path
   полностью удерживает ordinary/SSE Chat Completions response до terminal
-  protocol validation, затем replay-ит исходные bytes без изменений.
+  protocol validation. Ordinary JSON проходит response policies и применяет
+  exact `ALLOW`, `MASK` или `BLOCK` до первого client byte; SSE пока только
+  валидируется и replay-ится без enforcement.
 - Stable fail-closed ошибки для неподдерживаемой или неоднозначной request
   schema и при исчерпании inspection capacity.
-- Safe best-effort stdout audit pair вокруг реально начатого request analysis.
+- Safe best-effort stdout audit pair вокруг реально начатого request и
+  ordinary-response analysis.
 - JSONL-логи, correlation/trace ID, OTLP traces и metrics, health/readiness
   endpoints и non-root OCI image.
 
-Пока не поддерживаются OpenAI Responses API, response policy evaluation и
-audit, `BLOCK`, `MASK`, `REMOVE`, authentication/external identity lookup,
+Пока не поддерживаются OpenAI Responses API, SSE response enforcement,
+request-side `BLOCK`/`MASK`, `REMOVE`, authentication/external identity lookup,
 request-body или response-body disk spill,
 Kubernetes/Helm и ML/NER detector. Полные границы первого инкремента зафиксированы в
 [roadmap](spec/ROADMAP.md#не-входит-в-первый-production-increment).
@@ -84,8 +87,10 @@ outcome или upstream handoff.
 - [Диаграмма компонентов исполняемой системы UML 2.0](docs/diagrams/runtime-components.puml)
 
 Низкоуровневый bypass transport передаёт response потоком. Guardrail path
-полностью удерживает ordinary/SSE response в RAM, проверяет terminal protocol
-state и только затем атомарно раскрывает исходный response клиенту. Подробный
+полностью удерживает ordinary/SSE response в RAM. Ordinary JSON атомарно
+раскрывается только после response `ALLOW`/точного `MASK`, а `BLOCK` заменяет
+весь upstream response safe `403`. SSE до VIG-20-05 проходит только terminal
+protocol validation и exact replay. Подробный
 разбор запуска, механизма политик, потоков и владения ресурсами приведён в
 [описании архитектуры](docs/architecture.md). Поддерживаемый HTTP-контракт,
 ошибки и модель таймаутов описаны в

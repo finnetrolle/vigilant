@@ -112,7 +112,8 @@ identity, user/groups, session и raw inbound propagation values запреще�
 
 Existing Logback `AsyncAppender` с `neverBlock=true` остаётся единственной
 queue. Request path не ждёт logging delivery, stdout write или durable
-acknowledgement. RESPONSE pair остаётся future behavior owning leaves EPIC-20.
+acknowledgement. Ordinary JSON RESPONSE pair реализована VIG-20-02; SSE pair
+остаётся future behavior VIG-20-05.
 
 ### Historical durable subsystem
 
@@ -401,9 +402,9 @@ observation seams. Их исторические issue records и reports сох
 in-memory response source lifecycle и enforcement для ordinary и SSE
 responses, а EPIC-06 владеет protocol parsing; EPIC-21 закрыт без
 дублирующего future scope. VIG-20-04 и VIG-20-01 имеют status
-`Done`: guardrail route удерживает ordinary/SSE response до terminal
-protocol validation и exact replay, а policy reactions и response audit остаются
-в remaining leaves EPIC-20.
+`Done`: guardrail route удерживает ordinary/SSE response до terminal protocol
+validation. VIG-20-02 добавляет ordinary JSON reactions и response audit;
+cross-event SSE enforcement остаётся в VIG-20-05.
 
 Post-milestone closure EPIC-21 завершён. В EPIC-22 local durable store
 [VIG-22-01](issues/epic_22/issue_22_01_local_durable_audit_store.md), mandatory

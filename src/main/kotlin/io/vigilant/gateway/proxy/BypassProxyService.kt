@@ -28,8 +28,15 @@ import io.opentelemetry.context.propagation.TextMapSetter
 import java.net.URI
 import org.slf4j.LoggerFactory
 
+/**
+ * Shared low-level upstream exchange boundary for streaming bypass and guarded response retention.
+ *
+ * [serve] preserves immediate streaming and stable transport recovery. [exchange] exposes the same
+ * routing, tracing, and header filtering before any caller binds the upstream response to a client.
+ */
 @SingleIn(AppScope::class)
 @Inject
+@Suppress("TooManyFunctions")
 class BypassProxyService(
     upstreamUri: URI,
     private val upstream: WebClient,
@@ -48,6 +55,21 @@ class BypassProxyService(
      * exchange, because the status and body already sent cannot be replaced.
      */
     override fun serve(
+        ctx: ServiceRequestContext,
+        request: HttpRequest,
+    ): HttpResponse =
+        HttpResponse.of(
+            exchange(ctx, request).recover { cause -> upstreamError(ctx, cause) },
+        )
+
+    /**
+     * Starts one gateway-owned upstream exchange without binding its response to client output.
+     *
+     * Request routing, tracing and canonical response-header filtering are shared by streaming
+     * bypass and retained guardrail paths. Transport failures remain exceptional so each caller
+     * can choose its stable pre-disclosure mapping.
+     */
+    internal fun exchange(
         ctx: ServiceRequestContext,
         request: HttpRequest,
     ): HttpResponse {
@@ -78,9 +100,7 @@ class BypassProxyService(
                 clientSpan?.end()
             }
         }
-        return HttpResponse.of(
-            upstreamResponse.recover { cause -> upstreamError(ctx, cause) },
-        )
+        return upstreamResponse
     }
 
     /** Starts the outbound HTTP CLIENT span as a direct child of the gateway SERVER span. */
@@ -175,9 +195,7 @@ class BypassProxyService(
      * upstream response before it is sent to the client.
      */
     internal fun rewriteResponseHeaders(headers: ResponseHeaders): ResponseHeaders {
-        val builder = headers.toBuilder()
-        removeHopByHopHeaders(builder, connectionHeaderNames(headers))
-        return builder.build()
+        return ProxyResponseHeaders.filtered(headers)
     }
 
     /**

@@ -17,6 +17,10 @@ stream не раскрывает upstream status, headers или event bytes.
 
 ## Подтверждённая граница
 
+- Завершённый VIG-20-02 поставляет production `ResponseInspectionWorkflow`,
+  typed outcomes, one-shot response handoff и ordinary
+  `ResponseSourceMap.jsonStrings`. Эта issue расширяет тот же source-map model
+  SSE segments и transport-specific rewrite dispatch без второго workflow.
 - VIG-20-02 владеет общим response analysis orchestration: context и policy
   selection, detector execution, final reaction, safe audit pair и mapping
   технических outcomes.

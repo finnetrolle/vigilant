@@ -162,7 +162,7 @@ state descriptions и metrics не содержат bytes, preview, filename, me
   decoded fragments, но не хранит original encoded message.
 - [EPIC-04](epic_04_policy_engine.md) возвращает policy decision, после
   которого integration выбирает replay или reject.
-- [EPIC-20](epic_20_atomic_in_memory_response_analysis.md) владеет future
+- [EPIC-20](epic_20_atomic_in_memory_response_analysis.md) владеет отдельным
   retained in-memory response source lifecycle для ordinary и SSE responses.
 
 ## Не входит в epic

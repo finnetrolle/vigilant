@@ -1,6 +1,9 @@
 package io.vigilant.policy.config
 
 import io.vigilant.policy.domain.DetectorId
+import io.vigilant.policy.domain.Disposition
+import io.vigilant.policy.domain.PolicyPhase
+import io.vigilant.policy.domain.Transformation
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.writeText
@@ -76,9 +79,46 @@ class PolicyConfigurationLoadingTest {
         }
 
         assertEquals(
-            "Shadow-only policy configuration requires ALLOW reactions without transformations",
+            "Request policies require ALLOW reactions without transformations",
             exception.message,
         )
+    }
+
+    /** Response policies may configure existing MASK/BLOCK reactions beside request shadow coverage. */
+    @Test
+    fun `response enforcement reactions load without weakening request shadow restriction`() {
+        val responsePolicy =
+            shadowPolicyEntry("response-enforcement")
+                .replace("phase = \"REQUEST\"", "phase = \"RESPONSE\"")
+                .replace(
+                    "detected { disposition = \"ALLOW\", transformations = [] }",
+                    "detected { disposition = \"ALLOW\", transformations = [\"MASK\"] }",
+                ).replace(
+                    "error { disposition = \"ALLOW\", transformations = [] }",
+                    "error { disposition = \"BLOCK\", transformations = [] }",
+                )
+        val configFile =
+            writeConfig(
+                """
+                policies = [
+                  ${shadowPolicyEntry("request-coverage")},
+                  $responsePolicy
+                ]
+                """.trimIndent(),
+            )
+
+        val policies =
+            loadPolicySnapshot(
+                env = mapOf("VIGILANT_POLITICS_CONFIG" to configFile.toString()),
+                defaultConfigPath = Path.of("unused-politics.conf"),
+                availableDetectorIds = setOf(DetectorId("fast-pii")),
+            )
+
+        val response = policies.single { policy -> policy.match.phase == PolicyPhase.RESPONSE }
+        assertEquals(Disposition.ALLOW, response.reactions.detected.disposition)
+        assertEquals(setOf(Transformation.MASK), response.reactions.detected.transformations)
+        assertEquals(Disposition.BLOCK, response.reactions.error.disposition)
+        assertEquals(emptySet(), response.reactions.error.transformations)
     }
 
     /** Verifies configured REMOVE is rejected before a startup snapshot can ignore or execute it. */
