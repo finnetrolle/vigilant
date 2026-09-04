@@ -79,7 +79,7 @@ final class RoadmapFrontierContractTest {
                 () -> assertTrue(roadmap.contains("EPIC-22")));
     }
 
-    /** Records closed test gaps while retaining EPIC-20 as the sole response-spooling owner. */
+    /** Records closed test gaps while retaining EPIC-20 as the response-lifecycle owner. */
     @Test
     void recordsPostMilestoneClosureAndFutureScopeOwner() throws IOException {
         String frontier = normalizedWhitespace(
@@ -88,7 +88,7 @@ final class RoadmapFrontierContractTest {
         assertAll(
                 () -> assertTrue(frontier.contains("VIG-21-03 и VIG-21-04 имеют status `Done`")),
                 () -> assertTrue(frontier.contains("EPIC-20 остаётся единственным owner")),
-                () -> assertTrue(frontier.contains("response/SSE spooling и secure spill")));
+                () -> assertTrue(frontier.contains("retained in-memory response source lifecycle и enforcement")));
     }
 
     /** Collapses Markdown wrapping so assertions depend on prose rather than line length. */

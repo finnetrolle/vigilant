@@ -26,7 +26,7 @@ stream не раскрывает upstream status, headers или event bytes.
   events, `MASK` rewrite, atomic replay и real-Armeria E2E evidence.
 - VIG-06-03 остаётся единственным owner SSE framing, terminal parsing и
   normalized fragments. VIG-20-05 не создаёт competing parser.
-- Retained source lifecycle принадлежит VIG-20-01, transport-neutral masking
+- Retained source lifecycle завершён в VIG-20-01, transport-neutral masking
   принадлежит VIG-20-03, client errors используют exact VIG-29 matrix.
 
 ## Уже зафиксированное поведение

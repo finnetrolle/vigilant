@@ -29,6 +29,8 @@ import io.vigilant.gateway.proxy.BypassProxyService
 import io.vigilant.gateway.proxy.InspectionResources
 import io.vigilant.gateway.proxy.PiiShadowProxyService
 import io.vigilant.gateway.proxy.PiiShadowProtocol
+import io.vigilant.gateway.proxy.ResponseAnalysisLifecycle
+import io.vigilant.gateway.proxy.RetainedResponseHandler
 import io.vigilant.gateway.proxy.ShadowAuditLogger
 import io.vigilant.gateway.proxy.ShadowInspectionWorkflow
 import io.vigilant.gateway.proxy.UpstreamClientResources
@@ -135,6 +137,7 @@ interface AppComponent {
             inspectionResources: InspectionResources,
             policyEngine: PolicyEngine,
             identityExtractor: BearerIdentityExtractor,
+            responseAnalysisLifecycle: ResponseAnalysisLifecycle,
         ): PiiShadowProxyService {
             val protocol = PiiShadowProtocol(appConfig.upstreamUri)
             val auditLogger = ShadowAuditLogger()
@@ -146,6 +149,8 @@ interface AppComponent {
                 workflow = workflow,
                 inspectionExecutor = inspectionResources.requestExecutor,
                 identityExtractor = identityExtractor,
+                responseAnalysisLifecycle = responseAnalysisLifecycle,
+                retainedResponseHandler = RetainedResponseHandler(inspectionResources.requestExecutor),
             )
         }
 
@@ -187,7 +192,10 @@ interface AppComponent {
         fun metricsService(tracingService: TracingService, meter: Meter): MetricsService =
             MetricsService(tracingService, meter)
 
-        /** Assembles gateway-owned probes and the observed proxy catch-all route. */
+        /**
+         * Assembles gateway-owned probes and the observed proxy catch-all route, closing
+         * response-analysis admission synchronously when server shutdown begins.
+         */
         @Provides
         @SingleIn(AppScope::class)
         fun server(
@@ -195,10 +203,12 @@ interface AppComponent {
             livenessService: LivenessService,
             readinessService: ReadinessService,
             trafficAdmissionService: TrafficAdmissionService,
+            responseAnalysisLifecycle: ResponseAnalysisLifecycle,
         ): Server =
             Server.builder()
                 .http(appConfig.port)
                 .gracefulShutdownTimeout(appConfig.shutdown.quietPeriod, appConfig.shutdown.forceTimeout)
+                .serverListener(responseAnalysisLifecycle.serverListener())
                 .service("/healthz", livenessService)
                 .service("/readyz", readinessService)
                 .serviceUnder("/", trafficAdmissionService)

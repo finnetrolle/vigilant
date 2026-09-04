@@ -169,13 +169,16 @@ detector execution и без stdout audit pair. Исходное тело, ис�
 ## Не поддерживается
 
 - API OpenAI Responses, Realtime и Batch;
-- runtime-проверка и enforcement ответов Chat Completions;
-- буферизация вывода SSE до решения политики;
+- response policy evaluation и enforcement ответов Chat Completions;
 - внешний механизм разрешения разговора или системной инструкции;
 - `BLOCK`, `MASK`, `REMOVE` и изменение исходного запроса;
 - произвольные OpenAI-совместимые конечные точки и резервное распознавание по
   телу запроса.
 
 Combined response parser VIG-06-03 поддерживает ordinary JSON и SSE response
-через единый public typed result. Retention, inspection и enforcement ответов
-остаются в EPIC-20; runtime behavior пока не изменилось.
+через единый public typed result. Runtime полностью удерживает ordinary/SSE
+response до EOF или standalone `data: [DONE]`, проверяет protocol и только
+после этого byte-for-byte раскрывает valid source. Missing/malformed terminal,
+malformed protocol и upstream interruption дают safe `502
+invalid_upstream_response` без partial disclosure. Policy evaluation,
+`MASK`/`BLOCK` и response audit остаются следующими leaves EPIC-20.

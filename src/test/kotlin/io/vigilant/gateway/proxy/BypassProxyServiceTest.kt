@@ -364,16 +364,19 @@ class BypassProxyServiceTest {
             if (request.headers().get("x-test-outcome") == "fail") {
                 HttpResponse.of(
                     HttpStatus.INTERNAL_SERVER_ERROR,
-                    MediaType.PLAIN_TEXT_UTF_8,
-                    "upstream failure response-secret-4F90",
+                    MediaType.JSON,
+                    """{"choices":[{"message":{"role":"assistant",""" +
+                        """"content":"upstream failure response-secret-4F90"}}]}""",
                 )
             } else {
                 HttpResponse.of(
                     ResponseHeaders.builder(HttpStatus.OK)
-                        .contentType(MediaType.PLAIN_TEXT_UTF_8)
+                        .contentType(MediaType.JSON)
                         .add("set-cookie", "upstream-session=set-cookie-secret-3E8F; Path=/")
                         .build(),
-                    HttpData.ofUtf8("echo response-secret-4F90"),
+                    HttpData.ofUtf8(
+                        """{"choices":[{"message":{"role":"assistant","content":"echo response-secret-4F90"}}]}""",
+                    ),
                 )
             }
         }

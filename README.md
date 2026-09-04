@@ -19,15 +19,18 @@ Vigilant - OpenAI-совместимый guardrails gateway для платфо�
 - Byte-identical replay исходного body и сохранение неизвестных полей.
 - Development/test Dummy Bearer identity с configured normalized user/groups,
   unchanged upstream Authorization и request-to-response context handoff.
-- Streaming pass-through ответа upstream, включая SSE.
+- Streaming/backpressure в низкоуровневом bypass transport. Guardrail path
+  полностью удерживает ordinary/SSE Chat Completions response до terminal
+  protocol validation, затем replay-ит исходные bytes без изменений.
 - Stable fail-closed ошибки для неподдерживаемой или неоднозначной request
   schema и при исчерпании inspection capacity.
 - Safe best-effort stdout audit pair вокруг реально начатого request analysis.
 - JSONL-логи, correlation/trace ID, OTLP traces и metrics, health/readiness
   endpoints и non-root OCI image.
 
-Пока не поддерживаются OpenAI Responses API, response inspection, `BLOCK`,
-`MASK`, `REMOVE`, authentication/external identity lookup, request-body disk spill,
+Пока не поддерживаются OpenAI Responses API, response policy evaluation и
+audit, `BLOCK`, `MASK`, `REMOVE`, authentication/external identity lookup,
+request-body или response-body disk spill,
 Kubernetes/Helm и ML/NER detector. Полные границы первого инкремента зафиксированы в
 [roadmap](spec/ROADMAP.md#не-входит-в-первый-production-increment).
 
@@ -80,8 +83,10 @@ outcome или upstream handoff.
 - [Диаграмма последовательности обработки запроса UML 2.0](docs/diagrams/request-inspection-sequence.puml)
 - [Диаграмма компонентов исполняемой системы UML 2.0](docs/diagrams/runtime-components.puml)
 
-Тело ответа не агрегируется и передаётся клиенту потоком. Подробный разбор
-запуска, механизма политик, потоков и владения ресурсами приведён в
+Низкоуровневый bypass transport передаёт response потоком. Guardrail path
+полностью удерживает ordinary/SSE response в RAM, проверяет terminal protocol
+state и только затем атомарно раскрывает исходный response клиенту. Подробный
+разбор запуска, механизма политик, потоков и владения ресурсами приведён в
 [описании архитектуры](docs/architecture.md). Поддерживаемый HTTP-контракт,
 ошибки и модель таймаутов описаны в
 [контракте исполнения](docs/runtime-contract.md).

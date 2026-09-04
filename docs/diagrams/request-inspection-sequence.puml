@@ -1,5 +1,5 @@
 @startuml
-title Проверка и best-effort audit поддержанного запроса
+title Проверка запроса и retained response protocol gate
 autonumber
 
 actor "Клиент" as Client
@@ -15,6 +15,9 @@ participant "PolicyEngine" as Engine
 participant "Logback AsyncAppender\nneverBlock=true" as Audit
 participant "BypassProxyService" as Transport
 participant "Вышестоящий сервер OpenAI" as Upstream
+participant "RetainedResponseHandler" as ResponseHandler
+participant "RetainedResponseSource" as ResponseSource
+participant "ChatCompletionsResponseParser" as ResponseParser
 
 Client -> Tracing : HTTP-запрос
 Tracing -> Admission : итоговый контекст сеанса и трассы
@@ -51,10 +54,28 @@ else дескриптор поддерживается
         не ожидаются request path.
       end note
       Workflow --> Proxy : ReplayReadyRequest
-      Proxy -> Transport : одноразовая передача точного воспроизведения
-      Transport -> Upstream : исходные bytes и end-to-end headers
-      Upstream --> Transport : поток ответа
-      Transport --> Client : потоковый ответ
+    end
+    Proxy -> Transport : одноразовая передача точного воспроизведения
+    Transport -> Upstream : исходные bytes и end-to-end headers
+    Upstream --> Transport : status, headers и поток body
+    Transport --> Proxy : streaming HttpResponse
+    Proxy -> ResponseHandler : передать upstream response
+    ResponseHandler -> ResponseSource : retain body с one-item demand
+    note right of ResponseSource
+      Client пока не получает status,
+      headers или body. Ordinary response
+      завершается по EOF, SSE по standalone [DONE].
+    end note
+    ResponseSource --> ResponseHandler : complete source
+    ResponseHandler -> Executor : protocol validation вне event loop
+    Executor -> ResponseParser : полный read-only view
+    alt malformed/incomplete/interrupted response
+      ResponseParser --> ResponseHandler : typed protocol failure
+      ResponseHandler --> Client : 502 invalid_upstream_response
+    else valid response
+      ResponseParser --> ResponseHandler : success
+      ResponseHandler -> ResponseSource : получить one-shot replay
+      ResponseSource --> Client : original status/headers/body\nпо client demand
     end
   end
 end

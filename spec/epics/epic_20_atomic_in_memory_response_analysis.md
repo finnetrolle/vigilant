@@ -4,18 +4,20 @@
 **Тип:** Epic
 **Статус:** In progress
 **Приоритет:** High
-**Предварительная оценка:** 13-19 инженерных дней; 1/5 issues завершена
+**Предварительная оценка:** 9-13 инженерных дней; 2/5 issues завершены
 **Связанные требования:** `PROXY-01`, `PROXY-02`, `CONC-01`, `CONC-02`, `CONC-03`
 
 ## Контекст
 
 Первый production increment реализовал и проверил bounded in-memory request
-source в завершённом [EPIC-08](epic_08_message_spooling_replay.md). Response,
-включая SSE, пока остаётся streaming pass-through без content inspection.
+source в завершённом [EPIC-08](epic_08_message_spooling_replay.md). VIG-20-01
+добавил retained in-memory source и protocol gate для ordinary и SSE
+response. Response policy evaluation, reactions и audit остаются в
+enforcement leaves этого epic.
 
-Этот epic принимает future response/SSE scope из EPIC-08. Он не
-переоткрывает завершённый request contract и не обобщает request abstraction
-до выбора самостоятельных response lifecycle и storage contracts.
+Этот epic принял response/SSE scope из EPIC-08. Он не
+переоткрывает завершённый request contract и сохраняет response source
+самостоятельным lifecycle вместо обобщения request abstraction.
 
 ## Целевой результат
 
@@ -31,8 +33,8 @@ persistent storage. Heap sizing и runtime OOM policy принадлежат dep
 - Guardrail-enabled SSE является одной атомарной policy-транзакцией.
 - До terminal event и итогового decision клиент не получает upstream status,
   headers или body; partial release запрещён.
-- Обычный bypass и первый request-only production increment сохраняют текущее
-  streaming response behavior.
+- Низкоуровневый bypass transport сохраняет streaming/backpressure;
+  guardrail path удерживает его response до terminal protocol state.
 - Request source EPIC-08 остаётся in-memory only и не получает скрытый spill
   threshold или file lifecycle.
 - Unmodified `ALLOW` replay использует exact original source, а не protocol DTO
@@ -41,8 +43,8 @@ persistent storage. Heap sizing и runtime OOM policy принадлежат dep
   storage исключены из MVP.
 - JVM heap sizing и runtime OOM policy являются deployment responsibility;
   application не добавляет скрытый response quota или admission rejection.
-- Response source lifecycle требует отдельных готовых issues до
-  начала production implementation.
+- Response source lifecycle реализован отдельно до response
+  policy enforcement leaves.
 
 ## Discovery map
 
@@ -52,7 +54,7 @@ EPIC-20 Atomic in-memory response analysis
 │   ├── retained in-memory terminology
 │   ├── no application-level response quota
 │   └── deployment-owned heap sizing and OOM policy
-├── response source contract (Ready)
+├── response source contract (Done)
 │   ├── ordinary response lifecycle
 │   ├── status/header disclosure boundary
 │   └── cancellation and upstream failure
@@ -76,7 +78,7 @@ EPIC-20 Atomic in-memory response analysis
 ## Дочерние issues
 
 - [x] [VIG-20-04: Retained in-memory response contract](../issues/epic_20/issue_20_04_retained_memory_response_contract.md) - `Done`
-- [ ] [VIG-20-01: In-memory response source](../issues/epic_20/issue_20_01_retained_memory_response_source.md) - `Ready for implementation`
+- [x] [VIG-20-01: In-memory response source](../issues/epic_20/issue_20_01_retained_memory_response_source.md) - `Done`
 - [ ] [VIG-20-03: Reusable text masker](../issues/epic_20/issue_20_03_reusable_text_masker.md) - `Ready for implementation`
 - [ ] [VIG-20-02: Non-stream response inspection and enforcement](../issues/epic_20/issue_20_02_response_inspection_enforcement.md) - `Ready for implementation`
 - [ ] [VIG-20-05: SSE response inspection and enforcement](../issues/epic_20/issue_20_05_sse_response_enforcement.md) - `Ready for implementation`

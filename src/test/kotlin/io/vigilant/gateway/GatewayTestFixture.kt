@@ -8,6 +8,8 @@ import ch.qos.logback.core.AppenderBase
 import com.linecorp.armeria.client.WebClient
 import com.linecorp.armeria.common.HttpRequest
 import com.linecorp.armeria.common.HttpResponse
+import com.linecorp.armeria.common.HttpStatus
+import com.linecorp.armeria.common.MediaType
 import com.linecorp.armeria.server.HttpService
 import com.linecorp.armeria.server.Server
 import com.linecorp.armeria.server.ServerBuilder
@@ -22,6 +24,19 @@ import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import org.slf4j.LoggerFactory
+
+/** Minimal valid ordinary Chat Completions response shared by gateway E2E fixtures. */
+internal const val VALID_CHAT_COMPLETIONS_RESPONSE_BODY =
+    """{"choices":[{"message":{"role":"assistant","content":"ok"}}]}"""
+
+/** Exact VIG-29 response body for malformed or interrupted upstream protocol input. */
+internal const val INVALID_UPSTREAM_RESPONSE_BODY =
+    """{"error":{"message":"Invalid upstream response.","type":"upstream_error",""" +
+        """"code":"invalid_upstream_response"}}"""
+
+/** Returns the canonical minimal valid ordinary Chat Completions response. */
+internal fun validChatCompletionsResponse(): HttpResponse =
+    HttpResponse.of(HttpStatus.OK, MediaType.JSON, VALID_CHAT_COMPLETIONS_RESPONSE_BODY)
 
 /**
  * Shared E2E fixtures for gateway tests: lifecycle of real Armeria test

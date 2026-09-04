@@ -29,16 +29,19 @@ OpenAI Realtime API и OpenAI Batch API остаются post-MVP placeholders �
 EPIC-06. До отдельного решения об их активации для них не уточняются field
 maps, terminal semantics, transport contracts и implementation issues.
 
-Первый production increment из [ROADMAP.md](../ROADMAP.md) уже и намеренно:
+Исторический первый production increment из [ROADMAP.md](../ROADMAP.md)
+намеренно ограничивался следующим контрактом:
 
 - поддерживается только JSON request `POST /v1/chat/completions`;
 - request полностью проверяется до первого upstream byte;
-- Chat Completions response, включая SSE при `stream=true`, остаётся
-  существующим streaming pass-through без content inspection;
+- upstream response передаётся клиенту streaming pass-through;
 - любой другой method/path/media type получает stable `UNSUPPORTED_SCHEMA` и
   не проходит через молчаливый bypass guardrail-enabled route.
 
-Runtime response inspection остаётся future EPIC-20 behavior. Pure Chat
+Текущий runtime после VIG-20-01 полностью удерживает Chat Completions response,
+включая SSE при `stream=true`, и protocol-validates complete source до раскрытия
+клиенту. Runtime response policy inspection и enforcement остаются последующими
+leaves EPIC-20. Retained source и protocol gate завершены в VIG-20-01, pure Chat
 Completions JSON/SSE response parsing завершён в VIG-06-03; OpenAI Responses
 scope не реализован и не получает невыбранные terminal semantics.
 
@@ -351,8 +354,8 @@ Original body и normalized parse result имеют разное ownership:
 
 Spooling, replay, cleanup и forwarding lifecycle не входят в EPIC-06.
 Завершённый bounded in-memory request source описан в
-[EPIC-08](epic_08_message_spooling_replay.md), а future retained in-memory
-response source для ordinary и SSE responses принадлежит
+[EPIC-08](epic_08_message_spooling_replay.md), а завершённый retained in-memory
+response source для ordinary и SSE responses описан в
 [EPIC-20](epic_20_atomic_in_memory_response_analysis.md).
 
 Detector payload limit не является максимальной длиной LLM exchange. Несколько

@@ -94,7 +94,7 @@ leaf VIG-20-05.
   retention, parsing или policy behavior.
 - Guardrail path остаётся в `PiiShadowProxyService`. После successful request
   inspection он выполняет upstream exchange, передаёт response headers/body в
-  retained source VIG-20-01 и не создаёт client response до complete ingest и
+  retained source, реализованный в VIG-20-01, и не создаёт client response до complete ingest и
   final policy decision.
 - Один `ResponseInspectionWorkflow` выполняет parser, response-context handoff,
   policy evaluation, final reaction и safe audit. Он возвращает только typed

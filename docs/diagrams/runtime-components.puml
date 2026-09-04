@@ -22,6 +22,10 @@ node "Процесс Vigilant" as Vigilant {
   component "ShadowAuditLogger\nLogback AsyncAppender" as AuditLogger
   component "ReplayReadyRequest" as Replay
   component "BypassProxyService" as Transport
+  component "RetainedResponseHandler" as ResponseHandler
+  component "RetainedResponseSource" as ResponseSource
+  component "ChatCompletionsResponseParser" as ResponseParser
+  component "ResponseAnalysisLifecycle" as ResponseLifecycle
 }
 
 Client --> Admission : HTTP-запрос
@@ -41,7 +45,14 @@ Workflow --> Replay : решение Forward
 Replay --> Transport : одноразовая передача владения
 Transport --> Upstream : точное воспроизведение запроса
 Upstream --> Transport : потоковый ответ
-Transport --> Client : сквозной ответ
+Transport --> ShadowProxy : streaming HttpResponse
+ShadowProxy --> ResponseHandler : upstream response
+ResponseHandler --> ResponseSource : one-item demand
+ResponseSource --> ResponseParser : полный read-only view
+ResponseParser --> ResponseHandler : protocol success/failure
+ResponseSource --> ResponseHandler : exact replay после success
+ResponseHandler --> Client : атомарный ответ
+ResponseLifecycle --> ShadowProxy : запрет нового handoff при shutdown
 
 note bottom of ShadowProxy
 Проверяются только запросы POST /v1/chat/completions
@@ -49,7 +60,12 @@ note bottom of ShadowProxy
 end note
 
 note bottom of Transport
-Содержимое ответа не проверяется.
-Тело передаётся сквозным потоком.
+Transport сохраняет streaming/backpressure.
+RetainedResponseHandler удерживает его output в RAM.
+end note
+
+note bottom of ResponseSource
+Нет application quota, disk spill или persistence.
+Policy evaluation и response audit ещё не подключены.
 end note
 @enduml

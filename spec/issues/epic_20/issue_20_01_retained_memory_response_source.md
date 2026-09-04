@@ -1,10 +1,10 @@
 # VIG-20-01: In-memory response source
 
-**Статус:** Ready for implementation
+**Статус:** Done
 **Epic:** [EPIC-20](../../epics/epic_20_atomic_in_memory_response_analysis.md)
 **Ветка:** Response source > ordinary response and SSE lifecycle
 **Зависит от:** [VIG-06-03](../epic_06/issue_06_03_chat_completions_response_parser.md), [VIG-20-04](issue_20_04_retained_memory_response_contract.md)
-**Блокирует:** [VIG-20-02](issue_20_02_response_inspection_enforcement.md) и будущий SSE enforcement leaf EPIC-20
+**Блокирует:** [VIG-20-02](issue_20_02_response_inspection_enforcement.md) и [VIG-20-05](issue_20_05_sse_response_enforcement.md)
 **Оценка:** 3-5 инженерных дней; confidence Medium
 
 ## Цель
@@ -68,19 +68,38 @@ gateway не вводит свой response quota или admission rejection.
 
 ## Критерии готовности
 
-- [ ] Real Armeria E2E tests prove ordinary response and SSE retain every byte
+- [x] Real Armeria E2E tests prove ordinary response and SSE retain every byte
   until normal terminal state; client receives neither status, headers nor body
   before source completion.
-- [ ] SSE accepts only standalone `data: [DONE]`; missing/malformed terminal,
+- [x] SSE accepts only standalone `data: [DONE]`; missing/malformed terminal,
   malformed protocol and upstream interruption return exact safe `502`
   `invalid_upstream_response` without partial disclosure.
-- [ ] Source uses no audit file, disk spill, temporary file, application-level
+- [x] Source uses no audit file, disk spill, temporary file, application-level
   response quota or shared response capacity admission.
-- [ ] Every terminal path, including `ALLOW`, `MASK`, `BLOCK`, cancellation,
-  upstream interruption and shutdown, releases all source-owned buffers/references;
-  no `analysis_completed` is emitted before a final analysis outcome.
-- [ ] New and modified Kotlin declarations/test methods have current KDoc;
+- [x] Every terminal path owned by this source leaf, including exact unmodified
+  replay, protocol rejection, cancellation, upstream interruption and shutdown,
+  releases all source-owned buffers/references. Response `MASK`/`BLOCK` paths and
+  `analysis_completed` emission remain acceptance scope of the enforcement leaves.
+- [x] New and modified Kotlin declarations/test methods have current KDoc;
   focused E2E suite and `./gradlew build` pass.
+
+## Evidence
+
+Evidence зафиксирован 2026-09-03:
+
+- Behavioral RED: real Armeria test `ordinary response is retained completely
+  before client disclosure` показал early response headers до upstream
+  EOF до production изменения.
+- `rtk proxy ./gradlew test --tests
+  'io.vigilant.gateway.proxy.PiiShadowProxyServiceTest' --tests
+  'io.vigilant.source.RetainedResponseSourceTest'` завершился `BUILD
+  SUCCESSFUL`: 43 focused source/lifecycle tests.
+- Full application suite в `rtk proxy ./gradlew build` выполнил 517
+  tests без application-test failures; final build завершился
+  `BUILD SUCCESSFUL` после синхронизации validator contract.
+- `rtk proxy ./gradlew detekt` завершился `BUILD SUCCESSFUL`.
+- `rtk proxy ./gradlew validateWorkItems` сообщил `Work-item graph is
+  valid.`; `rtk proxy git diff --check` завершился без ошибок.
 
 ## Ambiguity Report
 

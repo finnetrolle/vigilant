@@ -25,11 +25,18 @@ Hop-by-hop headers, authority, `Host` и `Content-Length` обрабатывае
 Принятый `Authorization` остаётся обычным end-to-end header и передаётся
 upstream с исходным значением без изменений.
 
-Response body, включая SSE, не агрегируется и остаётся streaming pass-through.
-Response inspection пока отсутствует, но request URL, model и normalized
-identity сохраняются в request-scoped handoff. Response context использует тот
-же snapshot и отличается только phase `RESPONSE`; модель из upstream response
-его не переопределяет.
+Guardrail-enabled response, включая SSE, полностью удерживается в RAM до
+protocol completion. Клиент до этого не получает upstream status, headers или
+body. Ordinary JSON считается complete по end-of-stream, SSE только после
+отдельного standalone `data: [DONE]`. Existing Chat Completions response parser
+выполняется на blocking-safe executor. Valid response затем replay-ится с
+client backpressure, исходными status/headers/trailers и byte-identical body.
+
+Request URL, model и normalized identity сохраняются в request-scoped handoff.
+Response context использует тот же snapshot и отличается только phase
+`RESPONSE`; модель из upstream response его не переопределяет. Текущий retained
+source increment не запускает response policy evaluation, detector, reaction
+или response audit pair.
 
 ## Bearer identity
 
@@ -137,20 +144,27 @@ credentials, identity, policy references или внутренние причи�
 имеет ровно поле `error`, а оно ровно три string fields: `message`, `type`,
 `code`.
 
-В текущем shadow runtime подключён только request technical outcome для
-capacity, executor, source и orchestration failures. `BLOCK`, response
-inspection failure и invalid inspected upstream response не являются
-доступными runtime outcomes до реализации VIG-34 и owning leaves EPIC-20.
+В текущем shadow runtime подключены request technical outcome для capacity,
+executor, source и orchestration failures, а также
+`invalid_upstream_response` для response protocol failure. `BLOCK` и response
+inspection unavailable остаются недоступны до owning enforcement leaves.
 
 ## Upstream errors
 
-Корректные upstream HTTP responses, включая `4xx` и `5xx`, передаются без
-изменений.
+Корректные Chat Completions responses, включая `4xx` и `5xx`, проходят
+retention и protocol validation, затем передаются без изменений. Malformed
+JSON/SSE, missing или malformed standalone `[DONE]`, upstream body interruption
+и transport-generated non-protocol body дают exact VIG-29 `502
+invalid_upstream_response` без upstream disclosure.
 
 | Ситуация | HTTP status | JSON body |
 |---|---:|---|
-| Connection failure, unknown host или malformed upstream HTTP | `502` | `{"error":"upstream_unavailable"}` |
-| Upstream response timeout | `504` | `{"error":"upstream_timeout"}` |
+| Invalid, incomplete или interrupted Chat Completions response | `502` | `{"error":{"message":"Invalid upstream response.","type":"upstream_error","code":"invalid_upstream_response"}}` |
+
+Низкоуровневый `BypassProxyService` по-прежнему кодирует connection failure как
+`502 upstream_unavailable` и timeout как `504 upstream_timeout`. На
+guardrail-enabled route эти transport-generated bodies также проходят response
+protocol gate и не раскрываются как valid Chat Completions response.
 
 Stable proxy errors не содержат Armeria exception messages, stack traces,
 request bodies, query string или credentials.
@@ -179,6 +193,9 @@ environment variables перечислены в
 - Readiness не проверяет доступность upstream.
 
 При SIGTERM readiness сначала переключается на `503`, новые proxy exchanges
-запрещаются, а active exchanges получают время на drain. После drain gateway
-закрывает inspection, upstream и telemetry resources. Quiet period и force
-timeout конфигурируются через `VIGILANT_SHUTDOWN_*`.
+запрещаются, и process lifecycle gate не разрешает уже проверенному request
+начать новый upstream/response-analysis handoff. Active exchanges получают
+время на drain; forced shutdown отменяет retained ingest/replay через request
+lifecycle и очищает buffers. После drain gateway закрывает inspection,
+upstream и telemetry resources. Quiet period и force timeout конфигурируются
+через `VIGILANT_SHUTDOWN_*`.

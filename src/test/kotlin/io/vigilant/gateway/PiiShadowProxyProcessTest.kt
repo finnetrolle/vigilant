@@ -40,7 +40,7 @@ class PiiShadowProxyProcessTest {
         val upstreamRequests = CompletableFuture<Int>()
         val upstream = fixture.startServer {
             upstreamRequests.complete(1)
-            HttpResponse.of(HttpStatus.OK, MediaType.JSON, "{\"ok\":true}")
+            validChatCompletionsResponse()
         }
         val process =
             GatewayProcessFixture.launch(fixture.serverUri(upstream)).also { gateway = it }
@@ -67,7 +67,7 @@ class PiiShadowProxyProcessTest {
             HttpResponse.of(
                 request.aggregate().thenApply { aggregated ->
                     upstreamBody.complete(aggregated.content().array())
-                    HttpResponse.of(HttpStatus.OK, MediaType.JSON, "{\"ok\":true}")
+                    validChatCompletionsResponse()
                 },
             )
         }
@@ -116,7 +116,7 @@ class PiiShadowProxyProcessTest {
     @Test
     @Suppress("LongMethod", "MaxLineLength")
     fun `MainKt JSONL stdout covers exact request audit outcome matrix`() {
-        val upstream = fixture.startServer { HttpResponse.of(HttpStatus.OK, MediaType.JSON, "{\"ok\":true}") }
+        val upstream = fixture.startServer { validChatCompletionsResponse() }
         val deadlineConfig = policyConfigWithDeadline(Duration.ofNanos(1))
         val cases =
             listOf(
@@ -219,7 +219,7 @@ class PiiShadowProxyProcessTest {
         val upstreamHeaders = CompletableFuture<RequestHeaders>()
         val upstream = fixture.startServer { request ->
             upstreamHeaders.complete(request.headers())
-            HttpResponse.of(HttpStatus.OK, MediaType.JSON, "{\"ok\":true}")
+            validChatCompletionsResponse()
         }
         val sessionHeader = "x-agent-session"
         val traceparentHeader = "x-agent-traceparent"
@@ -274,7 +274,7 @@ class PiiShadowProxyProcessTest {
                     upstreamBody.complete(aggregated.content().array())
                     upstreamPath.complete(aggregated.path())
                     upstreamPrivateHeader.complete(aggregated.headers().get("x-private-header"))
-                    HttpResponse.of(HttpStatus.OK, MediaType.JSON, """{"ok":true}""")
+                    validChatCompletionsResponse()
                 },
             )
         }
@@ -369,7 +369,7 @@ class PiiShadowProxyProcessTest {
     /** Verifies repeated maximum-size inspection does not retain transport direct buffers. */
     @Test
     fun `MainKt releases inbound direct buffers across repeated 64KiB inspection requests`() {
-        val upstream = fixture.startServer { HttpResponse.of(HttpStatus.OK) }
+        val upstream = fixture.startServer { validChatCompletionsResponse() }
         val process = GatewayProcessFixture.launch(
             fixture.serverUri(upstream),
             jvmArguments = listOf("-Xmx128m", "-XX:MaxDirectMemorySize=64m"),

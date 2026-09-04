@@ -32,8 +32,9 @@ import java.util.concurrent.atomic.AtomicReference
  * delegates typed orchestration to [workflow]. Identity is extracted before body demand;
  * expected rejects are mapped to stable HTTP responses, while a successful one-shot replay
  * transfer invokes [bypassProxyService] with the accepted Authorization unchanged. Exact
- * body replay, stable upstream errors and streaming response semantics remain owned by the
- * transport proxy.
+ * request replay and stable upstream transport errors remain owned by the transport proxy;
+ * [responseAnalysisLifecycle] prevents a new retained response phase after shutdown starts, and
+ * [retainedResponseHandler] owns complete response retention, validation and replay.
  */
 @Suppress("LongMethod", "LongParameterList", "ReturnCount", "TooGenericExceptionCaught", "TooManyFunctions")
 class PiiShadowProxyService internal constructor(
@@ -43,6 +44,8 @@ class PiiShadowProxyService internal constructor(
     private val workflow: ShadowInspectionWorkflow,
     private val inspectionExecutor: ExecutorService,
     private val identityExtractor: BearerIdentityExtractor,
+    private val responseAnalysisLifecycle: ResponseAnalysisLifecycle,
+    private val retainedResponseHandler: RetainedResponseHandler,
 ) : HttpService {
     /**
      * Selects the supported descriptor and extracts identity before body demand,
@@ -129,7 +132,7 @@ class PiiShadowProxyService internal constructor(
         identity: IdentityExtractionResult.Success,
         inspectionSpan: Span?,
     ): HttpResponse {
-        val cancellation = InspectionCancellation(ctx.whenRequestCancelled()) {
+        val cancellation = InspectionCancellation(ctx.whenRequestCancelling()) {
             owner.close()
         }
         val response =
@@ -214,7 +217,8 @@ class PiiShadowProxyService internal constructor(
 
     /**
      * Delegates complete-source inspection and maps its typed result to HTTP or transport handoff.
-     * A forwarding result must atomically claim transport ownership before cancellation does.
+     * A forwarding result must atomically claim transport ownership before cancellation does, and
+     * cannot start a new upstream response-analysis phase after server shutdown has begun.
      */
     private fun processCompleteSource(
         ctx: ServiceRequestContext,
@@ -226,16 +230,16 @@ class PiiShadowProxyService internal constructor(
     ): HttpResponse =
         when (val outcome = workflow.execute(owner, request, identity, ctx, inspectionSpan)) {
             is ShadowInspectionOutcome.Forward ->
-                if (cancellation.claimTransportHandoff()) {
+                if (responseAnalysisLifecycle.tryStartAnalysis(cancellation::claimTransportHandoff)) {
                     forwardReplay(ctx, request, outcome.replay)
                 } else {
                     outcome.replay.close()
-                    throw CancellationException("Request was cancelled before upstream handoff")
+                    throw CancellationException("Request ended before upstream handoff")
                 }
             is ShadowInspectionOutcome.Reject -> rejectionResponse(outcome.error)
         }
 
-    /** Transfers one ready exact replay to the existing streaming transport boundary. */
+    /** Transfers one ready request replay, then retains and validates the complete upstream response. */
     private fun forwardReplay(
         ctx: ServiceRequestContext,
         request: HttpRequest,
@@ -243,7 +247,10 @@ class PiiShadowProxyService internal constructor(
     ): HttpResponse =
         replay.use { ready ->
             ready.transferTo { publisher ->
-                bypassProxyService.serve(ctx, replayRequest(request, publisher))
+                retainedResponseHandler.retain(
+                    ctx,
+                    bypassProxyService.serve(ctx, replayRequest(request, publisher)),
+                )
             }
         }
 

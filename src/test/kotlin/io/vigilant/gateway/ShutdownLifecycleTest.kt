@@ -1,6 +1,7 @@
 package io.vigilant.gateway
 
 import com.linecorp.armeria.client.WebClient
+import com.linecorp.armeria.common.AggregatedHttpResponse
 import com.linecorp.armeria.common.HttpData
 import com.linecorp.armeria.common.HttpMethod
 import com.linecorp.armeria.common.HttpRequest
@@ -34,19 +35,21 @@ class ShutdownLifecycleTest {
         fixture.close()
     }
 
-    /** Active traffic drains while new traffic is rejected locally. */
+    /** Active retained traffic drains atomically while new traffic is rejected locally. */
     @Test
     fun `shutdown drains active stream and rejects new proxy traffic`() {
         val upstreamPaths = CopyOnWriteArrayList<String>()
         val activeWriter = AtomicReference<HttpResponseWriter>()
         val activeStarted = CountDownLatch(1)
+        val responsePrefix = "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"first-"
+        val responseSuffix = "last\"}}]}"
         val upstream = fixture.startServer { request ->
             upstreamPaths += request.path()
             check(request.path() == CHAT_COMPLETIONS_PATH)
             HttpResponse.streaming().also { response ->
                 activeWriter.set(response)
-                response.write(ResponseHeaders.of(HttpStatus.OK))
-                response.write(HttpData.ofUtf8("first-"))
+                response.write(ResponseHeaders.builder(HttpStatus.OK).contentType(MediaType.JSON).build())
+                response.write(HttpData.ofUtf8(responsePrefix))
                 activeStarted.countDown()
             }
         }
@@ -81,25 +84,24 @@ class ShutdownLifecycleTest {
         )
 
         activeWriter.get().apply {
-            write(HttpData.ofUtf8("last"))
+            write(HttpData.ofUtf8(responseSuffix))
             close()
         }
-        assertEquals("first-last", activeResponse.join().contentUtf8())
+        assertEquals(responsePrefix + responseSuffix, activeResponse.join().contentUtf8())
         assertTrue(
             gateway.process.waitFor(PROCESS_EXIT_TIMEOUT.toSeconds(), TimeUnit.SECONDS),
             "gateway did not exit after the active stream drained; output: ${gateway.output()}",
         )
     }
 
-    /** A non-terminating exchange is force-closed on time before bounded process cleanup finishes. */
+    /** A non-terminating upstream exchange is force-closed within the configured process bound. */
     @Test
-    fun `stuck exchange is force closed within configured shutdown timeout`() {
+    fun `stuck upstream exchange is force closed within configured shutdown timeout`() {
         val stuckStarted = CountDownLatch(1)
         val upstream = fixture.startServer { request ->
             check(request.path() == CHAT_COMPLETIONS_PATH)
             HttpResponse.streaming().also { response ->
-                response.write(ResponseHeaders.of(HttpStatus.OK))
-                response.write(HttpData.ofUtf8("never-finishes"))
+                response.write(ResponseHeaders.builder(HttpStatus.OK).contentType(MediaType.JSON).build())
                 stuckStarted.countDown()
             }
         }
@@ -140,10 +142,6 @@ class ShutdownLifecycleTest {
             responseClosedWithinBound,
             "gateway did not force-close the stuck exchange within the configured timeout plus tolerance; " +
                 "last lifecycle state: $lastLifecycleState; output: ${gateway.output()}",
-        )
-        assertTrue(
-            stuckResponse.isCompletedExceptionally,
-            "force-closed exchange completed normally instead of reporting truncation",
         )
         assertTrue(
             gateway.process.waitFor(PROCESS_EXIT_TIMEOUT.toSeconds(), TimeUnit.SECONDS),

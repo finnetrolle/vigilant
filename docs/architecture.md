@@ -6,6 +6,8 @@ Vigilant - однопроцессный HTTP gateway на Kotlin и Armeria. Т�
 production increment поддерживает request-side PII inspection для OpenAI Chat
 Completions в shadow mode. Он проверяет запрос и best-effort публикует
 безопасную audit lifecycle pair, но не блокирует и не изменяет payload.
+Upstream response полностью удерживается в памяти и проверяется existing
+Chat Completions JSON/SSE parser до раскрытия клиенту.
 
 Поддерживаемый маршрут:
 
@@ -14,8 +16,9 @@ Completions в shadow mode. Он проверяет запрос и best-effort 
 - schema-tolerant Chat Completions JSON, который можно однозначно разобрать для
   проверки.
 
-Response inspection, OpenAI Responses API и enforcement reactions пока не
-подключены к runtime. Подробные границы HTTP-контракта приведены в
+Response policy evaluation, response audit pair, `MASK`/`BLOCK`, OpenAI
+Responses API и другие enforcement reactions пока не подключены к runtime.
+Подробные границы HTTP-контракта приведены в
 [runtime contract](runtime-contract.md).
 
 ## Путь запроса
@@ -27,7 +30,7 @@ Response inspection, OpenAI Responses API и enforcement reactions пока не
   container-managed stdout;
 - [последовательность проверки запроса](diagrams/request-inspection-sequence.puml)
   показывает отсутствие audit до detector execution, stdout lifecycle pair,
-  точное воспроизведение и потоковый ответ;
+  точное воспроизведение и атомарно удержанный response;
 
 ### 1. Admission, metrics и tracing
 
@@ -104,8 +107,8 @@ Context содержит:
 Armeria `ServiceRequestContext`. Public handoff создаёт response context,
 изменяя только phase на `RESPONSE`; reported model из upstream ответа не
 участвует. Snapshot очищается при completion, error или cancellation и не
-использует thread-local или global map. Сам response inspection пока не
-подключён.
+использует thread-local или global map. Retained response protocol validation
+пока не запускает response policy context или detector execution.
 
 `PolicySelector` выбирает enabled policies по точному значению или wildcard,
 затем одновременно применяет явные overrides. `PolicyEngine` дедуплицирует
@@ -145,7 +148,7 @@ metadata, но не matched text. PII-free `WindowedInspectionExecutor` разб
 свидетельства качества и явные ограничения описаны в
 [руководстве по обнаружению PII](pii-detection.md).
 
-### 6. Best-effort audit и exact replay
+### 6. Best-effort audit, request replay и retained response
 
 Complete-source orchestration выполняет синхронный
 `ShadowInspectionWorkflow` на существующем blocking-safe inspection executor.
@@ -182,6 +185,23 @@ handoff owner освобождается только terminal signal replay. Э
   stable `504`;
 - не агрегирует response body и сохраняет streaming/backpressure, включая SSE.
 
+`RetainedResponseHandler` принимает transport response в отдельный
+`RetainedResponseSource`. Source требует у upstream по одному body item,
+копирует exact bytes только в RAM и скрывает upstream status, headers и body
+до protocol completion. Ordinary JSON завершается по end-of-stream, а SSE
+только отдельным standalone `data: [DONE]`. Existing response parser работает
+на blocking-safe executor. Valid response любого upstream status, включая
+`4xx` и `5xx`, replay-ится byte-for-byte по client demand. Malformed JSON/SSE,
+missing или malformed terminal event и upstream interruption очищают source и
+возвращают exact VIG-29 `502 invalid_upstream_response` без partial disclosure.
+
+Retained response не имеет application-level byte limit, shared quota, disk
+spill, temporary file или persistent representation. Success, protocol
+failure, client cancellation, replay cancellation и forced shutdown очищают
+owned buffers и references. JVM heap sizing и OOM policy остаются
+deployment-owned. Этот increment не запускает response detectors, не применяет
+response policy reaction и не публикует response audit pair.
+
 ## Выполнение и resource ownership
 
 Netty event loops не выполняют blocking parser или detector work. Request
@@ -195,6 +215,7 @@ configured concurrent-source limit. Policy detector waits и deadlines такж�
 | Resource | Owner | Ограничение или lifecycle |
 |---|---|---|
 | Request bodies | `RequestSourceQuota` | byte/owner/segment limits из configuration |
+| Response bodies | `RetainedResponseSource` | available JVM heap, one-item upstream demand, terminal cleanup |
 | Inspection orchestration | `InspectionResources` | virtual-thread executor |
 | Fast PII CPU | `InspectionResources` | bounded fixed-size pool и bounded queue |
 | Upstream connections | `UpstreamClientResources` | dedicated Armeria `ClientFactory` |
@@ -208,7 +229,7 @@ configured concurrent-source limit. Policy detector waits и deadlines такж�
 
 При `SIGTERM` shutdown hook выполняет порядок:
 
-1. readiness становится `503`, новый traffic запрещается;
+1. readiness становится `503`, новый traffic и новый response-analysis handoff запрещаются;
 2. Armeria server выполняет bounded graceful drain;
 3. закрываются inspection executors;
 4. закрывается upstream connection factory;
@@ -228,6 +249,7 @@ Quiet period и force timeout настраиваются. Полный опер�
 | Application configuration | `gateway/config/AppConfig.kt` |
 | Admission и probes | `gateway/health/*` |
 | Request inspection | `gateway/proxy/PiiShadowProxyService.kt`, `ShadowInspectionWorkflow.kt`, `ReplayReadyRequest.kt`, `InspectionResources.kt` |
+| Response retention и lifecycle | `gateway/proxy/RetainedResponseHandler.kt`, `gateway/proxy/ResponseAnalysisLifecycle.kt`, `source/RetainedResponseSource.kt` |
 | Transport proxy | `gateway/proxy/BypassProxyService.kt`, `UpstreamClientResources.kt` |
 | OpenAI normalization | `protocol/openai/*` |
 | Bounded request source | `source/*` |

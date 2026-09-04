@@ -4,6 +4,7 @@ import ch.qos.logback.classic.AsyncAppender
 import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.AppenderBase
+import com.linecorp.armeria.client.ClientFactory
 import com.linecorp.armeria.client.WebClient
 import com.linecorp.armeria.common.AggregatedHttpResponse
 import com.linecorp.armeria.common.HttpData
@@ -33,7 +34,11 @@ import io.vigilant.gateway.DemandObservingPublisher
 import io.vigilant.gateway.chatCompletionsBody
 import io.vigilant.gateway.chatCompletionsRequest
 import io.vigilant.gateway.chatCompletionsRequestWithBody
+import io.vigilant.gateway.closeAllResources
 import io.vigilant.gateway.TEST_DUMMY_AUTHORIZATION
+import io.vigilant.gateway.INVALID_UPSTREAM_RESPONSE_BODY
+import io.vigilant.gateway.VALID_CHAT_COMPLETIONS_RESPONSE_BODY
+import io.vigilant.gateway.validChatCompletionsResponse
 import io.vigilant.context.PolicyContextHandoff
 import io.vigilant.context.PolicyContextHandoffResult
 import io.vigilant.gateway.config.DummyIdentitySettings
@@ -72,6 +77,7 @@ import io.vigilant.policy.selection.PolicySelector
 import io.vigilant.source.RequestSourceLimits
 import io.vigilant.source.RequestSourceOpenResult
 import io.vigilant.source.RequestSourceQuota
+import io.vigilant.source.RetainedResponseSource
 import io.vigilant.windowing.WindowedFastPiiExecutor
 import java.net.URI
 import java.nio.ByteBuffer
@@ -89,6 +95,7 @@ import java.util.concurrent.SubmissionPublisher
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -105,6 +112,7 @@ import org.slf4j.LoggerFactory
 class PiiShadowProxyServiceTest {
     private val fixture = GatewayTestFixture()
     private val closeables = mutableListOf<AutoCloseable>()
+    private val upstreamClientFactories = mutableListOf<ClientFactory>()
     private val spans = CopyOnWriteArrayList<SpanData>()
     private val spanExporter = object : SpanExporter {
         /** Collects completed spans for E2E hierarchy assertions. */
@@ -120,11 +128,15 @@ class PiiShadowProxyServiceTest {
         override fun shutdown(): CompletableResultCode = CompletableResultCode.ofSuccess()
     }
 
-    /** Stops real servers and every test-owned inspection/tracing resource. */
+    /** Stops real servers, inspection/tracing resources and isolated upstream connection pools. */
     @AfterTest
     fun closeFixture() {
-        fixture.close()
-        closeables.asReversed().forEach(AutoCloseable::close)
+        val closeActions = buildList<() -> Unit> {
+            add(fixture::close)
+            closeables.asReversed().forEach { resource -> add(resource::close) }
+            upstreamClientFactories.asReversed().forEach { factory -> add { factory.closeAsync().join() } }
+        }
+        closeAllResources(*closeActions.toTypedArray())
     }
 
     /** Started precedes detector entry and the upstream callback observes completed before handoff. */
@@ -144,7 +156,7 @@ class PiiShadowProxyServiceTest {
         val upstream = fixture.startServer {
             eventsAtUpstreamEntry.complete(events.analysisEventNames())
             upstreamEntered.countDown()
-            HttpResponse.of(HttpStatus.OK)
+            validChatCompletionsResponse()
         }
         val gateway = startShadowGateway(fixture.serverUri(upstream), detector = detector)
 
@@ -177,6 +189,287 @@ class PiiShadowProxyServiceTest {
         )
     }
 
+    /** Ordinary upstream status, headers, and bytes stay hidden until the complete JSON source exists. */
+    @Test
+    fun `ordinary response is retained completely before client disclosure`() {
+        val releaseTail = CountDownLatch(1)
+        val responseSource = CompletableFuture<RetainedResponseSource>()
+        val disclosureProbe = ResponseDisclosureProbe(responseSource) { source -> source.ingestComplete }
+        val prefix = "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"hel"
+        val suffix = """lo"}}],"opaque":{"keep":true}}"""
+        val upstream = fixture.startServer {
+            HttpResponse.streaming().also { response ->
+                thread(name = "ordinary-response-source") {
+                    response.write(
+                        ResponseHeaders.builder(HttpStatus.OK)
+                            .contentType(MediaType.JSON)
+                            .add("x-upstream-retained", "yes")
+                            .build(),
+                    )
+                    response.write(HttpData.ofUtf8(prefix))
+                    check(releaseTail.await(5, TimeUnit.SECONDS)) { "ordinary response tail was not released" }
+                    response.write(HttpData.ofUtf8(suffix))
+                    response.close()
+                }
+            }
+        }
+        val gateway =
+            startShadowGateway(
+                fixture.serverUri(upstream),
+                responseSourceCreated = responseSource::complete,
+                responseOutputObserved = disclosureProbe::observe,
+            )
+        val received = ReceivedStream()
+
+        WebClient.of(fixture.serverUri(gateway))
+            .execute(chatCompletionsRequest("retain ordinary response"))
+            .subscribe(received)
+
+        val retained = awaitRetainedResponseSource(responseSource, "ordinary response prefix")
+        releaseTail.countDown()
+
+        assertTrue(received.completion.await(2, TimeUnit.SECONDS), "retained ordinary response did not complete")
+        received.failure?.let { throw AssertionError("retained ordinary response failed", it) }
+        disclosureProbe.assertNoEarlyDisclosure("ordinary response")
+        assertEquals(HttpStatus.OK, received.headers.get()?.status())
+        assertEquals("yes", received.headers.get()?.get("x-upstream-retained"))
+        assertEquals(prefix + suffix, received.chunks.joinToString(""))
+        assertRetainedResponseReleased(retained, "ordinary exact replay")
+    }
+
+    /** Valid ordinary responses retain and replay every original status and body, including 4xx/5xx. */
+    @Test
+    fun `ordinary response preserves valid success and error statuses byte for byte`() {
+        listOf(HttpStatus.OK, HttpStatus.TOO_MANY_REQUESTS, HttpStatus.INTERNAL_SERVER_ERROR)
+            .forEach { status ->
+                val body =
+                    "{ \"choices\" : [ { \"message\" : { \"role\" : \"assistant\", " +
+                        "\"content\" : \"status-${status.code()}\" } } ], \"unknown\" : true }"
+                val upstream = fixture.startServer { HttpResponse.of(status, MediaType.JSON, body) }
+                val gateway = startShadowGateway(fixture.serverUri(upstream))
+
+                val response =
+                    WebClient.of(fixture.serverUri(gateway))
+                        .execute(chatCompletionsRequest("status ${status.code()}"))
+                        .aggregate().join()
+
+                assertEquals(status, response.status(), status.toString())
+                assertEquals(body, response.contentUtf8(), status.toString())
+            }
+    }
+
+    /** SSE status, headers, and events stay hidden until a standalone DONE event is retained. */
+    @Test
+    fun `SSE response is retained completely through standalone terminal event`() {
+        val releaseTerminal = CountDownLatch(1)
+        val responseSource = CompletableFuture<RetainedResponseSource>()
+        val disclosureProbe = ResponseDisclosureProbe(responseSource) { source -> source.ingestComplete }
+        val message = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"}}]}\n\n"
+        val terminal = "data: [DONE]\n\n"
+        val upstream = fixture.startServer {
+            HttpResponse.streaming().also { response ->
+                thread(name = "sse-response-source") {
+                    response.write(
+                        ResponseHeaders.builder(HttpStatus.OK)
+                            .contentType(MediaType.EVENT_STREAM)
+                            .add("x-upstream-retained", "sse")
+                            .build(),
+                    )
+                    response.write(HttpData.ofUtf8(message))
+                    check(releaseTerminal.await(5, TimeUnit.SECONDS)) { "SSE terminal event was not released" }
+                    response.write(HttpData.ofUtf8(terminal))
+                    response.close()
+                }
+            }
+        }
+        val gateway =
+            startShadowGateway(
+                fixture.serverUri(upstream),
+                responseSourceCreated = responseSource::complete,
+                responseOutputObserved = disclosureProbe::observe,
+            )
+        val received = ReceivedStream()
+
+        WebClient.of(fixture.serverUri(gateway))
+            .execute(chatCompletionsRequest("retain SSE response"))
+            .subscribe(received)
+
+        val retained = awaitRetainedResponseSource(responseSource, "SSE response event")
+        releaseTerminal.countDown()
+
+        assertTrue(received.completion.await(2, TimeUnit.SECONDS), "retained SSE response did not complete")
+        received.failure?.let { throw AssertionError("retained SSE response failed", it) }
+        disclosureProbe.assertNoEarlyDisclosure("SSE response")
+        assertEquals(HttpStatus.OK, received.headers.get()?.status())
+        assertEquals("sse", received.headers.get()?.get("x-upstream-retained"))
+        assertEquals(message + terminal, received.chunks.joinToString(""))
+        assertRetainedResponseReleased(retained, "SSE exact replay")
+    }
+
+    /** Every incomplete or malformed SSE terminal path returns the same safe 502 without disclosure. */
+    @Test
+    fun `invalid SSE matrix returns exact safe upstream error without partial disclosure`() {
+        val cases =
+            listOf(
+                InvalidUpstreamCase(
+                    name = "missing terminal",
+                    body = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"secret-missing\"}}]}\n\n",
+                ),
+                InvalidUpstreamCase(
+                    name = "malformed terminal",
+                    body = "data: [DONE]\ndata: secret-terminal\n\n",
+                ),
+                InvalidUpstreamCase(
+                    name = "malformed event",
+                    body = "data: {secret-malformed\n\n",
+                ),
+                InvalidUpstreamCase(
+                    name = "malformed protocol field",
+                    body = "opaque: secret-protocol\n\n",
+                ),
+                InvalidUpstreamCase(
+                    name = "upstream interruption",
+                    body = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"secret-interrupted\"}}]}\n\n",
+                    interrupt = true,
+                ),
+            )
+
+        cases.forEach { case ->
+            val upstream = fixture.startServer {
+                HttpResponse.streaming().also { response ->
+                    response.write(
+                        ResponseHeaders.builder(HttpStatus.valueOf(418))
+                            .contentType(MediaType.EVENT_STREAM)
+                            .add("x-upstream-secret", case.name)
+                            .build(),
+                    )
+                    response.write(HttpData.ofUtf8(case.body))
+                    if (case.interrupt) {
+                        response.close(IllegalStateException("private interruption sentinel"))
+                    } else {
+                        response.close()
+                    }
+                }
+            }
+            val gateway = startShadowGateway(fixture.serverUri(upstream))
+
+            val response =
+                WebClient.of(fixture.serverUri(gateway))
+                    .execute(chatCompletionsRequest(case.name))
+                    .aggregate().join()
+
+            assertEquals(HttpStatus.BAD_GATEWAY, response.status(), case.name)
+            assertEquals(null, response.headers().get("x-upstream-secret"), case.name)
+            assertEquals(INVALID_UPSTREAM_RESPONSE_BODY, response.contentUtf8(), case.name)
+            assertFalse(response.contentUtf8().contains("secret"), "${case.name} disclosed upstream bytes")
+        }
+    }
+
+    /** Client cancellation before terminal response state cancels upstream with zero disclosure. */
+    @Test
+    fun `client cancellation during response ingest cancels upstream without disclosure`() {
+        val upstreamCancelled = CountDownLatch(1)
+        val responseSource = CompletableFuture<RetainedResponseSource>()
+        val disclosureProbe = ResponseDisclosureProbe(responseSource) { false }
+        val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
+        val upstream =
+            fixture.startServer(
+                HttpService { ctx, _ ->
+                    ctx.whenRequestCancelled().thenRun(upstreamCancelled::countDown)
+                    HttpResponse.streaming().also { response ->
+                        response.write(ResponseHeaders.builder(HttpStatus.OK).contentType(MediaType.JSON).build())
+                        response.write(
+                            HttpData.ofUtf8(
+                                "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"private",
+                            ),
+                        )
+                    }
+                },
+            )
+        val gateway =
+            startShadowGateway(
+                fixture.serverUri(upstream),
+                responseSourceCreated = responseSource::complete,
+                responseOutputObserved = disclosureProbe::observe,
+            )
+        val response = WebClient.of(fixture.serverUri(gateway)).execute(chatCompletionsRequest("cancel response"))
+        val received = ReceivedStream()
+        response.subscribe(received)
+
+        val retained = awaitRetainedResponseSource(responseSource, "cancelled response prefix")
+        response.abort()
+
+        assertTrue(upstreamCancelled.await(2, TimeUnit.SECONDS), "response cancellation did not reach upstream")
+        assertTrue(received.completion.await(2, TimeUnit.SECONDS), "cancelled client response remained active")
+        disclosureProbe.assertNoEarlyDisclosure("cancelled response")
+        assertEquals(null, received.headers.get(), "client observed headers during response cancellation")
+        assertTrue(received.chunks.isEmpty(), "client observed bytes during response cancellation")
+        assertRetainedResponseReleased(retained, "client cancellation")
+        assertTrue(
+            fixture.awaitUntil(Duration.ofSeconds(2)) { events.analysisEventNames().size == 2 },
+            "request audit pair did not complete before upstream handoff",
+        )
+        assertTrue(
+            events.filter(ILoggingEvent::isAnalysisEvent).all { event -> event.keyValue("phase") == "REQUEST" },
+            "response ingest emitted a response analysis event before a final response analysis outcome",
+        )
+    }
+
+    /** Forced shutdown cancels an incomplete retained response after the configured drain bound. */
+    @Test
+    fun `shutdown cancels active response source without disclosure or response audit`() {
+        val upstreamCancelled = CountDownLatch(1)
+        val responseSource = CompletableFuture<RetainedResponseSource>()
+        val disclosureProbe = ResponseDisclosureProbe(responseSource) { source -> source.closed }
+        val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
+        val upstream =
+            fixture.startServer(
+                HttpService { ctx, _ ->
+                    ctx.whenRequestCancelled().thenRun(upstreamCancelled::countDown)
+                    HttpResponse.streaming().also { response ->
+                        response.write(
+                            ResponseHeaders.builder(HttpStatus.OK).contentType(MediaType.EVENT_STREAM).build(),
+                        )
+                        response.write(
+                            HttpData.ofUtf8(
+                                "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"private\"}}]}\n\n",
+                            ),
+                        )
+                    }
+                },
+            )
+        val gateway =
+            startShadowGateway(
+                upstreamUri = fixture.serverUri(upstream),
+                responseSourceCreated = responseSource::complete,
+                responseOutputObserved = disclosureProbe::observe,
+            ) {
+                gracefulShutdownTimeout(Duration.ofMillis(100), Duration.ofMillis(300))
+            }
+        val response =
+            WebClient.of(fixture.serverUri(gateway))
+                .execute(chatCompletionsRequest("shutdown response"))
+        val received = ReceivedStream()
+        response.subscribe(received)
+
+        val retained = awaitRetainedResponseSource(responseSource, "shutdown response event")
+        val stopped = gateway.stop()
+
+        stopped.get(3, TimeUnit.SECONDS)
+        assertTrue(
+            upstreamCancelled.await(2, TimeUnit.SECONDS),
+            "forced shutdown did not cancel upstream response ingest",
+        )
+        assertTrue(received.completion.await(2, TimeUnit.SECONDS), "forced shutdown left the client exchange active")
+        disclosureProbe.assertNoEarlyDisclosure("shutdown response")
+        assertSafeUndisclosedShutdownOutcome(received)
+        assertRetainedResponseReleased(retained, "forced shutdown")
+        assertTrue(
+            events.filter(ILoggingEvent::isAnalysisEvent).all { event -> event.keyValue("phase") == "REQUEST" },
+            "shutdown started response analysis without a complete source",
+        )
+    }
+
     /** Verifies exact forwarding and one safe aggregate PII detection lifecycle pair. */
     @Test
     @Suppress("LongMethod")
@@ -190,7 +483,7 @@ class PiiShadowProxyServiceTest {
                     upstreamBody.complete(aggregated.content().array())
                     upstreamPath.complete(aggregated.path())
                     upstreamRequestId.complete(aggregated.headers().get("x-request-id"))
-                    HttpResponse.of(HttpStatus.OK, MediaType.JSON, "{\"ok\":true}")
+                    validChatCompletionsResponse()
                 },
             )
         }
@@ -338,7 +631,7 @@ class PiiShadowProxyServiceTest {
             )
 
         cases.forEachIndexed { index, case ->
-            val upstream = fixture.startServer { HttpResponse.of(HttpStatus.OK) }
+            val upstream = fixture.startServer { validChatCompletionsResponse() }
             val casePolicies =
                 if (case.deadline == Duration.ofSeconds(2)) {
                     policies
@@ -418,7 +711,7 @@ class PiiShadowProxyServiceTest {
         val upstreamRequests = AtomicInteger()
         val upstream = fixture.startServer {
             upstreamRequests.incrementAndGet()
-            HttpResponse.of(HttpStatus.OK, MediaType.JSON, "{\"ok\":true}")
+            validChatCompletionsResponse()
         }
         val blockingSink = BlockingAuditSink()
         attachAsyncAuditAppender("VIG-32-slow-full", blockingSink)
@@ -432,7 +725,7 @@ class PiiShadowProxyServiceTest {
         repeat(20) { index ->
             val response = client.execute(chatCompletionsRequest("full-sink-$index")).aggregate().join()
             assertEquals(HttpStatus.OK, response.status(), "full queue request $index")
-            assertEquals("{\"ok\":true}", response.contentUtf8(), "full queue request $index")
+            assertEquals(VALID_CHAT_COMPLETIONS_RESPONSE_BODY, response.contentUtf8(), "full queue request $index")
         }
         assertEquals(21, upstreamRequests.get())
         blockingSink.release()
@@ -442,7 +735,7 @@ class PiiShadowProxyServiceTest {
         val response = client.execute(chatCompletionsRequest("throwing-sink")).aggregate().join()
 
         assertEquals(HttpStatus.OK, response.status())
-        assertEquals("{\"ok\":true}", response.contentUtf8())
+        assertEquals(VALID_CHAT_COMPLETIONS_RESPONSE_BODY, response.contentUtf8())
         assertEquals(22, upstreamRequests.get())
         assertTrue(throwingSink.awaitAttempt(), "async worker did not exercise the throwing sink")
     }
@@ -452,7 +745,7 @@ class PiiShadowProxyServiceTest {
     @Suppress("LongMethod")
     fun `request audit pair and client errors contain no private request data`() {
         val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
-        val upstream = fixture.startServer { HttpResponse.of(HttpStatus.OK, MediaType.JSON, "{\"ok\":true}") }
+        val upstream = fixture.startServer { validChatCompletionsResponse() }
         val identityUser = "identity-user-privacy-sentinel"
         val identityGroup = "identity-group-privacy-sentinel"
         val gateway =
@@ -548,7 +841,7 @@ class PiiShadowProxyServiceTest {
                 request.aggregate().thenApply { aggregated ->
                     upstreamAuthorizations += requireNotNull(aggregated.headers().get("authorization"))
                     upstreamBodies += aggregated.content().array()
-                    HttpResponse.of(HttpStatus.OK, MediaType.JSON, """{"ok":true}""")
+                    validChatCompletionsResponse()
                 },
             )
         }
@@ -605,7 +898,7 @@ class PiiShadowProxyServiceTest {
         val upstreamRequests = AtomicInteger()
         val upstream = fixture.startServer {
             upstreamRequests.incrementAndGet()
-            HttpResponse.of(HttpStatus.OK)
+            validChatCompletionsResponse()
         }
         val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
         val cases =
@@ -709,7 +1002,7 @@ class PiiShadowProxyServiceTest {
     fun `identity extraction uses blocking-safe request executor`() {
         val bodyDemanded = AtomicBoolean()
         val extractionOnEventLoop = AtomicBoolean(true)
-        val upstream = fixture.startServer { HttpResponse.of(HttpStatus.OK) }
+        val upstream = fixture.startServer { validChatCompletionsResponse() }
         val delegate = DummyIdentityExtractor(DummyIdentitySettings("test-user", emptySet()))
         val extractor = BearerIdentityExtractor { headers ->
             val current = ServiceRequestContext.current()
@@ -741,7 +1034,7 @@ class PiiShadowProxyServiceTest {
         val upstreamRequests = AtomicInteger()
         val upstream = fixture.startServer {
             upstreamRequests.incrementAndGet()
-            HttpResponse.of(HttpStatus.OK)
+            validChatCompletionsResponse()
         }
         val unavailableExecutor = Executors.newSingleThreadExecutor().apply { shutdown() }
         val gateway =
@@ -774,7 +1067,7 @@ class PiiShadowProxyServiceTest {
         val upstream = fixture.startServer { request ->
             request.aggregate().thenApply { aggregated ->
                 upstreamAuthorizations += requireNotNull(aggregated.headers().get("authorization"))
-                HttpResponse.of(HttpStatus.OK)
+                validChatCompletionsResponse()
             }.let(HttpResponse::of)
         }
         val responseContexts = CopyOnWriteArrayList<PolicyContext>()
@@ -832,7 +1125,7 @@ class PiiShadowProxyServiceTest {
         val upstreamRequests = AtomicInteger()
         val upstream = fixture.startServer {
             upstreamRequests.incrementAndGet()
-            HttpResponse.of(HttpStatus.OK)
+            validChatCompletionsResponse()
         }
         val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
         val gateway =
@@ -872,7 +1165,7 @@ class PiiShadowProxyServiceTest {
     /** Verifies SERVER, INTERNAL inspection and CLIENT upstream parentage. */
     @Test
     fun `shadow request produces sibling inspection and upstream spans`() {
-        val upstream = fixture.startServer { HttpResponse.of(HttpStatus.OK) }
+        val upstream = fixture.startServer { validChatCompletionsResponse() }
         val gateway = startShadowGateway(fixture.serverUri(upstream))
         val client = WebClient.of(fixture.serverUri(gateway).toString())
 
@@ -910,7 +1203,7 @@ class PiiShadowProxyServiceTest {
         val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
         val upstream = fixture.startServer {
             upstreamRequests.incrementAndGet()
-            HttpResponse.of(HttpStatus.OK)
+            validChatCompletionsResponse()
         }
         val gateway = startShadowGateway(
             fixture.serverUri(upstream),
@@ -942,7 +1235,7 @@ class PiiShadowProxyServiceTest {
         val bodyDemanded = AtomicBoolean()
         val upstream = fixture.startServer {
             upstreamRequests.incrementAndGet()
-            HttpResponse.of(HttpStatus.OK)
+            validChatCompletionsResponse()
         }
         val gateway =
             startShadowGateway(
@@ -974,7 +1267,7 @@ class PiiShadowProxyServiceTest {
         val upstreamRequests = AtomicInteger()
         val upstream = fixture.startServer {
             upstreamRequests.incrementAndGet()
-            HttpResponse.of(HttpStatus.OK)
+            validChatCompletionsResponse()
         }
         val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
         val gateway = startShadowGateway(fixture.serverUri(upstream))
@@ -1003,7 +1296,7 @@ class PiiShadowProxyServiceTest {
         val upstreamRequests = AtomicInteger()
         val upstream = fixture.startServer {
             upstreamRequests.incrementAndGet()
-            HttpResponse.of(HttpStatus.OK)
+            validChatCompletionsResponse()
         }
         val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
         val gateway = startShadowGateway(fixture.serverUri(upstream))
@@ -1040,7 +1333,7 @@ class PiiShadowProxyServiceTest {
             HttpResponse.of(
                 request.aggregate().thenApply { aggregated ->
                     upstreamBody.complete(aggregated.content().array())
-                    HttpResponse.of(HttpStatus.OK)
+                    validChatCompletionsResponse()
                 },
             )
         }
@@ -1081,7 +1374,7 @@ class PiiShadowProxyServiceTest {
         val upstreamRequests = AtomicInteger()
         val upstream = fixture.startServer {
             upstreamRequests.incrementAndGet()
-            HttpResponse.of(HttpStatus.OK)
+            validChatCompletionsResponse()
         }
         val quota =
             RequestSourceQuota(
@@ -1123,7 +1416,7 @@ class PiiShadowProxyServiceTest {
         val upstreamRequests = AtomicInteger()
         val upstream = fixture.startServer {
             upstreamRequests.incrementAndGet()
-            HttpResponse.of(HttpStatus.OK)
+            validChatCompletionsResponse()
         }
         val quota =
             RequestSourceQuota(
@@ -1165,7 +1458,7 @@ class PiiShadowProxyServiceTest {
         val upstreamRequests = AtomicInteger()
         val upstream = fixture.startServer {
             upstreamRequests.incrementAndGet()
-            HttpResponse.of(HttpStatus.OK)
+            validChatCompletionsResponse()
         }
         val quota =
             RequestSourceQuota(
@@ -1209,7 +1502,7 @@ class PiiShadowProxyServiceTest {
         val upstream =
             fixture.startServer {
                 upstreamRequests.incrementAndGet()
-                HttpResponse.of(HttpStatus.OK)
+                validChatCompletionsResponse()
             }
         val quota = RequestSourceQuota()
         val gateway =
@@ -1238,7 +1531,7 @@ class PiiShadowProxyServiceTest {
         val upstreamRequests = AtomicInteger()
         val upstream = fixture.startServer {
             upstreamRequests.incrementAndGet()
-            HttpResponse.of(HttpStatus.OK)
+            validChatCompletionsResponse()
         }
         val detectorStarted = CountDownLatch(1)
         val detectorCancelled = CountDownLatch(1)
@@ -1301,7 +1594,7 @@ class PiiShadowProxyServiceTest {
         val upstreamRequests = AtomicInteger()
         val upstream = fixture.startServer {
             upstreamRequests.incrementAndGet()
-            HttpResponse.of(HttpStatus.OK)
+            validChatCompletionsResponse()
         }
         val quota = RequestSourceQuota()
         val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
@@ -1341,13 +1634,13 @@ class PiiShadowProxyServiceTest {
         assertEquals(0, upstreamRequests.get())
     }
 
-    /** Graceful shutdown drains active inspection and leaves no retained source reservations. */
+    /** Shutdown drains active request inspection but starts no later response-analysis phase. */
     @Test
-    fun `graceful shutdown drains active source before releasing reservations`() {
+    fun `shutdown drains active request source without starting response analysis`() {
         val upstreamRequests = AtomicInteger()
         val upstream = fixture.startServer {
             upstreamRequests.incrementAndGet()
-            HttpResponse.of(HttpStatus.OK)
+            validChatCompletionsResponse()
         }
         val detectorStarted = CountDownLatch(1)
         val releaseDetector = CountDownLatch(1)
@@ -1377,10 +1670,13 @@ class PiiShadowProxyServiceTest {
         assertFalse(stopped.isDone, "graceful shutdown did not wait for active inspection")
 
         releaseDetector.countDown()
-        assertEquals(HttpStatus.OK, response.get(5, TimeUnit.SECONDS).status())
+        assertTrue(
+            fixture.awaitUntil(Duration.ofSeconds(2)) { response.isDone },
+            "shutdown left the drained request exchange incomplete",
+        )
         stopped.get(5, TimeUnit.SECONDS)
         assertSourceReservationsReleased(quota, "graceful shutdown")
-        assertEquals(1, upstreamRequests.get())
+        assertEquals(0, upstreamRequests.get(), "shutdown started a new response-analysis phase")
     }
 
     /** Forced shutdown cancels active inspection and releases every retained source reservation. */
@@ -1389,7 +1685,7 @@ class PiiShadowProxyServiceTest {
         val upstreamRequests = AtomicInteger()
         val upstream = fixture.startServer {
             upstreamRequests.incrementAndGet()
-            HttpResponse.of(HttpStatus.OK)
+            validChatCompletionsResponse()
         }
         val detectorStarted = CountDownLatch(1)
         val detectorCancelled = CountDownLatch(1)
@@ -1438,7 +1734,7 @@ class PiiShadowProxyServiceTest {
             HttpResponse.of(
                 request.aggregate().thenApply { aggregated ->
                     upstreamBody.complete(aggregated.content().array())
-                    HttpResponse.of(HttpStatus.OK)
+                    validChatCompletionsResponse()
                 },
             )
         }
@@ -1484,7 +1780,7 @@ class PiiShadowProxyServiceTest {
             HttpResponse.of(
                 request.aggregate().thenApply { aggregated ->
                     upstreamBody.complete(aggregated.content().array())
-                    HttpResponse.of(HttpStatus.OK)
+                    validChatCompletionsResponse()
                 },
             )
         }
@@ -1529,7 +1825,7 @@ class PiiShadowProxyServiceTest {
         val engineEvents = fixture.attachAppenderTo(PolicyEngine::class.java)
         val upstream = fixture.startServer {
             upstreamRequests.incrementAndGet()
-            HttpResponse.of(HttpStatus.OK)
+            validChatCompletionsResponse()
         }
         val gateway =
             startShadowGateway(
@@ -1556,15 +1852,17 @@ class PiiShadowProxyServiceTest {
         assertFalse(completedResponse.contentUtf8().contains(sentinel), "raw policy exception leaked to client")
     }
 
-    /** Verifies SSE stays streaming while the same request snapshot reaches response phase. */
+    /** Verifies retained SSE stays atomic while the same request snapshot reaches response phase. */
     @Test
-    fun `sse response reaches client before upstream finishes streaming`() {
+    fun `sse response reaches client only after upstream terminal while preserving response context`() {
         val releaseRemainingChunks = CountDownLatch(1)
+        val responseSource = CompletableFuture<RetainedResponseSource>()
+        val disclosureProbe = ResponseDisclosureProbe(responseSource) { source -> source.ingestComplete }
         val upstreamFinished = AtomicBoolean()
         val chunks =
             listOf(
-                "data: {\"delta\":\"Hel\"}\n\n",
-                "data: {\"delta\":\"lo\"}\n\n",
+                "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hel\"}}]}\n\n",
+                "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"lo\"}}]}\n\n",
                 "data: [DONE]\n\n",
             )
         val upstream = fixture.startServer {
@@ -1586,6 +1884,8 @@ class PiiShadowProxyServiceTest {
         val gateway = startShadowGateway(
             upstreamUri = fixture.serverUri(upstream),
             responseContexts = responseContexts,
+            responseSourceCreated = responseSource::complete,
+            responseOutputObserved = disclosureProbe::observe,
         )
         val client = WebClient.of(fixture.serverUri(gateway).toString())
         val received = ReceivedStream()
@@ -1594,16 +1894,14 @@ class PiiShadowProxyServiceTest {
 
         response.subscribe(received)
 
-        try {
-            assertTrue(received.firstBody.await(10, TimeUnit.SECONDS), "first SSE body chunk was not observed")
-            assertFalse(upstreamFinished.get(), "upstream finished before the first body observation")
-            assertEquals(listOf(chunks.first()), received.chunks.toList())
-        } finally {
-            releaseRemainingChunks.countDown()
-        }
+        val retained = awaitRetainedResponseSource(responseSource, "response-context SSE chunk")
+        assertFalse(upstreamFinished.get(), "upstream finished before the terminal release")
+        releaseRemainingChunks.countDown()
         assertTrue(received.completion.await(10, TimeUnit.SECONDS), "SSE response did not complete")
         received.failure?.let { throw AssertionError("SSE response failed", it) }
+        disclosureProbe.assertNoEarlyDisclosure("response-context SSE")
         assertEquals(chunks, received.chunks.toList())
+        assertRetainedResponseReleased(retained, "response-context SSE replay")
         val responseContext = responseContexts.single()
         assertEquals(PolicyPhase.RESPONSE, responseContext.phase)
         assertEquals("gpt-test", responseContext.model)
@@ -1626,7 +1924,7 @@ class PiiShadowProxyServiceTest {
             client.execute(chatCompletionsRequest("hello")).aggregate().join()
 
         assertEquals(HttpStatus.BAD_GATEWAY, response.status())
-        assertEquals("""{"error":"upstream_unavailable"}""", response.contentUtf8())
+        assertEquals(INVALID_UPSTREAM_RESPONSE_BODY, response.contentUtf8())
         assertTrue(
             fixture.awaitUntil(Duration.ofSeconds(2)) {
                 quota.activeOwners == 0 && quota.retainedBytes == 0L && quota.retainedSegments == 0
@@ -1686,6 +1984,16 @@ class PiiShadowProxyServiceTest {
         val errorCode: String? = null,
     )
 
+    /** One invalid SSE source and whether its upstream transport terminates exceptionally. */
+    private data class InvalidUpstreamCase(
+        /** Diagnostic matrix row. */
+        val name: String,
+        /** Partial or malformed upstream bytes that must remain undisclosed. */
+        val body: String,
+        /** Whether the upstream response ends with an interruption instead of EOF. */
+        val interrupt: Boolean = false,
+    )
+
     /**
      * Starts the production shadow service with real policy components and bounded executors.
      *
@@ -1695,6 +2003,8 @@ class PiiShadowProxyServiceTest {
      * @param policyProvider policy snapshot source used by the real orchestration boundary.
      * @param identityExtractor selected Bearer implementation; defaults to the established Dummy fixture.
      * @param inspectionExecutor optional deterministic executor supplied by lifecycle tests.
+     * @param responseSourceCreated optional owner-state observer invoked for each retained source.
+     * @param responseOutputObserved optional server-boundary observer invoked for disclosed headers or body.
      * @param requestTransform optional server-side request replacement for transport-failure tests.
      * @param configureServer optional Armeria settings for lifecycle scenarios.
      */
@@ -1712,6 +2022,8 @@ class PiiShadowProxyServiceTest {
         requestBodyDemandObserved: AtomicBoolean? = null,
         policyProvider: PolicyProvider = DummyPolicyProvider(listOf(shadowPolicy(policyDeadline))),
         inspectionExecutor: ExecutorService? = null,
+        responseSourceCreated: ((RetainedResponseSource) -> Unit)? = null,
+        responseOutputObserved: (() -> Unit)? = null,
         requestTransform: ((HttpRequest) -> HttpRequest)? = null,
         configureServer: ServerBuilder.() -> Unit = {},
     ): com.linecorp.armeria.server.Server {
@@ -1735,14 +2047,22 @@ class PiiShadowProxyServiceTest {
             )
         val protocol = PiiShadowProtocol(upstreamUri)
         val auditLogger = ShadowAuditLogger()
+        val responseAnalysisLifecycle = ResponseAnalysisLifecycle()
         val shadowService =
             PiiShadowProxyService(
-                bypassProxyService = BypassProxyService(upstreamUri, WebClient.of()),
+                bypassProxyService = BypassProxyService(upstreamUri, isolatedUpstreamClient()),
                 requestSourceQuota = quota,
                 protocol = protocol,
                 workflow = ShadowInspectionWorkflow(protocol, policyEngine, auditLogger),
                 inspectionExecutor = requestExecutor,
                 identityExtractor = identityExtractor,
+                responseAnalysisLifecycle = responseAnalysisLifecycle,
+                retainedResponseHandler =
+                    RetainedResponseHandler(requestExecutor) {
+                        val source = RetainedResponseSource()
+                        responseSourceCreated?.invoke(source)
+                        source
+                    },
             )
         val tracerProvider = SdkTracerProvider.builder()
             .addSpanProcessor(SimpleSpanProcessor.builder(spanExporter).build())
@@ -1754,12 +2074,15 @@ class PiiShadowProxyServiceTest {
                 responseContexts,
                 serviceContexts,
                 requestBodyDemandObserved,
+                responseOutputObserved,
                 requestTransform,
             )
         return fixture.startServer(
             TracingService(observedService, tracerProvider.get("io.vigilant.gateway.test")),
-            configureServer,
-        )
+        ) {
+            serverListener(responseAnalysisLifecycle.serverListener())
+            configureServer()
+        }
     }
 
     /**
@@ -1769,17 +2092,21 @@ class PiiShadowProxyServiceTest {
      * @param responseContexts optional response-phase handoff sink.
      * @param serviceContexts optional request-scope sink.
      * @param requestBodyDemandObserved optional inspection demand observer.
+     * @param responseOutputObserved optional server-boundary response disclosure observer.
      * @param requestTransform optional server-side request replacement for transport-failure tests.
      */
+    @Suppress("LongParameterList")
     private fun observeShadowService(
         shadowService: PiiShadowProxyService,
         responseContexts: MutableList<PolicyContext>?,
         serviceContexts: MutableList<ServiceRequestContext>?,
         requestBodyDemandObserved: AtomicBoolean?,
+        responseOutputObserved: (() -> Unit)?,
         requestTransform: ((HttpRequest) -> HttpRequest)?,
     ): HttpService {
         val noObservations =
-            responseContexts == null && serviceContexts == null && requestBodyDemandObserved == null
+            responseContexts == null && serviceContexts == null && requestBodyDemandObserved == null &&
+                responseOutputObserved == null
         if (noObservations && requestTransform == null) {
             return shadowService
         }
@@ -1793,17 +2120,33 @@ class PiiShadowProxyServiceTest {
                         DemandObservingPublisher(transformedRequest, observed),
                     )
                 } ?: transformedRequest
-            val response = shadowService.serve(ctx, observedRequest)
-            if (responseContexts == null) {
-                response
-            } else {
-                response.mapHeaders { headers ->
+            var response = shadowService.serve(ctx, observedRequest)
+            if (responseContexts != null) {
+                response = response.mapHeaders { headers ->
                     val handoff = PolicyContextHandoff.responseContext(ctx)
                     if (handoff is PolicyContextHandoffResult.Success) responseContexts += handoff.context
                     headers
                 }
             }
+            if (responseOutputObserved != null) {
+                response =
+                    response
+                        .mapHeaders { headers ->
+                            responseOutputObserved()
+                            headers
+                        }.mapData { data ->
+                            if (data.length() > 0) responseOutputObserved()
+                            data
+                        }
+            }
+            response
         }
+    }
+
+    /** Builds a WebClient on a scenario-owned pool so recycled test ports cannot reuse stale streams. */
+    private fun isolatedUpstreamClient(): WebClient {
+        val factory = ClientFactory.builder().build().also(upstreamClientFactories::add)
+        return WebClient.builder().factory(factory).build()
     }
 
     /** Publishes only a controlled terminal body failure after the first positive demand. */
@@ -1889,6 +2232,79 @@ class PiiShadowProxyServiceTest {
                 async.stop()
                 sink.stop()
             }
+    }
+
+    /**
+     * Waits until a created response source demonstrably owns retained upstream bytes.
+     *
+     * @param sourceCreated future completed by the response-source factory.
+     * @param description scenario label used by assertion diagnostics.
+     * @return the response source whose retained state was observed.
+     */
+    private fun awaitRetainedResponseSource(
+        sourceCreated: CompletableFuture<RetainedResponseSource>,
+        description: String,
+    ): RetainedResponseSource {
+        val source = sourceCreated.get(2, TimeUnit.SECONDS)
+        assertTrue(
+            fixture.awaitUntil(Duration.ofSeconds(2)) { source.retainedSegments > 0 },
+            "$description was not retained by the response source",
+        )
+        return source
+    }
+
+    /**
+     * Waits for and verifies the canonical zero-retention response-source invariant.
+     *
+     * @param source response source that previously owned retained upstream bytes.
+     * @param terminalEvent terminal scenario label used by assertion diagnostics.
+     */
+    private fun assertRetainedResponseReleased(
+        source: RetainedResponseSource,
+        terminalEvent: String,
+    ) {
+        assertTrue(
+            fixture.awaitUntil(Duration.ofSeconds(2)) {
+                source.retainedBytes == 0L && source.retainedSegments == 0
+            },
+            "$terminalEvent left response source ownership retained",
+        )
+        assertEquals(0L, source.retainedBytes)
+        assertEquals(0, source.retainedSegments)
+    }
+
+    /** Accepts transport truncation or a safe local error without retained upstream bytes. */
+    private fun assertSafeUndisclosedShutdownOutcome(received: ReceivedStream) {
+        val shutdownStatus = received.headers.get()?.status()
+        assertTrue(
+            shutdownStatus == null ||
+                shutdownStatus == HttpStatus.BAD_GATEWAY ||
+                shutdownStatus == HttpStatus.SERVICE_UNAVAILABLE,
+            "shutdown returned unexpected client status $shutdownStatus",
+        )
+        assertFalse(
+            received.chunks.joinToString("").contains("private"),
+            "client observed retained upstream bytes during response shutdown",
+        )
+    }
+
+    /** Records server-boundary response output that occurs outside an allowed owner state. */
+    private class ResponseDisclosureProbe(
+        private val sourceCreated: CompletableFuture<RetainedResponseSource>,
+        private val outputAllowed: (RetainedResponseSource) -> Boolean,
+    ) {
+        private val invalidDisclosureObserved = AtomicBoolean()
+
+        /** Records output unless the response source is in the exact allowed lifecycle state. */
+        fun observe() {
+            val source = sourceCreated.getNow(null)
+            if (source == null || !outputAllowed(source)) invalidDisclosureObserved.set(true)
+        }
+
+        /** Verifies that every gateway output crossed the boundary in an allowed owner state. */
+        fun assertNoEarlyDisclosure(description: String) {
+            assertFalse(invalidDisclosureObserved.get(), "$description escaped outside its allowed owner state")
+        }
     }
 
     /** Waits for and verifies the canonical zero-reservation request-source invariant. */
@@ -2014,21 +2430,24 @@ class PiiShadowProxyServiceTest {
         }
     }
 
-    /** Collects streamed response chunks and signals the first body observation. */
+    /** Collects response headers, streamed body chunks and terminal state. */
     private class ReceivedStream : Subscriber<HttpObject> {
         val chunks = CopyOnWriteArrayList<String>()
-        val firstBody = CountDownLatch(1)
+        val headers = AtomicReference<ResponseHeaders?>()
         val completion = CountDownLatch(1)
         var failure: Throwable? = null
 
         /** Requests the complete bounded response stream from the test client. */
         override fun onSubscribe(subscription: Subscription) = subscription.request(Long.MAX_VALUE)
 
-        /** Records body chunks and signals the first observable body data. */
+        /** Records every response header block and non-empty body chunk. */
         override fun onNext(item: HttpObject) {
-            if (item is HttpData && item.length() > 0) {
-                chunks += item.toStringUtf8()
-                firstBody.countDown()
+            when (item) {
+                is ResponseHeaders -> headers.compareAndSet(null, item)
+
+                is HttpData -> if (item.length() > 0) {
+                    chunks += item.toStringUtf8()
+                }
             }
         }
 

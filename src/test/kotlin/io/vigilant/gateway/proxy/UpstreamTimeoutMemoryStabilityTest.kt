@@ -1,10 +1,10 @@
 package io.vigilant.gateway.proxy
 
-import com.linecorp.armeria.common.HttpResponse
 import com.linecorp.armeria.common.HttpStatus
 import io.vigilant.gateway.GatewayProcessFixture
 import io.vigilant.gateway.GatewayTestFixture
 import io.vigilant.gateway.chatCompletions
+import io.vigilant.gateway.validChatCompletionsResponse
 import java.time.Duration
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
@@ -32,7 +32,7 @@ class UpstreamTimeoutMemoryStabilityTest {
      */
     @Test
     fun `completed responses do not remain retained until response timeout`() {
-        val upstream = fixture.startServer { HttpResponse.of(HttpStatus.OK) }
+        val upstream = fixture.startServer { validChatCompletionsResponse() }
         val gateway = GatewayProcessFixture.launch(
             upstream = fixture.serverUri(upstream),
             jvmArguments = listOf("-Xms64m", "-Xmx64m", "-XX:+ExitOnOutOfMemoryError"),

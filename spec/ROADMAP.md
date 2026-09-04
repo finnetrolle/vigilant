@@ -22,7 +22,10 @@ Roadmap связывает work items нескольких epics в один del
 - новый ID присваивается только при публикации issue в соответствии с
   [WORK_ITEMS.md](WORK_ITEMS.md).
 
-## Зафиксированный первый production increment
+## Зафиксированный первый production increment (исторический baseline)
+
+Этот раздел фиксирует исходную request-only веху и не описывает текущий
+runtime после закрытых leaves последующих phases.
 
 ### Поддерживаемая поверхность
 
@@ -397,7 +400,10 @@ observation seams. Их исторические issue records и reports сох
 исходные dates и evidence. EPIC-20 остаётся единственным owner retained
 in-memory response source lifecycle и enforcement для ordinary и SSE
 responses, а EPIC-06 владеет protocol parsing; EPIC-21 закрыт без
-дублирующего future scope.
+дублирующего future scope. VIG-20-04 и VIG-20-01 имеют status
+`Done`: guardrail route удерживает ordinary/SSE response до terminal
+protocol validation и exact replay, а policy reactions и response audit остаются
+в remaining leaves EPIC-20.
 
 Post-milestone closure EPIC-21 завершён. В EPIC-22 local durable store
 [VIG-22-01](issues/epic_22/issue_22_01_local_durable_audit_store.md), mandatory
