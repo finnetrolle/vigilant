@@ -55,10 +55,12 @@ blocking-safe request executor. Development/test `DummyIdentityExtractor`
 проверяет только representation и возвращает configured normalized identity.
 `OfflineJwtIdentityExtractor` локально выбирает pinned RSA public key по exact
 `kid`, проверяет RS256 signature, issuer, audience и time claims, а только
-после этого нормализует `sub`/`groups`. Он не выполняет discovery, key fetch
-или identity lookup. Любой reject предшествует body demand и upstream call.
-Raw token не сохраняется, а принятый Authorization передаётся upstream без
-изменения.
+после этого нормализует `sub`/`groups`. `ExternalIdentityExtractor` после того
+же shared Bearer boundary передаёт token только `BridgeIdentityClient`, который
+выполняет exact one-attempt HTTP lookup, whole-exchange deadline, immediate
+bounded admission и strict aggregate response parsing. Любой reject предшествует
+body demand и upstream call. Raw token не сохраняется, а принятый Authorization
+передаётся upstream без изменения.
 
 Для поддерживаемого запроса `RequestSourceQuota` резервирует owner. Body
 принимается с backpressure и полностью сохраняется в bounded in-memory source.
@@ -230,7 +232,8 @@ configured concurrent-source limit. Policy detector waits и deadlines такж�
 | Response bodies | `RetainedResponseSource` | available JVM heap, one-item upstream demand, terminal cleanup |
 | Inspection orchestration | `InspectionResources` | virtual-thread executor |
 | Fast PII CPU | `InspectionResources` | bounded fixed-size pool и bounded queue |
-| Upstream connections | `UpstreamClientResources` | dedicated Armeria `ClientFactory` |
+| LLM и Bridge connections | `OutboundClientResources` | один shared Armeria `ClientFactory`; distinct WebClient per target |
+| External identity admission | `BridgeIdentityClient` | immediate nonfair semaphore из request-source concurrency limit |
 | Traces и metrics | `SdkTracerProvider`, `SdkMeterProvider` | process-wide providers, stdout exporters |
 
 ## Startup и shutdown
@@ -244,7 +247,7 @@ configured concurrent-source limit. Policy detector waits и deadlines такж�
 1. readiness становится `503`, новый traffic и новый response-analysis handoff запрещаются;
 2. Armeria server выполняет bounded graceful drain;
 3. закрываются inspection executors;
-4. закрывается upstream connection factory;
+4. отменяется active Bridge work и ровно один раз закрывается общий outbound connection factory;
 5. traces и metrics flush-ятся и закрываются.
 
 Quiet period и force timeout настраиваются. Полный операторский контракт
@@ -262,7 +265,7 @@ Quiet period и force timeout настраиваются. Полный опер�
 | Admission и probes | `gateway/health/*` |
 | Request inspection | `gateway/proxy/PiiShadowProxyService.kt`, `ShadowInspectionWorkflow.kt`, `ReplayReadyRequest.kt`, `InspectionResources.kt` |
 | Response inspection и lifecycle | `gateway/proxy/RetainedResponseHandler.kt`, `gateway/proxy/ResponseInspectionWorkflow.kt`, `gateway/proxy/ReplayReadyResponse.kt`, `gateway/proxy/ResponseAnalysisLifecycle.kt`, `source/RetainedResponseSource.kt` |
-| Transport proxy | `gateway/proxy/BypassProxyService.kt`, `UpstreamClientResources.kt` |
+| Transport и outbound lifecycle | `gateway/proxy/BypassProxyService.kt`, `gateway/proxy/OutboundClientResources.kt`, `gateway/identity/BridgeIdentityClient.kt` |
 | OpenAI normalization | `protocol/openai/*` |
 | Bounded request source | `source/*` |
 | Policy loading и engine | `policy/config/*`, `policy/selection/*`, `policy/execution/*`, `policy/engine/*` |

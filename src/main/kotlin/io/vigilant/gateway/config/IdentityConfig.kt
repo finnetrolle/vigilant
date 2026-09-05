@@ -10,10 +10,12 @@ import java.util.Collections
 import java.util.Base64
 import java.util.LinkedHashSet
 import java.math.BigInteger
+import java.net.URI
 import java.security.KeyFactory
 import java.security.GeneralSecurityException
 import java.security.interfaces.RSAPublicKey
 import java.security.spec.RSAPublicKeySpec
+import java.time.Duration
 
 /** Environment variable selecting the runtime deployment safety profile. */
 private const val ENVIRONMENT_ENV = "VIGILANT_ENVIRONMENT"
@@ -33,6 +35,15 @@ private const val IDENTITY_JWT_ISSUER_ENV = "VIGILANT_IDENTITY_JWT_ISSUER"
 /** Environment variable configuring the required JWT audience. */
 private const val IDENTITY_JWT_AUDIENCE_ENV = "VIGILANT_IDENTITY_JWT_AUDIENCE"
 
+/** Environment variable configuring the exact trusted External identity endpoint. */
+private const val IDENTITY_EXTERNAL_URL_ENV = "VIGILANT_IDENTITY_EXTERNAL_URL"
+
+/** Environment variable configuring the complete External identity exchange deadline. */
+private const val IDENTITY_EXTERNAL_TIMEOUT_ENV = "VIGILANT_IDENTITY_EXTERNAL_TIMEOUT"
+
+/** Effective whole-exchange deadline when External timeout is not configured. */
+internal val DEFAULT_IDENTITY_EXTERNAL_TIMEOUT: Duration = Duration.ofSeconds(1)
+
 /** Environment variable configuring pinned public JWT verification keys. */
 internal const val IDENTITY_JWT_JWKS_ENV = "VIGILANT_IDENTITY_JWT_JWKS"
 
@@ -44,7 +55,7 @@ enum class RuntimeEnvironment {
     /** Automated and isolated tests may use the non-authenticating Dummy extractor. */
     TEST,
 
-    /** Production requires the validating offline JWT extractor. */
+    /** Production requires either validating offline JWT or trusted External identity. */
     PRODUCTION,
 }
 
@@ -118,19 +129,34 @@ data class JwtIdentitySettings(
     val publicKeys: Map<String, RSAPublicKey>,
 ) : IdentitySettings
 
+/**
+ * Validated trusted Bridge endpoint and whole-exchange deadline for External identity lookup.
+ *
+ * @param endpoint exact absolute HTTP(S) lookup endpoint, including configured path and query.
+ * @param timeout positive deadline covering the complete Bridge exchange.
+ */
+data class ExternalIdentitySettings(
+    val endpoint: URI,
+    val timeout: Duration,
+) : IdentitySettings
+
 /** Validates the complete environment and selected Bearer identity startup contract. */
 internal fun VigilantSettings.validatedRuntimeIdentity(): Pair<RuntimeEnvironment, IdentitySettings> {
     val runtimeEnvironment = validatedRuntimeEnvironment(environment)
     val identity = when (identityMode) {
         "DUMMY" -> validatedDummyIdentity(runtimeEnvironment)
         "JWT" -> validatedJwtIdentity()
-        else -> throw IllegalArgumentException("$IDENTITY_MODE_ENV is required and must be DUMMY or JWT")
+        "EXTERNAL" -> validatedExternalIdentity()
+        else -> throw IllegalArgumentException("$IDENTITY_MODE_ENV is required and must be DUMMY, JWT, or EXTERNAL")
     }
     return runtimeEnvironment to identity
 }
 
 /** Validates development/test-only Dummy identity settings. */
 private fun VigilantSettings.validatedDummyIdentity(runtimeEnvironment: RuntimeEnvironment): DummyIdentitySettings {
+    require(identityExternalUrl == null && identityExternalTimeout == null) {
+        "VIGILANT_IDENTITY_EXTERNAL_* settings are permitted only in EXTERNAL mode"
+    }
     require(identityJwtIssuer == null && identityJwtAudience == null && identityJwtJwks.isEmpty()) {
         "VIGILANT_IDENTITY_JWT_* settings are permitted only in JWT mode"
     }
@@ -164,6 +190,9 @@ private fun VigilantSettings.validatedDummyIdentity(runtimeEnvironment: RuntimeE
 
 /** Validates one immutable issuer, audience, and pinned RSA public-key snapshot. */
 private fun VigilantSettings.validatedJwtIdentity(): JwtIdentitySettings {
+    require(identityExternalUrl == null && identityExternalTimeout == null) {
+        "VIGILANT_IDENTITY_EXTERNAL_* settings are permitted only in EXTERNAL mode"
+    }
     require(identityDummyUser == null && identityDummyGroups.isEmpty()) {
         "VIGILANT_IDENTITY_DUMMY_* settings are not permitted in JWT mode"
     }
@@ -182,6 +211,53 @@ private fun VigilantSettings.validatedJwtIdentity(): JwtIdentitySettings {
         }
     }
     return JwtIdentitySettings(issuer, audience, Collections.unmodifiableMap(keys))
+}
+
+/** Validates the exact endpoint, deadline, and isolation of External identity settings. */
+private fun VigilantSettings.validatedExternalIdentity(): ExternalIdentitySettings {
+    require(identityDummyUser == null && identityDummyGroups.isEmpty()) {
+        "VIGILANT_IDENTITY_DUMMY_* settings are not permitted in EXTERNAL mode"
+    }
+    require(identityJwtIssuer == null && identityJwtAudience == null && identityJwtJwks.isEmpty()) {
+        "VIGILANT_IDENTITY_JWT_* settings are not permitted in EXTERNAL mode"
+    }
+    val endpoint = validatedExternalIdentityUri(identityExternalUrl)
+    val timeout = validatedExternalIdentityTimeout(identityExternalTimeout)
+    return ExternalIdentitySettings(endpoint, timeout)
+}
+
+/** Validates one positive External deadline representable by the nanosecond scheduler. */
+private fun validatedExternalIdentityTimeout(configured: Duration?): Duration {
+    val timeout = configured ?: DEFAULT_IDENTITY_EXTERNAL_TIMEOUT
+    require(timeout > Duration.ZERO) { "$IDENTITY_EXTERNAL_TIMEOUT_ENV must contain a valid positive duration" }
+    try {
+        timeout.toNanos()
+    } catch (_: ArithmeticException) {
+        throw IllegalArgumentException(
+            "$IDENTITY_EXTERNAL_TIMEOUT_ENV must contain a valid positive duration",
+        )
+    }
+    return timeout
+}
+
+/** Validates one exact absolute HTTP(S) Bridge endpoint while preserving path and query. */
+private fun validatedExternalIdentityUri(rawUrl: String?): URI {
+    require(!rawUrl.isNullOrBlank()) {
+        "$IDENTITY_EXTERNAL_URL_ENV must contain an absolute HTTP(S) URL"
+    }
+    val uri =
+        try {
+            URI.create(rawUrl)
+        } catch (_: IllegalArgumentException) {
+            throw IllegalArgumentException("$IDENTITY_EXTERNAL_URL_ENV must contain an absolute HTTP(S) URL")
+        }
+    require(uri.isAbsolute && uri.scheme in setOf("http", "https") && uri.host != null) {
+        "$IDENTITY_EXTERNAL_URL_ENV must contain an absolute HTTP(S) URL"
+    }
+    require(uri.rawUserInfo == null && uri.rawFragment == null) {
+        "$IDENTITY_EXTERNAL_URL_ENV must not contain user info or fragment"
+    }
+    return uri
 }
 
 /** Parses one configured RSA public JWK without retaining private key material. */

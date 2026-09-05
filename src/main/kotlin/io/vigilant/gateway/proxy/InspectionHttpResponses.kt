@@ -20,6 +20,9 @@ internal object InspectionHttpResponses {
             IdentityExtractionErrorCode.DUPLICATE_IDENTITY,
             IdentityExtractionErrorCode.INVALID_CREDENTIAL,
             -> stableProxyError(HttpStatus.BAD_REQUEST, "invalid_identity")
+
+            IdentityExtractionErrorCode.IDENTITY_UNAVAILABLE ->
+                OpenAiErrorResponses.of(OpenAiErrorOutcome.IDENTITY_UNAVAILABLE)
         }
 
     /** Returns the stable Bearer challenge without credential-derived details. */

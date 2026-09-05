@@ -47,23 +47,42 @@ choice, semantic field, tool call или transcript boundaries.
 
 Startup выбирает ровно один общий Bearer extractor. `DUMMY` доступен только в
 `development`/`test`, проверяет representation header и возвращает configured
-normalized user/groups. `JWT` доступен в том числе в `production` и выполняет
-полностью локальную проверку RS256 по immutable pinned public JWK set. Сетевые
-discovery, JWKS fetch, refresh, introspection, UserInfo и identity lookup
-отсутствуют.
+normalized user/groups. `JWT` выполняет полностью локальную проверку RS256 по
+immutable pinned public JWK set. `EXTERNAL` передаёт non-empty opaque Bearer
+token trusted Bridge service и принимает normalized user/groups. JWT и
+`EXTERNAL` доступны во всех environments, включая `production`.
 
 Каждый поддержанный request обязан содержать ровно один `Authorization` с
 case-insensitive scheme `Bearer`. Missing или другой scheme получает `401` с
 `WWW-Authenticate: Bearer realm="vigilant"`; duplicate или malformed
 representation получает safe `400`. В `DUMMY` token может быть пустым и
-игнорируется. В `JWT` compact token обязан иметь `alg=RS256` и точный `kid`,
+игнорируется. В JWT compact token обязан иметь `alg=RS256` и точный `kid`,
 который выбирает одну configured key. Signature, exact `iss`, containing
 `aud`, обязательный неистёкший `exp` и optional `nbf` проверяются до чтения
 identity claims. Затем required string `sub` и optional top-level array
 `groups` нормализуются по общему identity contract; missing `groups` даёт
 empty set, а invalid/duplicate normalized values получают safe `400`.
 
-JWT validation выполняется на blocking-safe request executor до body demand.
+External после shared Bearer parsing выполняет ровно один `POST` на exact
+configured path/query с единственными provider headers `Authorization: Bearer
+<token>`, `Accept: application/json`, `Content-Length: 0` и без body. Redirect
+не follow-ится. Только `200 application/json` с object, required string `user`
+и required array-of-strings `groups` успешен; duplicate JSON keys, invalid или
+duplicate-after-normalization identity и больше 128 groups отклоняются.
+Неизвестные top-level fields игнорируются. Standard Armeria aggregate limit
+остаётся 10 MiB, отдельной identity response-size настройки нет.
+
+Один positive `identity-external-timeout`, default `1s`, начинается до client
+connection acquisition и охватывает acquisition, connect, request write,
+headers и полный response body. Immediate nonfair semaphore использует
+effective `inspection-max-concurrent-request-sources`; N+1 не ждёт в очереди и
+сразу получает unavailable. Client cancellation отменяет lookup и Bridge
+exchange. Graceful drain позволяет admitted lookup завершиться только в своём
+deadline, forced shutdown отменяет его до закрытия общего outbound factory.
+
+Все extractors запускаются на blocking-safe request executor до body demand;
+Dummy/JWT завершают локальный future, а External связывает его с async Armeria
+exchange.
 Raw token и decoded claim values не сохраняются и не попадают в audit, logs,
 metrics, traces или errors; policy context получает только normalized
 user/groups. Принятый Authorization передаётся upstream с исходным значением
@@ -99,6 +118,7 @@ content-bearing structure обрабатываются fail-closed и не до�
 | External или unresolved context | `400` | нет | `{"error":"unresolved_context"}` |
 | Duplicate, malformed или invalid JWT identity | `400` | нет | `{"error":"invalid_identity"}` |
 | Missing или non-Bearer Authorization | `401` | нет | `{"error":"authentication_required"}` + Bearer challenge |
+| External provider status/protocol/transport/timeout/overload failure | `503` | `1` | `{"error":{"message":"Identity service unavailable.","type":"server_error","code":"identity_unavailable"}}` |
 | Некорректный request source, включая несовпадение `Content-Length` | `400` | нет | `{"error":"invalid_request_source"}` |
 | Per-request byte limit | `413` | нет | `{"error":"request_too_large"}` |
 | Owner/global retained capacity | `503` | `1` | `{"error":{"message":"Request inspection unavailable.","type":"server_error","code":"request_inspection_unavailable"}}` |

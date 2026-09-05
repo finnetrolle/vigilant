@@ -8,6 +8,8 @@ participant "TrafficAdmissionService" as Admission
 participant "PiiShadowProxyService" as Proxy
 participant "Blocking-safe request executor" as Executor
 participant "BearerIdentityExtractor" as Identity
+participant "BridgeIdentityClient" as BridgeClient
+participant "Trusted identity Bridge" as Bridge
 participant "BoundedRequestSource" as Source
 participant "ShadowInspectionWorkflow" as Workflow
 participant "ChatCompletionsRequestParser" as Parser
@@ -32,10 +34,17 @@ alt дескриптор не поддерживается
 else дескриптор поддерживается
   Proxy -> Executor : проверить identity до body demand
   Executor -> Identity : single Bearer header
-  Identity -> Identity : Dummy configured identity или\noffline RS256 + pinned JWK + claims
+  alt External mode
+    Identity -> BridgeClient : exact non-empty token
+    BridgeClient -> Bridge : POST configured path/query\nBearer token + empty body
+    Bridge --> BridgeClient : complete response или failure
+    BridgeClient --> Identity : normalized identity / unavailable / cancellation
+  else Dummy или JWT
+    Identity -> Identity : configured identity или\noffline RS256 + pinned JWK + claims
+  end
   alt identity отклонена
     Identity --> Executor : typed safe failure
-    Executor --> Client : 400/401 stable identity error\nбез audit pair
+    Executor --> Client : 400/401 или External 503\nбез audit pair и body demand
   else identity нормализована
     Identity --> Executor : normalized user/groups
     Executor -> Source : принять с обратным давлением и квотами

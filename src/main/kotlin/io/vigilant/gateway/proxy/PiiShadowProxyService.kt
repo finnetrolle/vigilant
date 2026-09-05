@@ -9,6 +9,7 @@ import io.opentelemetry.api.common.AttributeKey
 import io.opentelemetry.api.trace.Span
 import io.opentelemetry.api.trace.SpanKind
 import io.opentelemetry.api.trace.StatusCode
+import io.opentelemetry.context.Context
 import io.vigilant.gateway.identity.BearerIdentityExtractor
 import io.vigilant.gateway.identity.IdentityExtractionResult
 import io.vigilant.gateway.tracing.RequestTracing
@@ -64,38 +65,81 @@ class PiiShadowProxyService internal constructor(
         return extractIdentity(ctx, request, inspectionSpan)
     }
 
-    /** Runs credential validation on the blocking-safe request executor before body demand. */
+    /** Starts async identity extraction on the blocking-safe executor before body demand. */
     private fun extractIdentity(
         ctx: ServiceRequestContext,
         request: HttpRequest,
         inspectionSpan: Span?,
     ): HttpResponse {
         val completion = CompletableFuture<HttpResponse>()
-        try {
-            inspectionExecutor.execute {
-                val response =
-                    ctx.push().use {
-                        when (val result = identityExtractor.extract(request.headers())) {
-                            is IdentityExtractionResult.Success ->
-                                openRequestSource(ctx, request, result, inspectionSpan)
-
-                            is IdentityExtractionResult.Failure ->
-                                InspectionHttpResponses.identityError(result.code).also {
-                                    inspectionSpan?.end()
-                                }
-                        }
-                    }
-                completion.complete(response)
-            }
-        } catch (_: java.util.concurrent.RejectedExecutionException) {
-            inspectionSpan?.setStatus(StatusCode.ERROR)
+        val cancellation = IdentityExtractionCancellation(ctx.whenRequestCancelling(), completion) {
             inspectionSpan?.end()
-            completion.complete(OpenAiErrorResponses.of(OpenAiErrorOutcome.REQUEST_INSPECTION_UNAVAILABLE))
+        }
+        try {
+            val task = inspectionExecutor.submit {
+                val extractionContext =
+                    inspectionSpan?.let { span -> Context.root().with(span) } ?: Context.current()
+                val extraction =
+                    ctx.push().use {
+                        extractionContext.makeCurrent().use {
+                            identityExtractor.extract(request.headers())
+                        }
+                }
+                cancellation.installExtraction(extraction)
+                extraction.whenComplete { result, failure ->
+                    completeIdentityExtraction(
+                        result = result,
+                        failure = failure,
+                        cancellation = cancellation,
+                        completion = completion,
+                        inspectionSpan = inspectionSpan,
+                    ) { identity ->
+                        ctx.push().use { openRequestSource(ctx, request, identity, inspectionSpan) }
+                    }
+                }
+            }
+            cancellation.installTask(task)
+        } catch (_: java.util.concurrent.RejectedExecutionException) {
+            if (cancellation.claimResult()) {
+                inspectionSpan?.setStatus(StatusCode.ERROR)
+                inspectionSpan?.end()
+                completion.complete(OpenAiErrorResponses.of(OpenAiErrorOutcome.REQUEST_INSPECTION_UNAVAILABLE))
+            }
         }
         return HttpResponse.of(completion)
     }
 
-    /** Opens the bounded body source only after successful offline identity validation. */
+    /** Publishes the sole identity terminal result after it wins the claim against cancellation. */
+    @Suppress("LongParameterList")
+    private fun completeIdentityExtraction(
+        result: IdentityExtractionResult?,
+        failure: Throwable?,
+        cancellation: IdentityExtractionCancellation,
+        completion: CompletableFuture<HttpResponse>,
+        inspectionSpan: Span?,
+        onSuccess: (IdentityExtractionResult.Success) -> HttpResponse,
+    ) {
+        if (!cancellation.claimResult()) return
+        if (failure != null || result == null) {
+            if (failure?.isCancellation() == true) {
+                completion.cancel(false)
+            } else {
+                inspectionSpan?.setStatus(StatusCode.ERROR)
+                completion.complete(OpenAiErrorResponses.of(OpenAiErrorOutcome.REQUEST_INSPECTION_UNAVAILABLE))
+            }
+            inspectionSpan?.end()
+            return
+        }
+        val response =
+            when (result) {
+                is IdentityExtractionResult.Success -> onSuccess(result)
+                is IdentityExtractionResult.Failure ->
+                    InspectionHttpResponses.identityError(result.code).also { inspectionSpan?.end() }
+            }
+        completion.complete(response)
+    }
+
+    /** Opens the bounded body source only after the selected identity extractor succeeds. */
     private fun openRequestSource(
         ctx: ServiceRequestContext,
         request: HttpRequest,
@@ -270,6 +314,64 @@ class PiiShadowProxyService internal constructor(
         val SESSION_ID: AttributeKey<String> = AttributeKey.stringKey("session.id")
     }
 
+}
+
+/**
+ * Coordinates request cancellation with publication of the identity task and extraction future.
+ *
+ * Cancellation wins only while identity is pending, reaches handles published after the signal,
+ * and cancels the response stage instead of synthesizing a client response.
+ */
+internal class IdentityExtractionCancellation(
+    private val requestCancelled: CompletableFuture<*>,
+    private val responseCompletion: CompletableFuture<HttpResponse>,
+    private val onCancelled: () -> Unit,
+) {
+    private val state = AtomicReference(IdentityExtractionState.PENDING)
+    private val taskReference = AtomicReference<Future<*>?>()
+    private val extractionReference =
+        AtomicReference<CompletableFuture<IdentityExtractionResult>?>()
+
+    init {
+        requestCancelled.thenRun(::cancelPending)
+    }
+
+    /** Publishes the executor task and applies a cancellation that won before publication. */
+    fun installTask(task: Future<*>) {
+        taskReference.set(task)
+        if (state.get() == IdentityExtractionState.CANCELLED) task.cancel(true)
+    }
+
+    /** Publishes the async extraction and applies a cancellation that won before publication. */
+    fun installExtraction(extraction: CompletableFuture<IdentityExtractionResult>) {
+        extractionReference.set(extraction)
+        if (state.get() == IdentityExtractionState.CANCELLED) extraction.cancel(true)
+    }
+
+    /** Claims the sole normal terminal result unless request cancellation already won. */
+    fun claimResult(): Boolean =
+        state.compareAndSet(IdentityExtractionState.PENDING, IdentityExtractionState.COMPLETED)
+
+    /** Cancels every published handle exactly once while extraction still owns the request. */
+    private fun cancelPending() {
+        if (!state.compareAndSet(IdentityExtractionState.PENDING, IdentityExtractionState.CANCELLED)) return
+        taskReference.get()?.cancel(true)
+        extractionReference.get()?.cancel(true)
+        responseCompletion.cancel(false)
+        onCancelled()
+    }
+
+    /** Once-only ordering between an extraction result and client cancellation. */
+    private enum class IdentityExtractionState {
+        /** Extraction may still publish a result or observe cancellation. */
+        PENDING,
+
+        /** One extraction result owns response creation. */
+        COMPLETED,
+
+        /** Client cancellation owns terminal cleanup. */
+        CANCELLED,
+    }
 }
 
 /**

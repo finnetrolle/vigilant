@@ -234,7 +234,8 @@ class AppConfigLoadingTest {
         val cases =
             listOf(
                 "VIGILANT_ENVIRONMENT" to "VIGILANT_ENVIRONMENT is required",
-                "VIGILANT_IDENTITY_MODE" to "VIGILANT_IDENTITY_MODE is required and must be DUMMY or JWT",
+                "VIGILANT_IDENTITY_MODE" to
+                    "VIGILANT_IDENTITY_MODE is required and must be DUMMY, JWT, or EXTERNAL",
                 "VIGILANT_IDENTITY_DUMMY_USER" to "VIGILANT_IDENTITY_DUMMY_USER is required",
             )
 
@@ -286,6 +287,278 @@ class AppConfigLoadingTest {
         )
 
         assertEquals(RuntimeEnvironment.PRODUCTION, config.environment)
+    }
+
+    /** CFG-01: Development selects External with the exact endpoint and default timeout. */
+    @Test
+    fun `external identity starts in development with trusted http endpoint`() {
+        val config =
+            loadAppConfigWithoutIdentityDefaults(
+                mapOf(
+                    "VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081",
+                    "VIGILANT_ENVIRONMENT" to "development",
+                    "VIGILANT_IDENTITY_MODE" to "EXTERNAL",
+                    "VIGILANT_IDENTITY_EXTERNAL_URL" to "http://bridge.internal/v1/identity",
+                ),
+            )
+
+        assertEquals(RuntimeEnvironment.DEVELOPMENT, config.environment)
+        assertEquals(
+            ExternalIdentitySettings(
+                endpoint = URI("http://bridge.internal/v1/identity"),
+                timeout = Duration.ofSeconds(1),
+            ),
+            config.identity,
+        )
+    }
+
+    /** CFG-02: Test accepts External with an absolute HTTPS endpoint. */
+    @Test
+    fun `external identity starts in test with https endpoint`() {
+        val config = loadExternalConfig(environment = "test", endpoint = "https://bridge.internal/identity")
+
+        assertEquals(RuntimeEnvironment.TEST, config.environment)
+        assertEquals(URI("https://bridge.internal/identity"), (config.identity as ExternalIdentitySettings).endpoint)
+    }
+
+    /** CFG-03: Production accepts trusted plain HTTP for External identity. */
+    @Test
+    fun `external identity starts in production with trusted http endpoint`() {
+        val config = loadExternalConfig(environment = "production", endpoint = "http://bridge.internal/identity")
+
+        assertEquals(RuntimeEnvironment.PRODUCTION, config.environment)
+        assertEquals(URI("http://bridge.internal/identity"), (config.identity as ExternalIdentitySettings).endpoint)
+    }
+
+    /** CFG-06: Missing, aliased, wrong-case, and unknown mode values have no fallback. */
+    @Test
+    fun `identity mode accepts only three exact selector values`() {
+        val cases =
+            linkedMapOf<String, String?>(
+                "missing" to null,
+                "alias" to "BRIDGE",
+                "wrong-case-lower" to "external",
+                "wrong-case-title" to "External",
+                "unknown" to "REMOTE",
+            )
+
+        cases.forEach { (name, mode) ->
+            val env =
+                mutableMapOf(
+                    "VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081",
+                    "VIGILANT_ENVIRONMENT" to "test",
+                ).apply { mode?.let { put("VIGILANT_IDENTITY_MODE", it) } }
+            val failure = assertFailsWith<IllegalArgumentException>(name) {
+                loadAppConfigWithoutIdentityDefaults(env)
+            }
+            assertEquals(
+                "VIGILANT_IDENTITY_MODE is required and must be DUMMY, JWT, or EXTERNAL",
+                failure.message,
+                name,
+            )
+        }
+    }
+
+    /** CFG-07: External mode requires its endpoint. */
+    @Test
+    fun `external identity requires endpoint`() {
+        val failure = assertFailsWith<IllegalArgumentException> {
+            loadExternalConfig(endpoint = null)
+        }
+
+        assertEquals(
+            "VIGILANT_IDENTITY_EXTERNAL_URL must contain an absolute HTTP(S) URL",
+            failure.message,
+        )
+    }
+
+    /** CFG-08: Every forbidden endpoint shape fails with a value-free startup error. */
+    @Test
+    fun `external identity rejects every invalid endpoint shape`() {
+        val cases =
+            linkedMapOf(
+                "relative" to "/v1/identity",
+                "hostless" to "http:///v1/identity",
+                "wrong-scheme" to "ftp://bridge.internal/v1/identity",
+                "user-info" to "https://user:secret@bridge.internal/v1/identity",
+                "fragment" to "https://bridge.internal/v1/identity#secret-fragment",
+            )
+
+        cases.forEach { (name, endpoint) ->
+            val failure = assertFailsWith<IllegalArgumentException>(name) {
+                loadExternalConfig(endpoint = endpoint)
+            }
+            assertFalse(failure.message.orEmpty().contains(endpoint), "$name leaked endpoint")
+        }
+    }
+
+    /** CFG-09: External endpoint path and query are retained without rewriting. */
+    @Test
+    fun `external endpoint preserves configured path and query`() {
+        val endpoint = "https://bridge.internal/base/v1/identity?tenant=alpha%2Fbeta"
+
+        val config = loadExternalConfig(endpoint = endpoint)
+
+        assertEquals(URI(endpoint), (config.identity as ExternalIdentitySettings).endpoint)
+    }
+
+    /** CFG-10: An omitted External timeout selects exactly one second. */
+    @Test
+    fun `external timeout defaults to one second`() {
+        val config = loadExternalConfig(endpoint = "http://bridge.internal/identity")
+
+        assertEquals(Duration.ofSeconds(1), (config.identity as ExternalIdentitySettings).timeout)
+    }
+
+    /** CFG-11: Environment overrides the External timeout decoded from HOCON. */
+    @Test
+    fun `external timeout environment value overrides hocon`() {
+        val file =
+            writeConfig(
+                """
+                vigilant {
+                  upstream-url = "http://127.0.0.1:18081"
+                  environment = "test"
+                  identity-mode = "EXTERNAL"
+                  identity-external-url = "http://bridge.internal/identity"
+                  identity-external-timeout = 7s
+                }
+                """.trimIndent(),
+            )
+
+        val config =
+            loadAppConfigWithoutIdentityDefaults(
+                mapOf(
+                    "VIGILANT_CONFIG" to file.toString(),
+                    "VIGILANT_IDENTITY_EXTERNAL_TIMEOUT" to "250ms",
+                ),
+            )
+
+        assertEquals(Duration.ofMillis(250), (config.identity as ExternalIdentitySettings).timeout)
+    }
+
+    /** CFG-12: Malformed, zero, and negative External timeouts all fail startup. */
+    @Test
+    fun `external timeout must be a positive duration`() {
+        val cases = linkedMapOf("malformed" to "not-a-duration", "zero" to "0s", "negative" to "-1ms")
+
+        cases.forEach { (name, timeout) ->
+            assertFailsWith<IllegalArgumentException>(name) {
+                loadExternalConfig(
+                    endpoint = "http://bridge.internal/identity",
+                    additionalEnv = mapOf("VIGILANT_IDENTITY_EXTERNAL_TIMEOUT" to timeout),
+                )
+            }
+        }
+    }
+
+    /** External timeout rejects a positive Duration that cannot be represented by the scheduler. */
+    @Test
+    fun `external timeout must fit scheduler nanoseconds`() {
+        val settings =
+            VigilantSettings(
+                environment = "test",
+                identityMode = "EXTERNAL",
+                identityExternalUrl = "http://bridge.internal/identity",
+                identityExternalTimeout = Duration.ofSeconds(Long.MAX_VALUE),
+            )
+
+        val failure = assertFailsWith<IllegalArgumentException> { settings.validatedRuntimeIdentity() }
+
+        assertEquals(
+            "VIGILANT_IDENTITY_EXTERNAL_TIMEOUT must contain a valid positive duration",
+            failure.message,
+        )
+    }
+
+    /** CFG-13: Each External setting is rejected independently in Dummy and JWT modes. */
+    @Test
+    fun `dummy and jwt reject every external setting`() {
+        val validJwk = validIdentityJwk("key-external-isolation")
+        val cases =
+            linkedMapOf(
+                "dummy-url" to
+                    VigilantSettings(
+                        environment = "test",
+                        identityMode = "DUMMY",
+                        identityDummyUser = "user",
+                        identityExternalUrl = "http://bridge.internal/identity",
+                    ),
+                "dummy-timeout" to
+                    VigilantSettings(
+                        environment = "test",
+                        identityMode = "DUMMY",
+                        identityDummyUser = "user",
+                        identityExternalTimeout = Duration.ofSeconds(1),
+                    ),
+                "jwt-url" to
+                    VigilantSettings(
+                        environment = "production",
+                        identityMode = "JWT",
+                        identityJwtIssuer = "issuer",
+                        identityJwtAudience = "audience",
+                        identityJwtJwks = listOf(validJwk),
+                        identityExternalUrl = "http://bridge.internal/identity",
+                    ),
+                "jwt-timeout" to
+                    VigilantSettings(
+                        environment = "production",
+                        identityMode = "JWT",
+                        identityJwtIssuer = "issuer",
+                        identityJwtAudience = "audience",
+                        identityJwtJwks = listOf(validJwk),
+                        identityExternalTimeout = Duration.ofSeconds(1),
+                    ),
+            )
+
+        cases.forEach { (name, settings) ->
+            val failure = assertFailsWith<IllegalArgumentException>(name) { settings.validatedRuntimeIdentity() }
+            assertEquals(
+                "VIGILANT_IDENTITY_EXTERNAL_* settings are permitted only in EXTERNAL mode",
+                failure.message,
+                name,
+            )
+        }
+    }
+
+    /** CFG-14: Every Dummy/JWT setting is rejected independently in External mode. */
+    @Test
+    fun `external identity rejects every local mode setting`() {
+        val validJwk = validIdentityJwk("key-local-isolation")
+        val base =
+            VigilantSettings(
+                environment = "test",
+                identityMode = "EXTERNAL",
+                identityExternalUrl = "http://bridge.internal/identity",
+            )
+        val cases =
+            linkedMapOf(
+                "dummy-user" to base.copy(identityDummyUser = "user"),
+                "dummy-groups" to base.copy(identityDummyGroups = listOf("group")),
+                "jwt-issuer" to base.copy(identityJwtIssuer = "issuer"),
+                "jwt-audience" to base.copy(identityJwtAudience = "audience"),
+                "jwt-jwks" to base.copy(identityJwtJwks = listOf(validJwk)),
+            )
+
+        cases.forEach { (name, settings) ->
+            val failure = assertFailsWith<IllegalArgumentException>(name) { settings.validatedRuntimeIdentity() }
+            val expectedFamily = if (name.startsWith("dummy")) "DUMMY" else "JWT"
+            assertEquals(
+                "VIGILANT_IDENTITY_${expectedFamily}_* settings are not permitted in EXTERNAL mode",
+                failure.message,
+                name,
+            )
+        }
+    }
+
+    /** CFG-16: Loading External configuration never contacts an unavailable endpoint. */
+    @Test
+    fun `external startup configuration performs no bridge health check`() {
+        val endpoint = "http://127.0.0.1:1/unavailable-bridge"
+
+        val config = loadExternalConfig(environment = "production", endpoint = endpoint)
+
+        assertEquals(URI(endpoint), (config.identity as ExternalIdentitySettings).endpoint)
     }
 
     /** Environment variables can supply the complete JWT trust snapshot without a file. */
@@ -454,7 +727,10 @@ class AppConfigLoadingTest {
                     defaultConfigPaths = emptyList(),
                 )
             }
-            assertEquals("VIGILANT_IDENTITY_MODE is required and must be DUMMY or JWT", exception.message)
+            assertEquals(
+                "VIGILANT_IDENTITY_MODE is required and must be DUMMY, JWT, or EXTERNAL",
+                exception.message,
+            )
         }
     }
 
@@ -1071,6 +1347,24 @@ class AppConfigLoadingTest {
             env = env,
             defaultConfigPaths = emptyList(),
         )
+
+    /** Loads one External identity configuration with optional endpoint and extra overrides. */
+    private fun loadExternalConfig(
+        environment: String = "test",
+        endpoint: String?,
+        additionalEnv: Map<String, String> = emptyMap(),
+    ): AppConfig {
+        val env =
+            mutableMapOf(
+                "VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081",
+                "VIGILANT_ENVIRONMENT" to environment,
+                "VIGILANT_IDENTITY_MODE" to "EXTERNAL",
+            ).apply {
+                endpoint?.let { put("VIGILANT_IDENTITY_EXTERNAL_URL", it) }
+                putAll(additionalEnv)
+            }
+        return loadAppConfigWithoutIdentityDefaults(env)
+    }
 
     /** Supplies the valid identity prerequisite to configuration cases. */
     private fun loadAppConfig(env: Map<String, String>, defaultConfigPaths: List<Path>): AppConfig =

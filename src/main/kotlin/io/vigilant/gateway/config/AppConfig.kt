@@ -188,6 +188,8 @@ data class UpstreamClientSettings(
  * @param identityJwtIssuer exact trusted JWT issuer.
  * @param identityJwtAudience required JWT audience.
  * @param identityJwtJwks pinned RSA public JWK set.
+ * @param identityExternalUrl exact trusted Bridge endpoint.
+ * @param identityExternalTimeout optional whole-exchange timeout; absence selects the documented default.
  */
 internal data class VigilantSettings(
     val environment: String? = null,
@@ -212,6 +214,8 @@ internal data class VigilantSettings(
     val identityJwtIssuer: String? = null,
     val identityJwtAudience: String? = null,
     val identityJwtJwks: List<IdentityJwkSettings> = emptyList(),
+    val identityExternalUrl: String? = null,
+    val identityExternalTimeout: Duration? = null,
     val otlpEnabled: Boolean = true,
 )
 
@@ -257,7 +261,13 @@ internal fun loadAppConfig(
 
     val root = when (val result = loader.loadConfig<VigilantConfigRoot>()) {
         is Validated.Valid -> result.value
-        is Validated.Invalid -> throw IllegalArgumentException(result.error.description())
+        is Validated.Invalid -> {
+            val description = result.error.description()
+            require(!description.contains("identityExternalTimeout")) {
+                "VIGILANT_IDENTITY_EXTERNAL_TIMEOUT must contain a valid positive duration"
+            }
+            throw IllegalArgumentException(description)
+        }
     }
 
     val identitySettings = root.vigilant.withJwtJwksEnvironmentOverride(env[IDENTITY_JWT_JWKS_ENV])

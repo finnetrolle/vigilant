@@ -15,6 +15,13 @@ identity path не входил в latency budget guardrail processing.
 
 ## Известный контекст
 
+- VIG-35 сохраняет `DUMMY`, `JWT` и `EXTERNAL` как три startup-selectable
+  реализации общего async `BearerIdentityExtractor`. Cache принадлежит только
+  `EXTERNAL`; локальные `DUMMY` и JWT не используют и не конфигурируют его.
+- VIG-30 реализовал internal `ExternalIdentityLookup` seam с safe
+  `Resolved(NormalizedIdentity)`/`Unavailable(code)` result. Cache decorator
+  вставляется между `ExternalIdentityExtractor` и `BridgeIdentityClient`:
+  hit не требует Bridge permit, miss проходит существующий immediate admission.
 - Performance SLO `p99 <= 2 ms` при 2 000 RPS измеряется с warm cache или mock
   extractor.
 - Cache хранит только безопасно выбранный key и normalized user/groups; raw
@@ -32,6 +39,7 @@ identity path не входил в latency budget guardrail processing.
 
 - External provider protocol, policy matching или distributed shared cache.
 - Persistence cache на диск и cross-replica synchronization.
+- Cache или fallback для `DUMMY`/JWT и переключение identity mode без restart.
 
 ## Критерий готовности задачи
 

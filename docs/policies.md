@@ -104,8 +104,9 @@ findings, а `detected { disposition = "BLOCK", transformations = [] }` блок
 
 Идентификация выполняется до выбора политик. Общий Bearer contract передаёт
 только normalized user/groups: development/test Dummy использует configured
-values, а production JWT локально проверяет pinned RS256 token и нормализует
-validated `sub`/`groups`. Raw token не входит в policy context. Полный startup
+values, JWT локально проверяет pinned RS256 token, а External получает identity
+от trusted Bridge и применяет ту же canonical normalization. Raw token не
+входит в policy context. Полный startup
 и HTTP contract описан в
 [контракте исполнения](runtime-contract.md#bearer-identity).
 

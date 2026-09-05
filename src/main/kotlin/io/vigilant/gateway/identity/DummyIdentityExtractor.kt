@@ -4,6 +4,7 @@ import com.linecorp.armeria.common.HttpHeaderNames
 import com.linecorp.armeria.common.RequestHeaders
 import io.vigilant.context.NormalizedIdentity
 import io.vigilant.gateway.config.DummyIdentitySettings
+import java.util.concurrent.CompletableFuture
 
 /** Stable safe categories for rejected Bearer identity input. */
 enum class IdentityExtractionErrorCode {
@@ -18,11 +19,14 @@ enum class IdentityExtractionErrorCode {
 
     /** Bearer credential failed offline trust or normalized-claim validation. */
     INVALID_CREDENTIAL,
+
+    /** External identity service could not produce an available normalized identity. */
+    IDENTITY_UNAVAILABLE,
 }
 
 /** Explicit all-or-nothing result of extracting normalized request identity. */
 sealed interface IdentityExtractionResult {
-    /** Successful normalized identity independent of the ignored Bearer token. */
+    /** Successful credential-free normalized identity produced by the selected extractor. */
     data class Success(
         /** Normalized identity accepted for policy context assembly. */
         val identity: NormalizedIdentity,
@@ -37,8 +41,8 @@ sealed interface IdentityExtractionResult {
 
 /** Common request-boundary contract implemented by each selected Bearer identity mode. */
 fun interface BearerIdentityExtractor {
-    /** Extracts a normalized identity or a safe credential-free failure. */
-    fun extract(headers: RequestHeaders): IdentityExtractionResult
+    /** Starts cancellation-aware extraction and completes with a safe credential-free result. */
+    fun extract(headers: RequestHeaders): CompletableFuture<IdentityExtractionResult>
 }
 
 /** Internal one-call result of parsing the shared single-Bearer header representation. */
@@ -107,12 +111,13 @@ class DummyIdentityExtractor(
      * @return configured normalized identity, or a source-value-free typed failure.
      */
     @Suppress("ReturnCount")
-    override fun extract(headers: RequestHeaders): IdentityExtractionResult {
-        return when (val parsed = BearerHeaderParser.parse(headers)) {
-            is BearerHeaderResult.Credential -> configuredIdentity
-            is BearerHeaderResult.Failure -> failure(parsed.code)
-        }
-    }
+    override fun extract(headers: RequestHeaders): CompletableFuture<IdentityExtractionResult> =
+        CompletableFuture.completedFuture(
+            when (val parsed = BearerHeaderParser.parse(headers)) {
+                is BearerHeaderResult.Credential -> configuredIdentity
+                is BearerHeaderResult.Failure -> failure(parsed.code)
+            },
+        )
 
     /** Creates one safe failure without retaining the rejected Authorization value. */
     private fun failure(code: IdentityExtractionErrorCode): IdentityExtractionResult.Failure =

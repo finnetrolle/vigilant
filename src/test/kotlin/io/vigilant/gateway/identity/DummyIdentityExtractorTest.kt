@@ -19,7 +19,7 @@ class DummyIdentityExtractorTest {
     fun `every valid Bearer representation returns configured identity`() {
         listOf("Bearer", "bEaReR token-sentinel", "BEARER opaque token bytes").forEach { authorization ->
             val result = assertIs<IdentityExtractionResult.Success>(
-                extractor.extract(headers(authorization)),
+                extractor.extract(headers(authorization)).join(),
             )
 
             assertEquals("local-user", result.identity.user)
@@ -33,7 +33,7 @@ class DummyIdentityExtractorTest {
         listOf(null, "Basic credential-sentinel", "Digest credential-sentinel").forEach { authorization ->
             assertEquals(
                 IdentityExtractionResult.Failure(IdentityExtractionErrorCode.AUTHENTICATION_REQUIRED),
-                extractor.extract(headers(authorization)),
+                extractor.extract(headers(authorization)).join(),
             )
         }
     }
@@ -48,11 +48,11 @@ class DummyIdentityExtractorTest {
                 .build()
         assertEquals(
             IdentityExtractionResult.Failure(IdentityExtractionErrorCode.DUPLICATE_IDENTITY),
-            extractor.extract(duplicate),
+            extractor.extract(duplicate).join(),
         )
         assertEquals(
             IdentityExtractionResult.Failure(IdentityExtractionErrorCode.MALFORMED_IDENTITY),
-            extractor.extract(headers("Bearer\tmalformed-sentinel")),
+            extractor.extract(headers("Bearer\tmalformed-sentinel")).join(),
         )
     }
 

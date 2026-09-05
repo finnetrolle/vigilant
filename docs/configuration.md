@@ -71,6 +71,21 @@ vigilant {
 }
 ~~~
 
+External mode использует trusted Bridge endpoint:
+
+~~~hocon
+vigilant {
+  environment = "production"
+  identity-mode = "EXTERNAL"
+  identity-external-url = "http://bridge.internal/v1/identity?tenant=platform"
+  identity-external-timeout = 1s
+}
+~~~
+
+`DUMMY` разрешён только в `development`/`test`, а JWT и `EXTERNAL` разрешены
+во всех environments. Startup выбирает ровно один mode; fallback и runtime
+switching отсутствуют.
+
 Любой HOCON key `vigilant.some-setting` переопределяется environment
 variable `VIGILANT_SOME_SETTING`.
 
@@ -91,12 +106,14 @@ variable `VIGILANT_SOME_SETTING`.
 | `VIGILANT_INSPECTION_MAX_RETAINED_SEGMENTS_PER_REQUEST` | Максимум storage segments одного request | `128` |
 | `VIGILANT_TRACING_SESSION_HEADER` | Header с opaque session ID | `x-session-id` |
 | `VIGILANT_TRACING_TRACEPARENT_HEADER` | Header со значением W3C `traceparent` | `traceparent` |
-| `VIGILANT_IDENTITY_MODE` | Выбранный mode: `DUMMY` или `JWT` | обязательна |
+| `VIGILANT_IDENTITY_MODE` | Exact mode: `DUMMY`, `JWT` или `EXTERNAL` | обязательна |
 | `VIGILANT_IDENTITY_DUMMY_USER` | Configured user для Dummy identity | обязательна в `DUMMY` |
 | `VIGILANT_IDENTITY_DUMMY_GROUPS` | Comma-separated configured Dummy groups | пустой список |
 | `VIGILANT_IDENTITY_JWT_ISSUER` | Exact trusted JWT issuer | обязательна в `JWT` |
 | `VIGILANT_IDENTITY_JWT_AUDIENCE` | Audience, которая должна присутствовать в `aud` | обязательна в `JWT` |
 | `VIGILANT_IDENTITY_JWT_JWKS` | Non-empty pinned RSA public JWK list | обязательна в `JWT` |
+| `VIGILANT_IDENTITY_EXTERNAL_URL` | Exact absolute HTTP(S) trusted Bridge endpoint | обязательна в `EXTERNAL` |
+| `VIGILANT_IDENTITY_EXTERNAL_TIMEOUT` | Whole-exchange Bridge deadline | `1s` в `EXTERNAL` |
 | `VIGILANT_OTLP_ENABLED` | Выводит traces и metrics как OTLP JSON Lines в stdout | `true` |
 | `VIGILANT_CONFIG` | Явный путь к HOCON-файлу | не задан |
 
@@ -125,11 +142,14 @@ Complex `VIGILANT_IDENTITY_JWT_JWKS` задаётся strict JSON array с по�
 - Оба tracing header name должны быть валидными HTTP header names и не должны
   совпадать без учёта регистра.
 - `environment` и `identity-mode` обязательны. `DUMMY` разрешён только в
-  `development`/`test` и требует `identity-dummy-user`. `JWT` разрешён в том
-  числе в `production` и требует issuer, audience и non-empty JWK set. Settings
-  другого mode отклоняются, fallback между mode отсутствует.
-- Удалённые identity modes и их configuration keys не имеют aliases или
-  compatibility path и отклоняются strict loader-ом.
+  `development`/`test` и требует `identity-dummy-user`. `JWT` требует issuer,
+  audience и non-empty JWK set. `EXTERNAL` требует absolute lowercase
+  `http://` или `https://` URL с host; path/query сохраняются, user info и
+  fragment запрещены, plain HTTP разрешён и в production.
+- Settings любого невыбранного identity mode отклоняются. Mode aliases,
+  fallback, health check и runtime switching отсутствуют.
+- External timeout должен быть positive duration в scheduler bound. Он один
+  охватывает acquisition, connect, write, response headers и полный body.
 - Dummy user/groups используют grammar
   `[A-Za-z0-9][A-Za-z0-9._:@/\-]{0,127}` и `Locale.ROOT` lowercase. Groups
   дедуплицируются с сохранением первого порядка и ограничены 128 уникальными
@@ -141,7 +161,7 @@ Complex `VIGILANT_IDENTITY_JWT_JWKS` задаётся strict JSON array с по�
 - JWT принимает только `alg=RS256`; header `kid` выбирает ровно одну pinned
   key. Signature, exact issuer, containing audience, required integral `exp`
   и optional integral `nbf` проверяются до `sub`/`groups`. Discovery, JWKS
-  fetch, refresh, introspection и identity lookup отсутствуют.
+  fetch, refresh и introspection отсутствуют в JWT mode.
 
 `VIGILANT_OTLP_ENABLED=false` отключает только вывод OTLP/JSON traces и metrics.
 Создание trace context, request-scoped JSON logs и сбор метрик внутри процесса

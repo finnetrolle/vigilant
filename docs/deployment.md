@@ -79,11 +79,12 @@ Configuration files монтируются read-only. Для production deployme
 записываться в image или config committed в repository.
 
 `DUMMY` mode разрешает только development/test deployment, поэтому первая
-команда остаётся local example. Production использует `identity-mode=JWT` в
-mounted HOCON: exact issuer, audience и pinned RSA public JWK set. Gateway не
-обращается к Keycloak discovery/JWKS/UserInfo/introspection endpoints; rotation
-выполняется явным configuration/deployment update с overlap старого и нового
-public key.
+команда остаётся local example. Production выбирает `identity-mode=JWT` с exact
+issuer/audience и pinned RSA public JWK set либо `identity-mode=EXTERNAL` с
+trusted absolute Bridge URL и whole-exchange timeout. Plain HTTP Bridge
+разрешён contract-ом, поэтому network protection принадлежит deployment.
+Startup не выполняет Bridge health check. JWT rotation выполняется явным
+configuration/deployment update с overlap старого и нового public key.
 
 ## Health и lifecycle
 

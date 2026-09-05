@@ -151,12 +151,15 @@ CLIENT span также под тем же настроенным именем. �
 
 Один поддержанный запрос прокси создаёт SERVER span и три непосредственных
 дочерних span: INTERNAL `vigilant.request.inspect`, HTTP CLIENT span вышестоящего
-запроса и INTERNAL `vigilant.response.inspect` после retained response ingest. Полное
+запроса и INTERNAL `vigilant.response.inspect` после retained response ingest.
+В External mode request inspection дополнительно владеет дочерним CLIENT span
+`vigilant.identity.external.lookup`. Полное
 происхождение и момент передачи контекста показаны
 на диаграмме последовательности UML 2.0
 [tracing-sequence.puml](diagrams/tracing-sequence.puml).
 
-Both INTERNAL spans и CLIENT являются прямыми children SERVER span. Request inspection
+Оба INTERNAL span и upstream CLIENT являются прямыми children SERVER span. External
+identity CLIENT является child request inspection span. Request inspection
 завершается после принятия решения и создания upstream response exchange;
 CLIENT span живёт до завершения upstream exchange, response inspection span — до final
 response outcome. Все четыре span несут один
@@ -197,10 +200,20 @@ Gateway создаёт следующие OpenTelemetry instruments:
 | `vigilant.proxy.active_requests` | gauge | `{request}` | нет |
 | `vigilant.proxy.upstream.duration` | histogram | `s` | нет |
 | `vigilant.proxy.gateway.duration` | histogram | `s` | нет |
+| `vigilant.identity.external.lookups` | counter | `{lookup}` | `identity.mode=EXTERNAL`, `identity.outcome`, optional `http.response.status_class` |
+| `vigilant.identity.external.lookup.duration` | histogram | `s` | те же finite attributes |
 
 Метрики не содержат payload, headers, query, identity или tenant dimensions.
 Proxy overhead не вычисляется на production traffic: его измеряет отдельный
 PERF-01 load test.
+
+External identity outcome принимает только `success`, `provider_status`,
+`invalid_response`, `timeout`, `transport_error`, `overloaded` или `cancelled`.
+Status class `2xx`/`3xx`/`4xx`/`5xx` добавляется только после получения Bridge
+headers. Failure span имеет `ERROR`, кроме cancellation. Endpoint, token,
+Authorization, user/groups, response body/preview и raw exception не
+записываются; `Span.recordException` не используется. Per-lookup application
+log и active-lookups gauge отсутствуют.
 
 ## OTLP JSON stdout
 

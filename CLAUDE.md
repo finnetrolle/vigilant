@@ -34,7 +34,7 @@ reaction is `ALLOW` without transformations. Ordinary JSON and SSE responses
 are retained through protocol validation and final policy evaluation, publish a
 safe response audit pair, and then apply `ALLOW`, `MASK`, or `BLOCK`. `REMOVE`
 is not supported. Do not add request enforcement, `REMOVE`, new protocol
-routes, external identity lookup or authentication, disk spill, plugin workers,
+routes, new identity modes or authentication protocols, disk spill, plugin workers,
 or other runtime behavior unless a dedicated implementation-ready issue
 explicitly requires it.
 
@@ -133,7 +133,8 @@ Key gateway and policy files under `src/main/kotlin/io/vigilant/`:
 - `gateway/proxy/ResponseInspectionWorkflow.kt` / `protocol/openai/JsonResponseRewriter.kt` / `protocol/openai/SseResponseRewriter.kt` - shared ordinary JSON/SSE response-policy orchestration and transport-specific exact-source rewriting. The response parser creates immutable source coordinates in its single parse pass; SSE spans may cross delta events without reserializing event objects.
 - `gateway/proxy/ShadowInspectionWorkflow.kt` / `gateway/proxy/ReplayReadyRequest.kt` - gateway-specific complete-source application workflow and one-shot transport ownership boundary. The workflow parses one normalized view, assembles context, evaluates fragments, publishes one safe started/completed pair through the existing non-blocking logger, and returns typed `Forward` or `Reject`. `ReplayReadyRequest` retains owner responsibility until transport accepts exact replay, then terminal replay owns cleanup.
 - `gateway/proxy/ShadowAuditLogger.kt` - safe request and response analysis lifecycle events published best-effort through the existing non-blocking Logback stdout pipeline. The application owns no audit persistence or delivery subsystem.
-- `gateway/identity/DummyIdentityExtractor.kt` / `gateway/identity/OfflineJwtIdentityExtractor.kt` / `context/PolicyContextHandoff.kt` - common single-Bearer boundary with a development/test-only configured Dummy implementation and the production offline RS256 implementation. JWT verifies pinned `kid`, signature, issuer, audience, expiry and not-before before normalizing `sub`/`groups`; request identity validation runs off the Armeria event loop. Raw tokens are never retained, and accepted Authorization is preserved upstream.
+- `gateway/identity/DummyIdentityExtractor.kt` / `gateway/identity/OfflineJwtIdentityExtractor.kt` / `gateway/identity/ExternalIdentityExtractor.kt` / `gateway/identity/BridgeIdentityClient.kt` / `context/PolicyContextHandoff.kt` - common async single-Bearer boundary with startup-selected Dummy, offline RS256 JWT, or trusted Bridge External lookup. External owns exact one-attempt HTTP, whole-exchange timeout, immediate bounded admission, cancellation, safe metrics and a CLIENT span; request identity extraction starts on the blocking-safe request executor. Raw tokens are never retained, and accepted Authorization is preserved upstream.
+- `gateway/proxy/OutboundClientResources.kt` - application owner of the sole Armeria `ClientFactory`, the upstream client and, only in External mode, a distinct Bridge client. Shutdown cancels Bridge work before closing the shared factory once.
 - `source/BoundedRequestSource.kt` - process-wide owner/byte/segment quota plus one-request lifecycle. It receives the request with backpressure, exposes one sequential parser view and one demand-driven exact replay lease, and releases every reservation on completion or cancellation.
 - `protocol/openai/ChatCompletionsRequestParser.kt` - schema-tolerant parser for model-visible Chat Completions content. It preserves unknown fields by never rebuilding the original body, records recognized non-text inspection gaps, and fails closed for malformed or ambiguous content-bearing shapes.
 - `policy/engine/PolicyEngine.kt` / `policy/selection/PolicySelector.kt` / `policy/execution/DetectorExecutionCoordinator.kt` - deterministic policy matching, simultaneous overrides, deduplicated detector execution, per-policy deadlines, fail-fast blocking semantics in the domain layer, and complete decision explanations. Startup validation keeps request reactions shadow-only while allowing response `ALLOW`, `MASK`, and `BLOCK`.
@@ -145,7 +146,7 @@ Key gateway and policy files under `src/main/kotlin/io/vigilant/`:
 - `policy/selection/PolicySelector.kt` - pure context matcher and simultaneous override resolver; returns immutable policy lists sorted by policy ID without provider I/O or detector execution.
 - `gateway/AppComponent.kt` - Metro `@DependencyGraph(AppScope::class)`. Providers live in the companion object; the graph also assembles the Armeria `Server`. New injectable classes use `dev.zacsweers.metro.Inject` / `@SingleIn(AppScope::class)` (not `javax.inject` - Metro does not ship it, and `dev.zacsweers.metro.Singleton` does not exist).
 - `gateway/health/LivenessService.kt` / `gateway/health/ReadinessService.kt` - gateway-owned probes never proxied upstream: `/healthz` answers `200` while the server accepts connections; `/readyz` follows lifecycle readiness and becomes `503` during shutdown.
-- `gateway/Main.kt` - builds the graph and shuts down in order: not-ready, server drain, inspection, upstream, telemetry.
+- `gateway/Main.kt` - builds the graph and shuts down in order: not-ready, server drain, inspection, Bridge/outbound factory, telemetry.
 
 Tests spin up real Armeria servers on ephemeral ports (`http(0)`) and proxy through them - keep this E2E style for proxy behavior changes.
 

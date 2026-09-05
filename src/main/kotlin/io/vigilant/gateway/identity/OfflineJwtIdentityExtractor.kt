@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets
 import java.security.Signature
 import java.time.Clock
 import java.util.Base64
+import java.util.concurrent.CompletableFuture
 import java.util.LinkedHashSet
 
 /**
@@ -25,12 +26,14 @@ class OfflineJwtIdentityExtractor(
     private val settings: JwtIdentitySettings,
     private val clock: Clock = Clock.systemUTC(),
 ) : BearerIdentityExtractor {
-    /** Validates one JWT and returns normalized claims without retaining credential bytes. */
-    override fun extract(headers: RequestHeaders): IdentityExtractionResult =
-        when (val parsed = BearerHeaderParser.parse(headers)) {
-            is BearerHeaderResult.Failure -> IdentityExtractionResult.Failure(parsed.code)
-            is BearerHeaderResult.Credential -> validateCredential(parsed.value)
-        }
+    /** Validates one JWT locally and returns an already-completed cancellation-aware result. */
+    override fun extract(headers: RequestHeaders): CompletableFuture<IdentityExtractionResult> =
+        CompletableFuture.completedFuture(
+            when (val parsed = BearerHeaderParser.parse(headers)) {
+                is BearerHeaderResult.Failure -> IdentityExtractionResult.Failure(parsed.code)
+                is BearerHeaderResult.Credential -> validateCredential(parsed.value)
+            },
+        )
 
     /** Applies compact-JWT, cryptographic, trust-claim, then identity-claim validation in order. */
     private fun validateCredential(token: String): IdentityExtractionResult =

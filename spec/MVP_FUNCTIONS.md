@@ -64,6 +64,13 @@ upstream byte-for-byte. Vigilant временно использует его т
 Детали extractor и cache принадлежат [VIG-30](issues/issue_30_external_identity_extractor.md)
 и [VIG-31](issues/issue_31_identity_lookup_cache.md).
 
+External lookup дополняет, а не заменяет offline JWT validation. Обязательный
+startup selector выбирает ровно одну реализацию общего async и
+cancellation-aware `BearerIdentityExtractor`: `DUMMY`, `JWT` или `EXTERNAL`.
+`DUMMY` разрешён только в `development`/`test`; JWT и `EXTERNAL` разрешены во
+всех environments. Fallback, композиция modes и runtime switching отсутствуют.
+Cache используется только `EXTERNAL` mode.
+
 ## MVP-06. Безопасный best-effort audit через stdout
 
 Audit публикует safe structured JSON event через existing non-blocking Logback

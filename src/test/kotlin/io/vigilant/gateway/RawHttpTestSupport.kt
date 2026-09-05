@@ -14,6 +14,8 @@ import java.time.Duration
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 private const val MAX_HTTP1_REQUEST_HEAD_BYTES = 16 * 1024
 private val HTTP1_REQUEST_HEAD_TERMINATOR = "\r\n\r\n".toByteArray(StandardCharsets.US_ASCII)
@@ -41,6 +43,56 @@ internal class DisconnectingTestUpstream(private val diagnosticName: String) : A
     /** Stops the accept loop and surfaces unexpected raw-endpoint failures. */
     override fun close() {
         endpoint.close()
+    }
+}
+
+/**
+ * Bound raw endpoint that accepts one connection without reading or writing it.
+ * Tests use the accepted signal to distinguish a pending network phase from
+ * endpoint acquisition, then [close] releases the handler deterministically.
+ */
+internal class HoldingTestEndpoint(
+    private val diagnosticName: String,
+    observeFirstByte: Boolean = false,
+) : AutoCloseable {
+    private val accepted = CountDownLatch(1)
+    private val firstByteObserved = CountDownLatch(if (observeFirstByte) 1 else 0)
+    private val firstByte = AtomicInteger(-1)
+    private val release = CountDownLatch(1)
+    private val endpoint = BoundRawTestEndpoint("holding-$diagnosticName") { socket, _ ->
+        socket.receiveBufferSize = MIN_RECEIVE_BUFFER_BYTES
+        accepted.countDown()
+        if (observeFirstByte) {
+            firstByte.set(socket.getInputStream().read())
+            firstByteObserved.countDown()
+        }
+        check(release.await(HOLD_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+            "holding endpoint $diagnosticName was not released"
+        }
+    }
+
+    /** Address used by a real Armeria client. */
+    val uri: URI
+        get() = endpoint.uri
+
+    /** Waits until the OS socket has been accepted without relying on timing. */
+    fun awaitAccepted(timeout: Duration): Boolean =
+        accepted.await(timeout.toMillis(), TimeUnit.MILLISECONDS)
+
+    /** Waits for and returns the first raw client byte when that observation was requested. */
+    fun awaitFirstByte(timeout: Duration): Int? =
+        firstByte.takeIf { firstByteObserved.await(timeout.toMillis(), TimeUnit.MILLISECONDS) }
+            ?.get()
+
+    /** Releases the handler, then closes every owned socket and accept thread. */
+    override fun close() {
+        release.countDown()
+        endpoint.close()
+    }
+
+    private companion object {
+        const val MIN_RECEIVE_BUFFER_BYTES = 1_024
+        const val HOLD_TIMEOUT_SECONDS = 10L
     }
 }
 

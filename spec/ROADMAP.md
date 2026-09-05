@@ -434,8 +434,9 @@ consumers.
 - `BLOCK`, `MASK`, `REMOVE` и изменение protocol source.
 - historical scope первого milestone не включал user/group identity
   extraction и trusted ingress model. Это temporal boundary, а не current
-  exclusion: current runtime поддерживает development/test Dummy и production
-  offline JWT Bearer identity с локально pinned trust snapshot.
+  exclusion: current runtime поддерживает startup-selected development/test
+  Dummy, offline JWT Bearer identity с локально pinned trust snapshot и trusted
+  Bridge External Bearer identity.
 - External object storage.
 - Kubernetes manifests, Helm, autoscaling и centralized log storage.
 - Backend-specific Langfuse/MLflow exporters и authentication внутри Vigilant.

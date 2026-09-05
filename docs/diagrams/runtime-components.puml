@@ -5,6 +5,7 @@ left to right direction
 
 actor "Клиент" as Client
 cloud "Вышестоящий сервер OpenAI" as Upstream
+cloud "Trusted identity Bridge" as Bridge
 cloud "Container-managed stdout" as Stdout
 
 node "Процесс Vigilant" as Vigilant {
@@ -12,7 +13,9 @@ node "Процесс Vigilant" as Vigilant {
   component "MetricsService" as Metrics
   component "TracingService" as Tracing
   component "PiiShadowProxyService" as ShadowProxy
-  component "BearerIdentityExtractor\nDummy / offline JWT" as Identity
+  component "BearerIdentityExtractor\nDummy / offline JWT / External" as Identity
+  component "BridgeIdentityClient\ntimeout + admission + telemetry" as BridgeClient
+  component "OutboundClientResources\none ClientFactory" as Outbound
   component "ShadowInspectionWorkflow" as Workflow
   component "ChatCompletionsRequestParser" as Parser
   component "Сборщик PolicyContext" as Context
@@ -36,6 +39,10 @@ Admission --> Metrics
 Metrics --> Tracing
 Tracing --> ShadowProxy
 ShadowProxy --> Identity : blocking-safe validation\nдо body demand
+Identity --> BridgeClient : External only\nasync exact token lookup
+BridgeClient --> Bridge : POST exact endpoint\nempty body
+Outbound --> BridgeClient : shared factory lifecycle
+Outbound --> Transport : shared factory lifecycle
 ShadowProxy --> Workflow : полный ограниченный источник
 Workflow --> Parser : представление только для чтения
 Parser --> Context : модель и фрагменты

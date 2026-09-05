@@ -15,7 +15,7 @@ import kotlin.random.Random
  * Shared lifecycle fixture for E2E tests that launch the production gateway
  * entry point in a bounded child JVM.
  */
-internal class GatewayProcessFixture private constructor(
+internal class GatewayProcessFixture internal constructor(
     val process: Process,
     val port: Int,
     private val outputBuffer: StringBuilder,
@@ -70,11 +70,31 @@ internal class GatewayProcessFixture private constructor(
         return snapshot
     }
 
-    /** Force-stops the child if necessary and joins its output reader. */
+    /** Stops the child, closes every process stream, and proves the output reader terminated. */
     override fun close() {
-        if (process.isAlive) process.destroyForcibly()
-        process.waitFor(PROCESS_EXIT_TIMEOUT.toSeconds(), TimeUnit.SECONDS)
-        outputReader.join(OUTPUT_READER_JOIN_MILLIS)
+        closeAllResources(
+            { if (process.isAlive) process.destroy() },
+            {
+                if (!process.waitFor(PROCESS_EXIT_TIMEOUT.toSeconds(), TimeUnit.SECONDS)) {
+                    if (process.isAlive) process.destroyForcibly()
+                    check(process.waitFor(PROCESS_EXIT_TIMEOUT.toSeconds(), TimeUnit.SECONDS)) {
+                        "gateway child process did not stop after forced termination"
+                    }
+                }
+                check(!process.isAlive) { "gateway child process remained alive after termination" }
+            },
+            process.outputStream::close,
+            process.inputStream::close,
+            process.errorStream::close,
+            {
+                outputReader.join(OUTPUT_READER_JOIN_MILLIS)
+                if (outputReader.isAlive) {
+                    outputReader.interrupt()
+                    outputReader.join(OUTPUT_READER_JOIN_MILLIS)
+                }
+                check(!outputReader.isAlive) { "gateway output reader did not stop" }
+            },
+        )
     }
 
     internal companion object {
@@ -95,14 +115,42 @@ internal class GatewayProcessFixture private constructor(
                 add(System.getProperty("java.class.path"))
                 add("io.vigilant.gateway.MainKt")
             }
+            return launchCommand(command, upstream, environment, port)
+        }
+
+        /**
+         * Launches the installed application script produced by `installDist`,
+         * proving the packaged runtime graph rather than the test classpath.
+         */
+        fun launchInstalled(
+            upstream: URI,
+            environment: Map<String, String>,
+        ): GatewayProcessFixture {
+            val port = reserveNonEphemeralPort()
+            val executable =
+                java.nio.file.Path.of("build", "install", "vigilant", "bin", "vigilant")
+                    .toAbsolutePath()
+                    .normalize()
+            require(java.nio.file.Files.isExecutable(executable)) {
+                "installed vigilant launcher is missing; run installDist"
+            }
+            return launchCommand(listOf(executable.toString()), upstream, environment, port)
+        }
+
+        /** Starts one selected gateway command with the shared bounded output lifecycle. */
+        private fun launchCommand(
+            command: List<String>,
+            upstream: URI,
+            environment: Map<String, String>,
+            port: Int,
+        ): GatewayProcessFixture {
             val process = ProcessBuilder(command)
                 .redirectErrorStream(true)
-                .withTestRuntimeConfiguration()
+                .withTestRuntimeConfiguration(environment)
                 .apply {
                     environment().apply {
                         put("VIGILANT_UPSTREAM_URL", upstream.toString())
                         put("VIGILANT_PORT", port.toString())
-                        putAll(environment)
                     }
                 }.start()
             val output = StringBuilder()

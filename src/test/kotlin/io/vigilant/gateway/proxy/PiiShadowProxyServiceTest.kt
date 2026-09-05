@@ -7,6 +7,7 @@ import ch.qos.logback.core.AppenderBase
 import com.linecorp.armeria.client.ClientFactory
 import com.linecorp.armeria.client.WebClient
 import com.linecorp.armeria.common.AggregatedHttpResponse
+import com.linecorp.armeria.common.AggregatedHttpRequest
 import com.linecorp.armeria.common.HttpData
 import com.linecorp.armeria.common.HttpHeaderNames
 import com.linecorp.armeria.common.HttpMethod
@@ -22,8 +23,11 @@ import com.linecorp.armeria.server.HttpService
 import com.linecorp.armeria.server.ServerBuilder
 import com.linecorp.armeria.server.ServiceRequestContext
 import io.opentelemetry.api.common.AttributeKey.stringKey
+import io.opentelemetry.api.OpenTelemetry
+import io.opentelemetry.api.metrics.Meter
 import io.opentelemetry.api.trace.SpanKind
 import io.opentelemetry.sdk.common.CompletableResultCode
+import io.opentelemetry.sdk.metrics.SdkMeterProvider
 import io.opentelemetry.sdk.trace.SdkTracerProvider
 import io.opentelemetry.sdk.trace.data.SpanData
 import io.opentelemetry.sdk.trace.export.SimpleSpanProcessor
@@ -46,14 +50,22 @@ import io.vigilant.gateway.writeUtf8Http1Chunk
 import io.vigilant.context.PolicyContextHandoff
 import io.vigilant.context.PolicyContextHandoffResult
 import io.vigilant.gateway.config.DummyIdentitySettings
+import io.vigilant.gateway.config.ExternalIdentitySettings
 import io.vigilant.gateway.identity.BearerIdentityExtractor
+import io.vigilant.gateway.identity.BridgeIdentityClient
 import io.vigilant.gateway.identity.DummyIdentityExtractor
+import io.vigilant.gateway.identity.ExternalIdentityExtractor
+import io.vigilant.gateway.identity.ExternalIdentityLookup
+import io.vigilant.gateway.identity.ExternalIdentityLookupResult
+import io.vigilant.gateway.identity.ExternalIdentityFailureCode
 import io.vigilant.gateway.identity.OfflineJwtIdentityExtractor
 import io.vigilant.gateway.identity.jwtIdentitySettings
 import io.vigilant.gateway.identity.jwtTestKey
 import io.vigilant.gateway.identity.invalidJwtTokens
 import io.vigilant.gateway.identity.signedJwt
 import io.vigilant.gateway.identity.validJwtClaims
+import io.vigilant.gateway.metrics.TestMetricReader
+import io.vigilant.gateway.metrics.MetricsService
 import io.vigilant.gateway.tracing.TracingService
 import io.vigilant.policy.adapter.FastPiiPolicyAdapter
 import io.vigilant.policy.decision.ReactionAggregator
@@ -121,6 +133,8 @@ import kotlin.test.assertTrue
 import org.reactivestreams.Publisher
 import org.reactivestreams.Subscriber
 import org.reactivestreams.Subscription
+import org.junit.jupiter.api.DynamicTest
+import org.junit.jupiter.api.TestFactory
 import org.slf4j.LoggerFactory
 
 /** Real HTTP tracer-bullet tests for request shadow inspection and ordinary/SSE response enforcement. */
@@ -1865,7 +1879,7 @@ class PiiShadowProxyServiceTest {
     fun `client cancellation during response ingest cancels upstream without disclosure`() {
         val upstreamCancelled = CountDownLatch(1)
         val responseSource = CompletableFuture<RetainedResponseSource>()
-        val disclosureProbe = ResponseDisclosureProbe(responseSource) { false }
+        val disclosureProbe = ResponseDisclosureProbe(responseSource) { source -> source.closed }
         val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
         val upstream =
             fixture.startServer(
@@ -2524,6 +2538,684 @@ class PiiShadowProxyServiceTest {
         assertTrue(bodyDemanded.get())
     }
 
+    /** Exceptional identity completion fails closed before body demand or upstream handoff. */
+    @Test
+    fun `exceptional identity extraction returns inspection unavailable`() {
+        val bodyDemanded = AtomicBoolean()
+        val upstreamRequests = AtomicInteger()
+        val upstream = fixture.startServer {
+            upstreamRequests.incrementAndGet()
+            validChatCompletionsResponse()
+        }
+        val extractor = BearerIdentityExtractor {
+            CompletableFuture.failedFuture(IllegalStateException("identity-failure-sentinel"))
+        }
+        val gateway =
+            startShadowGateway(
+                upstreamUri = fixture.serverUri(upstream),
+                identityExtractor = extractor,
+                requestBodyDemandObserved = bodyDemanded,
+            )
+
+        val response =
+            WebClient.of(fixture.serverUri(gateway))
+                .execute(chatCompletionsRequest("exceptional-identity-body-sentinel"))
+                .aggregate()
+                .get(2, TimeUnit.SECONDS)
+
+        assertRequestInspectionUnavailable(response)
+        assertFalse(bodyDemanded.get(), "exceptional identity demanded the request body")
+        assertEquals(0, upstreamRequests.get(), "exceptional identity reached upstream")
+    }
+
+    /** Delayed async identity blocks body demand and is cancelled when the client aborts. */
+    @Test
+    fun `client cancellation while identity is pending cancels extraction before body demand`() {
+        val bodyDemanded = AtomicBoolean()
+        val upstreamRequests = AtomicInteger()
+        val extractionStarted = CountDownLatch(1)
+        val pendingExtraction = CompletableFuture<io.vigilant.gateway.identity.IdentityExtractionResult>()
+        val upstream = fixture.startServer {
+            upstreamRequests.incrementAndGet()
+            validChatCompletionsResponse()
+        }
+        val extractor = BearerIdentityExtractor {
+            extractionStarted.countDown()
+            pendingExtraction
+        }
+        val gateway =
+            startShadowGateway(
+                upstreamUri = fixture.serverUri(upstream),
+                identityExtractor = extractor,
+                requestBodyDemandObserved = bodyDemanded,
+            )
+
+        val response =
+            WebClient.of(fixture.serverUri(gateway))
+                .execute(chatCompletionsRequest("pending-identity-body-sentinel"))
+
+        assertTrue(extractionStarted.await(2, TimeUnit.SECONDS), "identity extraction did not start")
+        assertFalse(bodyDemanded.get(), "request body was demanded before identity completion")
+        response.abort()
+        val cancellationObserved =
+            fixture.awaitUntil(Duration.ofSeconds(2), pendingExtraction::isCancelled)
+        if (!cancellationObserved) {
+            pendingExtraction.complete(
+                io.vigilant.gateway.identity.IdentityExtractionResult.Failure(
+                    io.vigilant.gateway.identity.IdentityExtractionErrorCode.INVALID_CREDENTIAL,
+                ),
+            )
+        }
+        assertTrue(
+            cancellationObserved,
+            "client cancellation did not cancel the pending identity extraction",
+        )
+        assertFalse(bodyDemanded.get(), "cancelled request body was demanded")
+        assertEquals(0, upstreamRequests.get(), "cancelled identity request reached upstream")
+    }
+
+    /** AUTH-01..05: Every local External header rejection precedes Bridge, body, and upstream work. */
+    @TestFactory
+    @Suppress("LongMethod")
+    fun `external Bearer rejection matrix precedes all downstream work`(): List<DynamicTest> {
+        val cases =
+            listOf(
+                ExternalAuthRejectCase("AUTH-01 missing", emptyList(), HttpStatus.UNAUTHORIZED, true),
+                ExternalAuthRejectCase(
+                    "AUTH-02 non-bearer",
+                    listOf("authorization" to "Basic basic-token-sentinel"),
+                    HttpStatus.UNAUTHORIZED,
+                    true,
+                ),
+                ExternalAuthRejectCase(
+                    "AUTH-03 duplicate",
+                    listOf(
+                        "authorization" to "Bearer first-token-sentinel",
+                        "authorization" to "Bearer second-token-sentinel",
+                    ),
+                    HttpStatus.BAD_REQUEST,
+                    false,
+                ),
+                ExternalAuthRejectCase(
+                    "AUTH-04 malformed-separator",
+                    listOf("authorization" to "Bearer\tmalformed-token-sentinel"),
+                    HttpStatus.BAD_REQUEST,
+                    false,
+                ),
+                ExternalAuthRejectCase(
+                    "AUTH-05 empty-credential",
+                    listOf("authorization" to "Bearer"),
+                    HttpStatus.BAD_REQUEST,
+                    false,
+                ),
+                ExternalAuthRejectCase(
+                    "AUTH-05 whitespace-credential",
+                    listOf("authorization" to "Bearer   "),
+                    HttpStatus.BAD_REQUEST,
+                    false,
+                ),
+            )
+        return cases.map { case ->
+            DynamicTest.dynamicTest(case.name) {
+                val bridgeCalls = AtomicInteger()
+                val upstreamCalls = AtomicInteger()
+                val bodyDemanded = AtomicBoolean()
+                val upstream = fixture.startServer {
+                    upstreamCalls.incrementAndGet()
+                    validChatCompletionsResponse()
+                }
+                val lookup = ExternalIdentityLookup {
+                    bridgeCalls.incrementAndGet()
+                    CompletableFuture.completedFuture(
+                        ExternalIdentityLookupResult.Unavailable(
+                            ExternalIdentityFailureCode.TRANSPORT_ERROR,
+                        ),
+                    )
+                }
+                val gateway =
+                    startShadowGateway(
+                        upstreamUri = fixture.serverUri(upstream),
+                        identityExtractor = ExternalIdentityExtractor(lookup),
+                        requestBodyDemandObserved = bodyDemanded,
+                    )
+                val headers =
+                    RequestHeaders.builder(HttpMethod.POST, "/v1/chat/completions")
+                        .contentType(MediaType.JSON)
+                        .also { builder -> case.headers.forEach { (name, value) -> builder.add(name, value) } }
+                        .build()
+
+                val response =
+                    WebClient.of(fixture.serverUri(gateway))
+                        .execute(HttpRequest.of(headers, HttpData.ofUtf8("auth-body-sentinel")))
+                        .aggregate()
+                        .join()
+
+                assertEquals(case.status, response.status(), case.name)
+                assertEquals(
+                    if (case.challenge) "Bearer realm=\"vigilant\"" else null,
+                    response.headers().get("www-authenticate"),
+                    case.name,
+                )
+                assertEquals(0, bridgeCalls.get(), case.name)
+                assertFalse(bodyDemanded.get(), case.name)
+                assertEquals(0, upstreamCalls.get(), case.name)
+            }
+        }
+    }
+
+    /** REQ-02: Client-only headers, query, and body never reach Bridge before identity success. */
+    @Test
+    fun `external bridge request excludes client only request data`() {
+        val bridgeObserved = CompletableFuture<AggregatedHttpRequest>()
+        val bridgeCancelled = CountDownLatch(1)
+        val bridge =
+            fixture.startServer(
+                HttpService { ctx, request ->
+                    ctx.whenRequestCancelling().thenRun(bridgeCancelled::countDown)
+                    request.aggregate().thenAccept(bridgeObserved::complete)
+                    HttpResponse.streaming()
+                },
+            )
+        val upstreamCalls = AtomicInteger()
+        val upstream = fixture.startServer {
+            upstreamCalls.incrementAndGet()
+            validChatCompletionsResponse()
+        }
+        val bodyDemanded = AtomicBoolean()
+        val gateway =
+            startShadowGateway(
+                upstreamUri = fixture.serverUri(upstream),
+                identityExtractor =
+                    newExternalExtractor(
+                        URI("${fixture.serverUri(bridge)}/v1/identity?tenant=trusted"),
+                        Duration.ofSeconds(5),
+                    ),
+                requestBodyDemandObserved = bodyDemanded,
+            )
+        val response =
+            WebClient.of(fixture.serverUri(gateway))
+                .execute(
+                    HttpRequest.of(
+                        RequestHeaders.builder(
+                            HttpMethod.POST,
+                            "/v1/chat/completions?client-query=private",
+                        )
+                            .contentType(MediaType.JSON)
+                            .add("authorization", "Bearer isolated-token")
+                            .add("x-client-private", "header-sentinel")
+                            .build(),
+                        HttpData.ofUtf8("client-body-sentinel"),
+                    ),
+                )
+
+        val observed = bridgeObserved.get(2, TimeUnit.SECONDS)
+        assertEquals("/v1/identity?tenant=trusted", observed.path())
+        assertEquals("Bearer isolated-token", observed.headers().get("authorization"))
+        assertEquals("application/json", observed.headers().get("accept"))
+        assertEquals("0", observed.headers().get("content-length"))
+        assertEquals(null, observed.headers().get("content-type"))
+        assertEquals(null, observed.headers().get("x-client-private"))
+        assertFalse(observed.path().contains("client-query"))
+        assertEquals(0, observed.content().length())
+        assertFalse(bodyDemanded.get(), "client body was demanded before identity success")
+        assertEquals(0, upstreamCalls.get(), "upstream started before identity success")
+
+        response.abort()
+        assertTrue(bridgeCancelled.await(2, TimeUnit.SECONDS), "request abort did not release held Bridge lookup")
+    }
+
+    /** OK-01: External success selects normalized policy identity and replays Authorization unchanged. */
+    @Test
+    @Suppress("LongMethod")
+    fun `external success isolates bridge request then preserves upstream authorization`() {
+        val bridgeReached = CountDownLatch(1)
+        val bridgeCalls = AtomicInteger()
+        val bridgeObserved = CompletableFuture<AggregatedHttpRequest>()
+        val bridgeRelease = CompletableFuture<HttpResponse>()
+        val bridge =
+            fixture.startServer { request ->
+                bridgeCalls.incrementAndGet()
+                request.aggregate().thenAccept { observed ->
+                    bridgeObserved.complete(observed)
+                    bridgeReached.countDown()
+                }
+                HttpResponse.of(bridgeRelease)
+            }
+        val upstreamCalls = AtomicInteger()
+        val upstreamAuthorization = CompletableFuture<String>()
+        val upstreamBody = CompletableFuture<String>()
+        val upstream =
+            fixture.startServer { request ->
+                upstreamCalls.incrementAndGet()
+                HttpResponse.of(
+                    request.aggregate().thenApply { observed ->
+                        upstreamAuthorization.complete(requireNotNull(observed.headers().get("authorization")))
+                        upstreamBody.complete(observed.contentUtf8())
+                        validChatCompletionsResponse()
+                    },
+                )
+            }
+        val bodyDemanded = AtomicBoolean()
+        val responseContexts = CopyOnWriteArrayList<PolicyContext>()
+        val gateway =
+            startShadowGateway(
+                upstreamUri = fixture.serverUri(upstream),
+                identityExtractor =
+                    newExternalExtractor(
+                        URI("${fixture.serverUri(bridge)}/v1/identity?tenant=trusted"),
+                    ),
+                requestBodyDemandObserved = bodyDemanded,
+                responseContexts = responseContexts,
+                policyProvider =
+                    DummyPolicyProvider(
+                        listOf(
+                            shadowPolicy(
+                                deadline = Duration.ofSeconds(2),
+                                subject = PolicySubject(SubjectType.USER, SubjectId("external.user")),
+                            ),
+                        ),
+                    ),
+            )
+        val originalAuthorization = "bEaReR opaque-token.with+bytes"
+        val originalBody = chatCompletionsBody("external-success-body")
+        val clientResponse =
+            WebClient.of(fixture.serverUri(gateway))
+                .execute(
+                    HttpRequest.of(
+                        RequestHeaders.builder(
+                            HttpMethod.POST,
+                            "/v1/chat/completions?client-query=private",
+                        )
+                            .contentType(MediaType.JSON)
+                            .add("authorization", originalAuthorization)
+                            .add("x-client-private", "header-sentinel")
+                            .build(),
+                        HttpData.ofUtf8(originalBody),
+                    ),
+                ).aggregate()
+
+        assertTrue(bridgeReached.await(2, TimeUnit.SECONDS), "Bridge lookup did not start")
+        assertFalse(bodyDemanded.get(), "client body was demanded before identity success")
+        assertEquals(0, upstreamCalls.get(), "upstream started before identity success")
+        val bridgeRequest = bridgeObserved.get(2, TimeUnit.SECONDS)
+        assertEquals(HttpMethod.POST, bridgeRequest.method())
+        assertEquals("/v1/identity?tenant=trusted", bridgeRequest.path())
+        assertEquals("Bearer opaque-token.with+bytes", bridgeRequest.headers().get("authorization"))
+        assertEquals(null, bridgeRequest.headers().get("x-client-private"))
+        assertFalse(bridgeRequest.path().contains("client-query"))
+        assertEquals(0, bridgeRequest.content().length())
+
+        bridgeRelease.complete(
+            HttpResponse.of(
+                HttpStatus.OK,
+                MediaType.JSON,
+                """{"user":"External.User","groups":["Operators"]}""",
+            ),
+        )
+        assertEquals(HttpStatus.OK, clientResponse.join().status())
+        assertTrue(bodyDemanded.get())
+        assertEquals(1, bridgeCalls.get())
+        assertEquals(1, upstreamCalls.get())
+        assertEquals(originalAuthorization, upstreamAuthorization.get(2, TimeUnit.SECONDS))
+        assertEquals(originalBody, upstreamBody.get(2, TimeUnit.SECONDS))
+        assertEquals("external.user", responseContexts.single().user)
+        assertEquals(setOf("operators"), responseContexts.single().groups)
+    }
+
+    /** Each real Bridge failure family yields the same safe 503 before body or upstream work. */
+    @TestFactory
+    fun `external bridge failure families share exact public unavailable response`(): List<DynamicTest> =
+        listOf("provider-status", "invalid-response", "timeout", "transport-error").map { family ->
+            DynamicTest.dynamicTest("public-$family") {
+                val bridgeCancellation = CountDownLatch(1)
+                val endpoint =
+                    if (family == "transport-error") {
+                        URI("http://127.0.0.1:${GatewayProcessFixture.reserveNonEphemeralPort()}/identity")
+                    } else {
+                        val bridge =
+                            fixture.startServer(
+                                HttpService { ctx, _ ->
+                                    ctx.whenRequestCancelling().thenRun(bridgeCancellation::countDown)
+                                    when (family) {
+                                        "provider-status" -> HttpResponse.of(HttpStatus.FORBIDDEN)
+                                        "invalid-response" ->
+                                            HttpResponse.of(HttpStatus.OK, MediaType.JSON, "{invalid")
+                                        else -> HttpResponse.streaming()
+                                    }
+                                },
+                            )
+                        URI("${fixture.serverUri(bridge)}/identity")
+                    }
+                val upstreamCalls = AtomicInteger()
+                val upstream = fixture.startServer {
+                    upstreamCalls.incrementAndGet()
+                    validChatCompletionsResponse()
+                }
+                val bodyDemanded = AtomicBoolean()
+                val gateway =
+                    startShadowGateway(
+                        upstreamUri = fixture.serverUri(upstream),
+                        identityExtractor =
+                            newExternalExtractor(
+                                endpoint,
+                                if (family == "timeout") Duration.ofMillis(500) else Duration.ofSeconds(1),
+                            ),
+                        requestBodyDemandObserved = bodyDemanded,
+                    )
+                val response =
+                    WebClient.of(fixture.serverUri(gateway))
+                        .execute(chatCompletionsRequestWithBody("$family-body-sentinel"))
+                        .aggregate()
+                        .join()
+
+                assertEquals(HttpStatus.SERVICE_UNAVAILABLE, response.status(), family)
+                assertEquals("1", response.headers().get("retry-after"), family)
+                assertEquals(MediaType.JSON, response.contentType(), family)
+                assertEquals(
+                    IDENTITY_UNAVAILABLE_BODY,
+                    response.contentUtf8(),
+                    family,
+                )
+                assertFalse(response.contentUtf8().contains("sentinel"), family)
+                assertFalse(bodyDemanded.get(), family)
+                assertEquals(0, upstreamCalls.get(), family)
+                if (family == "timeout") {
+                    assertTrue(bridgeCancellation.await(2, TimeUnit.SECONDS), "timeout did not cancel Bridge")
+                }
+            }
+        }
+
+    /** LIFE-03: Client abort during real Bridge lookup cancels it without body or upstream work. */
+    @Test
+    fun `external bridge exchange is cancelled with client request`() {
+        val bridgeReached = CountDownLatch(1)
+        val bridgeCancelled = CountDownLatch(1)
+        val bridge =
+            fixture.startServer(
+                HttpService { ctx, _ ->
+                    bridgeReached.countDown()
+                    ctx.whenRequestCancelling().thenRun(bridgeCancelled::countDown)
+                    HttpResponse.streaming()
+                },
+            )
+        val upstreamCalls = AtomicInteger()
+        val upstream = fixture.startServer {
+            upstreamCalls.incrementAndGet()
+            validChatCompletionsResponse()
+        }
+        val bodyDemanded = AtomicBoolean()
+        val bridgeClient =
+            newExternalLookup(
+                URI("${fixture.serverUri(bridge)}/identity"),
+                Duration.ofSeconds(5),
+            )
+        val gateway =
+            startShadowGateway(
+                upstreamUri = fixture.serverUri(upstream),
+                identityExtractor = ExternalIdentityExtractor(bridgeClient),
+                requestBodyDemandObserved = bodyDemanded,
+            )
+        val response =
+            WebClient.of(fixture.serverUri(gateway))
+                .execute(chatCompletionsRequestWithBody("cancelled-external-body-sentinel"))
+
+        assertTrue(bridgeReached.await(2, TimeUnit.SECONDS), "Bridge exchange did not start")
+        response.abort()
+        assertTrue(bridgeCancelled.await(2, TimeUnit.SECONDS), "client cancellation did not reach Bridge")
+        assertFalse(bodyDemanded.get())
+        assertEquals(0, upstreamCalls.get())
+    }
+
+    /** LIFE-01: N admitted gateway requests make N+1 an immediate public 503 with no queue or body demand. */
+    @Test
+    fun `external admission overload is an immediate public unavailable response`() {
+        val bridgeCalls = AtomicInteger()
+        val permitsHeld = CountDownLatch(2)
+        val bridge = fixture.startServer {
+            bridgeCalls.incrementAndGet()
+            permitsHeld.countDown()
+            HttpResponse.streaming()
+        }
+        val upstreamCalls = AtomicInteger()
+        val upstream = fixture.startServer {
+            upstreamCalls.incrementAndGet()
+            validChatCompletionsResponse()
+        }
+        val bodyDemanded = AtomicBoolean()
+        val gateway =
+            startShadowGateway(
+                upstreamUri = fixture.serverUri(upstream),
+                identityExtractor =
+                    newExternalExtractor(
+                        URI("${fixture.serverUri(bridge)}/identity"),
+                        Duration.ofSeconds(5),
+                    ),
+                requestBodyDemandObserved = bodyDemanded,
+            )
+        val client = WebClient.of(fixture.serverUri(gateway))
+        val holders =
+            listOf("one", "two").map { name ->
+                client.execute(chatCompletionsRequestWithBody("holder-$name-body"))
+                    .also { it.aggregate() }
+            }
+        assertTrue(permitsHeld.await(2, TimeUnit.SECONDS), "N requests did not hold all permits")
+
+        val excess =
+            client.execute(chatCompletionsRequestWithBody("excess-body-sentinel"))
+                .aggregate()
+                .join()
+
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, excess.status())
+        assertEquals("1", excess.headers().get("retry-after"))
+        assertEquals(
+            IDENTITY_UNAVAILABLE_BODY,
+            excess.contentUtf8(),
+        )
+        assertEquals(2, bridgeCalls.get(), "N+1 reached Bridge instead of completing immediately")
+        assertFalse(bodyDemanded.get())
+        assertEquals(0, upstreamCalls.get())
+        holders.forEach(HttpResponse::abort)
+    }
+
+    /** OBS-05: The existing gateway status metric observes identity failure as a final 503. */
+    @Test
+    fun `external identity unavailable remains visible in gateway metrics without active lookup gauge`() {
+        val bridge = fixture.startServer { HttpResponse.of(HttpStatus.FORBIDDEN) }
+        val upstream = fixture.startServer { validChatCompletionsResponse() }
+        val reader = TestMetricReader()
+        val meterProvider =
+            SdkMeterProvider.builder()
+                .registerMetricReader(reader)
+                .build()
+                .also(closeables::add)
+        val gateway =
+            startShadowGateway(
+                upstreamUri = fixture.serverUri(upstream),
+                identityExtractor =
+                    newExternalExtractor(URI("${fixture.serverUri(bridge)}/identity")),
+                meter = meterProvider.get("external-gateway-metrics-test"),
+            )
+
+        val response =
+            WebClient.of(fixture.serverUri(gateway))
+                .execute(chatCompletionsRequest("gateway-metric"))
+                .aggregate()
+                .join()
+
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, response.status())
+        assertTrue(
+            fixture.awaitUntil(Duration.ofSeconds(2)) {
+                reader.collectAllMetrics().any { it.name == "vigilant.proxy.responses" }
+            },
+            "gateway response metric was not published",
+        )
+        val statusMetric = reader.collectAllMetrics().single { it.name == "vigilant.proxy.responses" }
+        val statusPoint = statusMetric.longSumData.points.single()
+        assertEquals("5xx", statusPoint.attributes.get(stringKey("http.response.status_class")))
+        assertFalse(reader.collectAllMetrics().any { it.name == "vigilant.identity.external.active_lookups" })
+    }
+
+    /** LIFE-04: Graceful server drain lets an admitted lookup finish within its own deadline. */
+    @Test
+    @Suppress("LongMethod")
+    fun `graceful drain permits admitted external lookup to finish`() {
+        val bridgeReached = CountDownLatch(1)
+        val bridgeRelease = CompletableFuture<HttpResponse>()
+        val bridge = fixture.startServer {
+            bridgeReached.countDown()
+            HttpResponse.of(bridgeRelease)
+        }
+        val upstreamCalls = AtomicInteger()
+        val upstream = fixture.startServer {
+            upstreamCalls.incrementAndGet()
+            validChatCompletionsResponse()
+        }
+        val lookupResult = CompletableFuture<ExternalIdentityLookupResult>()
+        val bridgeClient =
+            newExternalLookup(
+                URI("${fixture.serverUri(bridge)}/identity"),
+                Duration.ofSeconds(2),
+            )
+        val gateway =
+            startShadowGateway(
+                upstreamUri = fixture.serverUri(upstream),
+                identityExtractor =
+                    ExternalIdentityExtractor(
+                        ExternalIdentityLookup { token ->
+                            bridgeClient.lookup(token).also { lookup ->
+                                lookup.whenComplete { result, failure ->
+                                    if (failure == null) lookupResult.complete(result)
+                                    else lookupResult.completeExceptionally(failure)
+                                }
+                            }
+                        },
+                    ),
+            ) {
+                gracefulShutdownTimeout(Duration.ofMillis(50), Duration.ofSeconds(3))
+            }
+        val response =
+            WebClient.of(fixture.serverUri(gateway))
+                .execute(chatCompletionsRequest("graceful-external"))
+                .aggregate()
+        assertTrue(bridgeReached.await(2, TimeUnit.SECONDS), "admitted Bridge lookup did not start")
+
+        val stop = gateway.stop()
+        assertFalse(stop.isDone, "graceful drain ended before the admitted lookup")
+        bridgeRelease.complete(
+            HttpResponse.of(
+                HttpStatus.OK,
+                MediaType.JSON,
+                """{"user":"test-user","groups":[]}""",
+            ),
+        )
+
+        assertTrue(
+            lookupResult.get(2, TimeUnit.SECONDS) is ExternalIdentityLookupResult.Resolved,
+            "admitted lookup did not complete successfully during drain",
+        )
+        assertTrue(
+            fixture.awaitUntil(Duration.ofSeconds(2), response::isDone),
+            "drained client exchange remained active",
+        )
+        stop.join()
+        assertEquals(0, upstreamCalls.get(), "drain started a later upstream phase")
+    }
+
+    /** LIFE-04: An admitted lookup may hit its own deadline while graceful drain waits. */
+    @Test
+    fun `graceful drain completes after admitted external lookup deadline`() {
+        val bridgeReached = CountDownLatch(1)
+        val bridgeCancelled = CountDownLatch(1)
+        val bridge =
+            fixture.startServer(
+                HttpService { ctx, _ ->
+                    bridgeReached.countDown()
+                    ctx.whenRequestCancelling().thenRun(bridgeCancelled::countDown)
+                    HttpResponse.streaming()
+                },
+            )
+        val upstreamCalls = AtomicInteger()
+        val upstream = fixture.startServer {
+            upstreamCalls.incrementAndGet()
+            validChatCompletionsResponse()
+        }
+        val bridgeClient =
+            newExternalLookup(
+                URI("${fixture.serverUri(bridge)}/identity"),
+                Duration.ofMillis(300),
+            )
+        val gateway =
+            startShadowGateway(
+                upstreamUri = fixture.serverUri(upstream),
+                identityExtractor = ExternalIdentityExtractor(bridgeClient),
+            ) {
+                gracefulShutdownTimeout(Duration.ofMillis(50), Duration.ofSeconds(3))
+            }
+        val response =
+            WebClient.of(fixture.serverUri(gateway))
+                .execute(chatCompletionsRequest("graceful-external-timeout"))
+                .aggregate()
+        assertTrue(bridgeReached.await(2, TimeUnit.SECONDS), "admitted Bridge lookup did not start")
+
+        val stop = gateway.stop()
+
+        assertTrue(bridgeCancelled.await(2, TimeUnit.SECONDS), "lookup deadline did not cancel Bridge")
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, response.get(2, TimeUnit.SECONDS).status())
+        stop.get(5, TimeUnit.SECONDS)
+        assertEquals(0, upstreamCalls.get(), "deadline-expired lookup reached upstream")
+        bridgeClient.close()
+    }
+
+    /** Forced server drain ends the public exchange before explicit lookup-owner teardown. */
+    @Test
+    fun `forced server drain ends exchange before external lookup owner teardown`() {
+        val bridgeReached = CountDownLatch(1)
+        val bridgeCancelled = CountDownLatch(1)
+        val bridge =
+            fixture.startServer(
+                HttpService { ctx, _ ->
+                    bridgeReached.countDown()
+                    ctx.whenRequestCancelling().thenRun(bridgeCancelled::countDown)
+                    HttpResponse.streaming()
+                },
+            )
+        val upstreamCalls = AtomicInteger()
+        val upstream = fixture.startServer {
+            upstreamCalls.incrementAndGet()
+            validChatCompletionsResponse()
+        }
+        val bodyDemanded = AtomicBoolean()
+        val bridgeClient =
+            newExternalLookup(
+                URI("${fixture.serverUri(bridge)}/identity"),
+                Duration.ofSeconds(5),
+            )
+        val gateway =
+            startShadowGateway(
+                upstreamUri = fixture.serverUri(upstream),
+                identityExtractor = ExternalIdentityExtractor(bridgeClient),
+                requestBodyDemandObserved = bodyDemanded,
+            ) {
+                gracefulShutdownTimeout(Duration.ofMillis(50), Duration.ofMillis(500))
+            }
+        val response =
+            WebClient.of(fixture.serverUri(gateway))
+                .execute(chatCompletionsRequestWithBody("forced-external-body-sentinel"))
+                .aggregate()
+        assertTrue(bridgeReached.await(2, TimeUnit.SECONDS), "active Bridge lookup did not start")
+
+        gateway.stop().join()
+        bridgeClient.close()
+
+        assertTrue(bridgeCancelled.await(2, TimeUnit.SECONDS), "forced drain did not cancel Bridge")
+        assertFalse(bodyDemanded.get())
+        assertEquals(0, upstreamCalls.get())
+        assertTrue(
+            fixture.awaitUntil(Duration.ofSeconds(2), response::isDone),
+            "client exchange remained active after forced drain",
+        )
+    }
+
     /** Executor admission loss uses the VIG-29 request failure without body demand or handoff. */
     @Test
     fun `request executor rejection returns inspection unavailable without demand or handoff`() {
@@ -2693,6 +3385,61 @@ class PiiShadowProxyServiceTest {
         assertEquals(serverSpan.spanId, clientSpan.parentSpanId)
         assertTrue(spans.all { it.traceId == serverSpan.traceId })
         assertTrue(spans.all { it.attributes.get(stringKey("session.id")) == "task-42" })
+    }
+
+    /** External CLIENT lookup is a direct child of the request inspection span. */
+    @Test
+    fun `external identity lookup span is child of request inspection`() {
+        val bridge = fixture.startServer {
+            HttpResponse.of(
+                HttpStatus.OK,
+                MediaType.JSON,
+                """{"user":"test-user","groups":[]}""",
+            )
+        }
+        val externalTracerProvider =
+            SdkTracerProvider.builder()
+                .addSpanProcessor(SimpleSpanProcessor.builder(spanExporter).build())
+                .build()
+                .also(closeables::add)
+        val telemetry = OpenTelemetry.noop()
+        val bridgeWebClient = WebClient.of()
+        val bridgeClient =
+            BridgeIdentityClient(
+                settings =
+                    ExternalIdentitySettings(
+                        URI("${fixture.serverUri(bridge)}/identity"),
+                        Duration.ofSeconds(1),
+                    ),
+                webClient = bridgeWebClient,
+                timeoutScheduler = bridgeWebClient.options().factory().eventLoopGroup().next(),
+                maxConcurrentLookups = 1,
+                meter = telemetry.getMeter("external-parentage-test"),
+                tracer = externalTracerProvider.get("external-parentage-test"),
+            ).also(closeables::add)
+        val upstream = fixture.startServer { validChatCompletionsResponse() }
+        val gateway =
+            startShadowGateway(
+                upstreamUri = fixture.serverUri(upstream),
+                identityExtractor = ExternalIdentityExtractor(bridgeClient),
+            )
+
+        val response =
+            WebClient.of(fixture.serverUri(gateway))
+                .execute(chatCompletionsRequest("external-parentage"))
+                .aggregate()
+                .join()
+
+        assertEquals(HttpStatus.OK, response.status())
+        assertTrue(
+            fixture.awaitUntil(Duration.ofSeconds(2)) {
+                spans.any { it.name == "vigilant.identity.external.lookup" }
+            },
+        )
+        val lookupSpan = spans.single { it.name == "vigilant.identity.external.lookup" }
+        val inspectionSpan = spans.single { it.name == "vigilant.request.inspect" }
+        assertEquals(inspectionSpan.spanId, lookupSpan.parentSpanId)
+        assertEquals(inspectionSpan.traceId, lookupSpan.traceId)
     }
 
     /** Verifies descriptor rejection before body demand or any upstream request. */
@@ -3156,6 +3903,7 @@ class PiiShadowProxyServiceTest {
                 upstreamUri = fixture.serverUri(upstream),
                 quota = quota,
                 detector = detector,
+                policyDeadline = Duration.ofSeconds(30),
                 configureServer = {
                     gracefulShutdownTimeout(Duration.ofMillis(50), Duration.ofSeconds(3))
                 },
@@ -3177,53 +3925,6 @@ class PiiShadowProxyServiceTest {
         stopped.get(5, TimeUnit.SECONDS)
         assertSourceReservationsReleased(quota, "graceful shutdown")
         assertEquals(0, upstreamRequests.get(), "shutdown started a new response-analysis phase")
-    }
-
-    /** Forced shutdown cancels active inspection and releases every retained source reservation. */
-    @Test
-    fun `forced shutdown cancels active source and releases reservations`() {
-        val upstreamRequests = AtomicInteger()
-        val upstream = fixture.startServer {
-            upstreamRequests.incrementAndGet()
-            validChatCompletionsResponse()
-        }
-        val detectorStarted = CountDownLatch(1)
-        val detectorCancelled = CountDownLatch(1)
-        val quota = RequestSourceQuota()
-        val gateway =
-            startShadowGateway(
-                upstreamUri = fixture.serverUri(upstream),
-                quota = quota,
-                detector =
-                    slowInterruptibleDetector(
-                        onStart = detectorStarted::countDown,
-                        onCancellation = detectorCancelled::countDown,
-                    ),
-                configureServer = {
-                    gracefulShutdownTimeout(Duration.ofMillis(50), Duration.ofMillis(300))
-                },
-            )
-        val client = WebClient.of(fixture.serverUri(gateway).toString())
-        val exchange = client.execute(chatCompletionsRequest("forced source"))
-        val response = exchange.aggregate()
-
-        assertTrue(detectorStarted.await(5, TimeUnit.SECONDS), "detector did not retain the complete source")
-        assertEquals(1, quota.activeOwners)
-        assertTrue(quota.retainedBytes > 0L)
-        gateway.stop().get(3, TimeUnit.SECONDS)
-
-        assertTrue(
-            detectorCancelled.await(2, TimeUnit.SECONDS),
-            "forced shutdown did not interrupt active inspection",
-        )
-        assertTrue(
-            fixture.awaitUntil(Duration.ofSeconds(2)) { response.isDone },
-            "forced shutdown left the client exchange incomplete",
-        )
-        assertSourceReservationsReleased(quota, "forced shutdown")
-        exchange.abort()
-        assertSourceReservationsReleased(quota, "repeated forced-exchange cancellation")
-        assertEquals(0, upstreamRequests.get())
     }
 
     /** Verifies that detector deadline errors remain shadow-ALLOW and safely audited. */
@@ -3458,6 +4159,18 @@ class PiiShadowProxyServiceTest {
         val challenge: Boolean,
     )
 
+    /** One exact External Authorization rejection and its public boundary result. */
+    private data class ExternalAuthRejectCase(
+        /** Stable acceptance-case label retained by the dynamic test report. */
+        val name: String,
+        /** Authorization header lines supplied to the gateway. */
+        val headers: List<Pair<String, String>>,
+        /** Exact public status. */
+        val status: HttpStatus,
+        /** Whether the exact Bearer challenge must be present. */
+        val challenge: Boolean,
+    )
+
     /** One exact expected terminal stdout aggregate for the real gateway outcome matrix. */
     private data class AuditOutcomeCase(
         /** Diagnostic case name. */
@@ -3547,6 +4260,35 @@ class PiiShadowProxyServiceTest {
     )
 
     /**
+     * Builds and registers one real Bridge-backed External extractor for a gateway scenario.
+     * The fixture owns cancellation of active lookups before its shared default client closes.
+     */
+    private fun newExternalExtractor(
+        endpoint: URI,
+        timeout: Duration = Duration.ofSeconds(1),
+    ): ExternalIdentityExtractor = ExternalIdentityExtractor(newExternalLookup(endpoint, timeout))
+
+    /** Builds and registers the real Bridge lookup owner used by one gateway scenario. */
+    private fun newExternalLookup(
+        endpoint: URI,
+        timeout: Duration = Duration.ofSeconds(1),
+    ): BridgeIdentityClient {
+        val telemetry = OpenTelemetry.noop()
+        val webClient = WebClient.of()
+        val bridgeClient =
+            BridgeIdentityClient(
+                settings = ExternalIdentitySettings(endpoint, timeout),
+                webClient = webClient,
+                timeoutScheduler = webClient.options().factory().eventLoopGroup().next(),
+                maxConcurrentLookups = 2,
+                meter = telemetry.getMeter("external-gateway-test"),
+                tracer = telemetry.getTracer("external-gateway-test"),
+            )
+        closeables += bridgeClient
+        return bridgeClient
+    }
+
+    /**
      * Starts the production shadow service with real policy components and bounded executors.
      *
      * @param responseContexts optional response-phase contexts observed through the public handoff.
@@ -3554,6 +4296,7 @@ class PiiShadowProxyServiceTest {
      * @param requestBodyDemandObserved optional observer set when inspection demands request content.
      * @param policyProvider policy snapshot source used by the real orchestration boundary.
      * @param identityExtractor selected Bearer implementation; defaults to the established Dummy fixture.
+     * @param meter optional production gateway metrics decorator for public-outcome assertions.
      * @param inspectionExecutor optional deterministic executor supplied by lifecycle tests.
      * @param responseSourceCreated optional owner-state observer invoked for each retained source.
      * @param responseOutputObserved optional server-boundary observer invoked for disclosed headers or body.
@@ -3571,6 +4314,7 @@ class PiiShadowProxyServiceTest {
         identitySettings: DummyIdentitySettings =
             DummyIdentitySettings("test-user", emptySet()),
         identityExtractor: BearerIdentityExtractor = DummyIdentityExtractor(identitySettings),
+        meter: Meter? = null,
         responseContexts: MutableList<PolicyContext>? = null,
         serviceContexts: MutableList<com.linecorp.armeria.server.ServiceRequestContext>? = null,
         requestBodyDemandObserved: AtomicBoolean? = null,
@@ -3653,8 +4397,11 @@ class PiiShadowProxyServiceTest {
                 responseOutputObserved,
                 requestTransform,
             )
+        val tracedService =
+            TracingService(observedService, tracerProvider.get("io.vigilant.gateway.test"))
+        val publicService = meter?.let { MetricsService(tracedService, it) } ?: tracedService
         return fixture.startServer(
-            TracingService(observedService, tracerProvider.get("io.vigilant.gateway.test")),
+            publicService,
         ) {
             serverListener(responseAnalysisLifecycle.serverListener())
             configureServer()
@@ -4005,6 +4752,11 @@ class PiiShadowProxyServiceTest {
         const val REQUEST_INSPECTION_UNAVAILABLE_BODY =
             """{"error":{"message":"Request inspection unavailable.","type":"server_error",""" +
                 """"code":"request_inspection_unavailable"}}"""
+
+        /** Exact VIG-30 External identity unavailable body shared by real HTTP cases. */
+        const val IDENTITY_UNAVAILABLE_BODY =
+            """{"error":{"message":"Identity service unavailable.","type":"server_error",""" +
+                """"code":"identity_unavailable"}}"""
 
         /** Exact VIG-29 response policy BLOCK body shared by real HTTP cases. */
         const val RESPONSE_BLOCKED_BODY =

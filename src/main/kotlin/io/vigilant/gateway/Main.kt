@@ -11,7 +11,7 @@ import kotlin.system.exitProcess
  * configuration, registers a shutdown hook for graceful stop, and blocks until
  * the server closes. The shutdown hook first marks readiness as draining, so
  * `GET /readyz` answers `503` while the server is still closing, then stops the
- * server, and finally closes inspection, upstream and OpenTelemetry resources in ownership
+ * server, and finally closes inspection, outbound and OpenTelemetry resources in ownership
  * order. Telemetry and best-effort request audit are written to stdout as JSON Lines.
  */
 fun main() {
@@ -21,7 +21,7 @@ fun main() {
         graph.policyProvider
         graph.server
         graph.readinessService
-        graph.upstreamClientResources
+        graph.outboundClientResources
         graph.inspectionResources
         graph.sdkTracerProvider
         graph.sdkMeterProvider
@@ -43,7 +43,7 @@ fun main() {
                     graph.inspectionResources.close()
                 } finally {
                     try {
-                        graph.upstreamClientResources.close()
+                        graph.outboundClientResources.close()
                     } finally {
                         try {
                             graph.sdkTracerProvider.forceFlush()

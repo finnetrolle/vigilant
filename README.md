@@ -17,8 +17,9 @@ Vigilant - OpenAI-совместимый guardrails gateway для платфо�
 - Request-side shadow decision: найденный PII фиксируется как `DETECTED`,
   но request disposition остаётся `ALLOW`.
 - Byte-identical replay исходного body и сохранение неизвестных полей.
-- Development/test Dummy Bearer identity с configured normalized user/groups,
-  unchanged upstream Authorization и request-to-response context handoff.
+- Startup-selectable Dummy, offline JWT или External Bearer identity с
+  normalized user/groups, unchanged upstream Authorization и
+  request-to-response context handoff.
 - Streaming/backpressure в низкоуровневом bypass transport. Guardrail path
   полностью удерживает ordinary/SSE Chat Completions response до terminal
   protocol validation. Оба transport проходят response policies и применяют
@@ -31,7 +32,7 @@ Vigilant - OpenAI-совместимый guardrails gateway для платфо�
   endpoints и non-root OCI image.
 
 Пока не поддерживаются OpenAI Responses API, request-side `BLOCK`/`MASK`,
-`REMOVE`, authentication/external identity lookup,
+`REMOVE`, identity lookup cache,
 request-body или response-body disk spill,
 Kubernetes/Helm и ML/NER detector. Полные границы первого инкремента зафиксированы в
 [roadmap](spec/ROADMAP.md#не-входит-в-первый-production-increment).
@@ -104,8 +105,8 @@ Application configuration загружается с приоритетом
 `environment > HOCON file > defaults`. Для запуска обязательны:
 
 - `VIGILANT_UPSTREAM_URL` или `vigilant.upstream-url` в HOCON;
-- `VIGILANT_ENVIRONMENT`, `VIGILANT_IDENTITY_MODE=DUMMY` и
-  `VIGILANT_IDENTITY_DUMMY_USER` для временного development/test extractor;
+- `VIGILANT_ENVIRONMENT`, exact `VIGILANT_IDENTITY_MODE` и настройки выбранного
+  `DUMMY`, `JWT` или `EXTERNAL` extractor;
 - валидный `politics.conf`, по умолчанию из текущей директории;
 - `VIGILANT_PORT` необязателен, значение по умолчанию - `8080`.
 
@@ -117,8 +118,8 @@ defaults, validation rules и порядок поиска файлов прив�
 Невалидная или неполная application/policy configuration печатает безопасную
 ошибку в stderr и завершает процесс с кодом `2`.
 
-`DUMMY` запрещён в `production`. После VIG-27 production startup намеренно
-невозможен до появления real Bearer extractor в следующем identity increment.
+`DUMMY` запрещён в `production`. Production выбирает offline `JWT` либо
+trusted Bridge `EXTERNAL`; fallback и runtime switching отсутствуют.
 
 ## OCI image
 

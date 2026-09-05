@@ -5,6 +5,8 @@ autonumber
 actor "Клиент" as Client
 participant "SERVER span Vigilant" as Server
 participant "INTERNAL span\nvigilant.request.inspect" as RequestInspect
+participant "CLIENT span\nvigilant.identity.external.lookup" as IdentityLookup
+participant "Trusted identity Bridge" as Bridge
 participant "HTTP CLIENT span\nвышестоящего запроса" as UpstreamSpan
 participant "Вышестоящий сервер OpenAI" as Upstream
 participant "INTERNAL span\nvigilant.response.inspect" as ResponseInspect
@@ -13,6 +15,14 @@ Client -> Server : запрос с необязательными traceparent, t
 activate Server
 Server -> RequestInspect : создать непосредственный дочерний span
 activate RequestInspect
+opt External identity mode
+  RequestInspect -> IdentityLookup : создать дочерний CLIENT span
+  activate IdentityLookup
+  IdentityLookup -> Bridge : exact one-attempt POST
+  Bridge --> IdentityLookup : complete response / failure
+  IdentityLookup --> RequestInspect : finite outcome
+  deactivate IdentityLookup
+end
 RequestInspect -> RequestInspect : parse/context/select
 RequestInspect -> RequestInspect : stdout analysis_started,\ndetector execution, stdout analysis_completed
 RequestInspect --> Server : теневое решение

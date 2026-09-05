@@ -14,6 +14,7 @@ import io.vigilant.gateway.config.AppConfig
 import io.vigilant.gateway.config.DEFAULT_SHUTDOWN_FORCE_TIMEOUT
 import io.vigilant.gateway.config.DEFAULT_SHUTDOWN_QUIET_PERIOD
 import io.vigilant.gateway.config.DummyIdentitySettings
+import io.vigilant.gateway.config.ExternalIdentitySettings
 import io.vigilant.gateway.config.IdentitySettings
 import io.vigilant.gateway.config.JwtIdentitySettings
 import io.vigilant.gateway.config.loadAppConfig
@@ -22,6 +23,8 @@ import io.vigilant.gateway.health.ReadinessService
 import io.vigilant.gateway.health.TrafficAdmissionService
 import io.vigilant.gateway.identity.DummyIdentityExtractor
 import io.vigilant.gateway.identity.BearerIdentityExtractor
+import io.vigilant.gateway.identity.ExternalIdentityExtractor
+import io.vigilant.gateway.identity.ExternalIdentityLookup
 import io.vigilant.gateway.identity.OfflineJwtIdentityExtractor
 import io.vigilant.gateway.metrics.MetricsService
 import io.vigilant.gateway.metrics.buildSdkMeterProvider
@@ -34,7 +37,7 @@ import io.vigilant.gateway.proxy.ResponseInspectionWorkflow
 import io.vigilant.gateway.proxy.RetainedResponseHandler
 import io.vigilant.gateway.proxy.ShadowAuditLogger
 import io.vigilant.gateway.proxy.ShadowInspectionWorkflow
-import io.vigilant.gateway.proxy.UpstreamClientResources
+import io.vigilant.gateway.proxy.OutboundClientResources
 import io.vigilant.gateway.tracing.TracingService
 import io.vigilant.gateway.tracing.buildSdkTracerProvider
 import io.vigilant.policy.config.loadPolicySnapshot
@@ -52,8 +55,8 @@ import java.net.URI
 private val STARTUP_DETECTOR_IDS = setOf(FAST_PII_DETECTOR_ID)
 
 /**
- * Application-wide dependency graph: configuration, the owned upstream
- * upstream client resources and [WebClient], the immutable policy provider, the tracing
+ * Application-wide dependency graph: configuration, the owned outbound client
+ * resources and upstream [WebClient], the immutable policy provider, the tracing
  * and metrics SDKs, and the assembled Armeria [Server].
  */
 @DependencyGraph(AppScope::class)
@@ -61,8 +64,8 @@ interface AppComponent {
     val server: Server
     val readinessService: ReadinessService
 
-    /** Exposes application-owned upstream resources for ordered shutdown after server drain. */
-    val upstreamClientResources: UpstreamClientResources
+    /** Exposes application-owned outbound resources for ordered shutdown after server drain. */
+    val outboundClientResources: OutboundClientResources
 
     /** Exposes application-owned inspection resources for ordered shutdown after server drain. */
     val inspectionResources: InspectionResources
@@ -78,18 +81,32 @@ interface AppComponent {
         @SingleIn(AppScope::class)
         fun appConfig(): AppConfig = loadAppConfig()
 
-        /** Selects the common Bearer implementation from one validated settings variant. */
-        internal fun identityExtractorBinding(settings: IdentitySettings): BearerIdentityExtractor =
+        /**
+         * Selects the common Bearer implementation from one validated settings variant.
+         * The External lookup supplier is resolved only for External mode.
+         */
+        internal fun identityExtractorBinding(
+            settings: IdentitySettings,
+            externalLookup: () -> ExternalIdentityLookup,
+        ): BearerIdentityExtractor =
             when (settings) {
                 is DummyIdentitySettings -> DummyIdentityExtractor(settings)
                 is JwtIdentitySettings -> OfflineJwtIdentityExtractor(settings)
+                is ExternalIdentitySettings -> ExternalIdentityExtractor(externalLookup())
             }
 
         /** Provides exactly the Bearer implementation selected by validated startup configuration. */
         @Provides
         @SingleIn(AppScope::class)
-        fun identityExtractor(appConfig: AppConfig): BearerIdentityExtractor =
-            identityExtractorBinding(appConfig.identity)
+        fun identityExtractor(
+            appConfig: AppConfig,
+            outboundClientResources: OutboundClientResources,
+        ): BearerIdentityExtractor =
+            identityExtractorBinding(appConfig.identity) {
+                requireNotNull(outboundClientResources.externalIdentityLookup) {
+                    "External identity lookup is unavailable in EXTERNAL mode"
+                }
+            }
 
         /** Loads and validates the required startup policy snapshot exactly once. */
         @Provides
@@ -106,8 +123,8 @@ interface AppComponent {
         /** Builds the upstream client on the application-owned connection factory. */
         @Provides
         @SingleIn(AppScope::class)
-        fun upstreamWebClient(upstreamClientResources: UpstreamClientResources): WebClient =
-            upstreamClientResources.webClient
+        fun upstreamWebClient(outboundClientResources: OutboundClientResources): WebClient =
+            outboundClientResources.upstreamWebClient
 
         /** Assembles the policy engine over the immutable startup registry. */
         @Provides

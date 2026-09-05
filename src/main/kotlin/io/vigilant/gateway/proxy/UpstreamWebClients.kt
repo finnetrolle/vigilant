@@ -8,10 +8,9 @@ import io.vigilant.gateway.config.UpstreamClientSettings
 import java.time.Duration
 
 /**
- * Builds the dedicated upstream [ClientFactory] owned by the application
- * lifecycle. Connection-level settings live here so the factory can be closed
- * explicitly after server drain instead of relying on library defaults or JVM
- * termination.
+ * Builds the shared outbound [ClientFactory] owned by the application lifecycle.
+ * Upstream connection-level settings live here so the factory shared with the
+ * optional Bridge client can be closed explicitly after server drain.
  */
 internal fun buildUpstreamClientFactory(settings: UpstreamClientSettings): ClientFactory =
     ClientFactory.builder()
@@ -35,6 +34,15 @@ internal fun buildUpstreamWebClient(
         .decorator(responseIdleTimeoutDecorator(settings.responseTimeout))
         .build()
 }
+
+/**
+ * Builds the distinct Bridge client on the same application-owned [factory].
+ * Per-lookup whole-exchange deadlines remain owned by `BridgeIdentityClient`.
+ */
+internal fun buildExternalIdentityWebClient(factory: ClientFactory): WebClient =
+    WebClient.builder()
+        .factory(factory)
+        .build()
 
 /**
  * Builds a client decorator that resets the effective response deadline to

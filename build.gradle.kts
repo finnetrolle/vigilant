@@ -183,6 +183,7 @@ tasks.register("ociArtifact") {
 
 tasks.test {
     useJUnitPlatform()
+    dependsOn("installDist")
 }
 
 tasks.named<JavaCompile>("compileGatlingJava") {

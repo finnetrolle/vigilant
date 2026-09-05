@@ -18,7 +18,7 @@ class OfflineJwtIdentityExtractorTest {
         val token = signedJwt(key, validJwtClaims(NOW.epochSecond))
         val extractor = OfflineJwtIdentityExtractor(jwtIdentitySettings(key), Clock.fixed(NOW, ZoneOffset.UTC))
 
-        val result = extractor.extract(headers(token))
+        val result = extractor.extract(headers(token)).join()
 
         val success = result as IdentityExtractionResult.Success
         assertEquals("user.subject", success.identity.user)
@@ -37,7 +37,7 @@ class OfflineJwtIdentityExtractorTest {
             )
 
         listOf(oldKey, newKey).forEach { key ->
-            val result = extractor.extract(headers(signedJwt(key, validJwtClaims(NOW.epochSecond))))
+            val result = extractor.extract(headers(signedJwt(key, validJwtClaims(NOW.epochSecond)))).join()
             assertIs<IdentityExtractionResult.Success>(result)
         }
     }
@@ -49,7 +49,10 @@ class OfflineJwtIdentityExtractorTest {
         val claims = validJwtClaims(NOW.epochSecond).apply { remove("groups") }
         val extractor = OfflineJwtIdentityExtractor(jwtIdentitySettings(key), Clock.fixed(NOW, ZoneOffset.UTC))
 
-        val result = assertIs<IdentityExtractionResult.Success>(extractor.extract(headers(signedJwt(key, claims))))
+        val result =
+            assertIs<IdentityExtractionResult.Success>(
+                extractor.extract(headers(signedJwt(key, claims))).join(),
+            )
 
         assertEquals(emptySet(), result.identity.groups)
     }
@@ -68,7 +71,9 @@ class OfflineJwtIdentityExtractorTest {
             )
 
         cases.forEach { claims ->
-            assertIs<IdentityExtractionResult.Success>(extractor.extract(headers(signedJwt(key, claims))))
+            assertIs<IdentityExtractionResult.Success>(
+                extractor.extract(headers(signedJwt(key, claims))).join(),
+            )
         }
     }
 
@@ -84,7 +89,7 @@ class OfflineJwtIdentityExtractorTest {
         cases.forEach { (name, token) ->
             assertEquals(
                 IdentityExtractionResult.Failure(IdentityExtractionErrorCode.INVALID_CREDENTIAL),
-                extractor.extract(headers(token)),
+                extractor.extract(headers(token)).join(),
                 name,
             )
         }

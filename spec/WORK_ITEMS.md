@@ -120,12 +120,12 @@ Issue является листом mind map, если:
 | [VIG-27: Dummy Bearer identity extractor](issues/issue_27_dummy_identity_extractor.md) | `Done` | завершена | 0 дней осталось |
 | [VIG-28: Offline trusted JWT Bearer identity extractor](issues/issue_28_keycloak_jwt_identity_extractor.md) | `Done` | завершена | 0 дней осталось |
 | [VIG-29: OpenAI-compatible error contract for enforcement](issues/issue_29_openai_error_contract.md) | `Done` | завершена | 0 дней осталось |
-| [VIG-30: External Bearer identity extractor](issues/issue_30_external_identity_extractor.md) | `Draft` | внешний identity contract не определён | не оценено |
+| [VIG-30: External Bearer identity extractor](issues/issue_30_external_identity_extractor.md) | `Done` | завершена | 0 дней осталось |
 | [VIG-31: Cache external identity lookup](issues/issue_31_identity_lookup_cache.md) | `Draft` | cache semantics не определены | не оценено |
 | [EPIC-32: Best-effort stdout audit migration](epics/epic_32_best_effort_stdout_audit.md) | `Done` | 2/2 | 0 дней осталось |
 | [VIG-33: Availability SLO and operational evidence](issues/issue_33_availability_slo_and_operations.md) | `Draft` | production SLO не определён | не оценено |
 | [VIG-34: Request-side PII enforcement](issues/issue_34_request_pii_enforcement.md) | `Draft` | reaction, rewrite и lifecycle contract требуют диалога | не оценено |
-| [VIG-35: Выбор production identity mode](issues/issue_35_production_identity_mode.md) | `Draft` | external-only или dual production mode не выбран | не оценено |
+| [VIG-35: Выбор production identity mode](issues/issue_35_production_identity_mode.md) | `Done` | завершена | 0 дней осталось |
 | [VIG-36: Очистка superseded требований и архитектурных документов](issues/issue_36_superseded_requirements_cleanup.md) | `Draft` | требуется inventory и завершение contract dependencies | не оценено |
 | [EPIC-37: Predictable and faster test suite](epics/epic_37_predictable_test_throughput.md) | `Ready for implementation` | 0/4 | 8-13 дней |
 
@@ -209,11 +209,16 @@ Issue является листом mind map, если:
 
 ### Phase 5: уточнить и реализовать Draft capabilities
 
-- [ ] Принять human-owned решение
-  [VIG-35](issues/issue_35_production_identity_mode.md): external-only или
-  external plus offline JWT.
-- [ ] После VIG-35 уточнить и реализовать
-  [VIG-30](issues/issue_30_external_identity_extractor.md), затем
+- [x] Принять human-owned решение
+  [VIG-35](issues/issue_35_production_identity_mode.md): startup-selectable
+  `DUMMY`, `JWT` и `EXTERNAL` реализуют общий async identity contract.
+- [x] Реализовать
+  [VIG-30](issues/issue_30_external_identity_extractor.md).
+- [ ] Выполнить [EPIC-37](epics/epic_37_predictable_test_throughput.md) строго в
+  порядке VIG-37-01 -> VIG-37-02 -> VIG-37-03 -> VIG-37-04: зафиксировать
+  baseline, разделить gateway E2E, изолировать serial process tests и
+  квалифицировать ровно четыре non-process workers.
+- [ ] После EPIC-37 уточнить и реализовать
   [VIG-31](issues/issue_31_identity_lookup_cache.md).
 - [ ] Провести отдельный requirements dialogue по
   [VIG-34](issues/issue_34_request_pii_enforcement.md), перевести issue в Ready

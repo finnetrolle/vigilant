@@ -2,7 +2,7 @@
 
 - **ID:** `VIG-35`
 - **Тип:** Issue
-- **Статус:** Draft
+- **Статус:** Done
 - **Приоритет:** High
 - **Зависит от:** нет
 - **Блокирует:** [VIG-30](issue_30_external_identity_extractor.md)
@@ -17,36 +17,59 @@ Bearer Identity Extractor: заменить ли завершённый offline 
 Это human-owned decision issue. Она не изменяет production code и не закрывает
 VIG-28 задним числом.
 
-## Варианты решения
+## Принятое решение
 
-### External-only production
+Vigilant сохраняет три identity mode:
 
-- Production использует External Identity Extractor из VIG-30 и bounded cache
-  из VIG-31.
-- Dummy остаётся только development/test mode.
-- Offline JWT implementation и configuration удаляются отдельным migration
-  change после готовности VIG-30/VIG-31.
-- Это минимальный runtime/config/security surface для текущего MVP.
+- внешний identity lookup из VIG-30 с bounded cache из VIG-31;
+- завершённый offline JWT extractor из VIG-28;
+- завершённый Dummy extractor из VIG-27.
 
-### External plus offline JWT
+Все три mode реализуют общий `BearerIdentityExtractor` contract. Startup
+configuration выбирает ровно одну реализацию для полного lifecycle процесса.
+Автоматический fallback, одновременная композиция нескольких extractor и
+переключение mode без restart не поддерживаются.
 
-- Оба extractor являются поддержанными production modes.
-- Требуются явные mode selection, configuration matrix, security ownership,
-  deployment documentation и E2E evidence для каждого режима.
-- VIG-30 и VIG-31 не заменяют VIG-28, а добавляют альтернативный path.
+Общий extraction contract становится асинхронным и cancellation-aware.
+`DUMMY` и JWT завершают его локальным результатом без network I/O; внешний
+extractor завершает тот же contract результатом lookup. Client cancellation,
+identity timeout и application shutdown обязаны прекращать незавершённый
+external lookup и публиковать не более одного terminal result. VIG-30
+реализовал exact `CompletableFuture` contract и async Armeria integration.
 
-## Решение должен принять
+Startup selector сохраняет один обязательный key `identity-mode` с exact
+значениями `DUMMY`, `JWT` и `EXTERNAL`; environment override использует
+`VIGILANT_IDENTITY_MODE` с теми же значениями. Default, aliases и fallback
+отсутствуют. Конфигурация выбранного mode обязательна, а settings любого
+невыбранного identity mode дают startup error с exit code `2`.
 
-Владелец продукта после сравнения deployment scenarios, trust boundaries,
-операционной стоимости и требований обратной совместимости.
+External Identity Extractor добавляется как третий path и не заменяет offline
+JWT. Удаление JWT implementation, configuration или tests не требуется.
+`DUMMY` остаётся разрешён только в `development` и `test`: он не проверяет
+credential и поэтому запрещён при `environment=production`. `JWT` и внешний
+identity mode разрешены во всех трёх environments, чтобы production paths
+можно было запускать в development и проверять в test.
+
+## Рассмотренная альтернатива
+
+`external-only` production отклонён. Владельцу продукта нужны deployments как
+с внешним identity service, так и с полностью локальной offline JWT validation;
+`DUMMY` также сохраняется отдельной реализацией общего контракта.
 
 ## Влияние решения
 
 - Scope и non-goals VIG-30 External Identity Extractor.
 - Scope VIG-31 cache и перечень modes, использующих cache.
-- Статус offline JWT в runtime configuration и deployment docs.
-- Необходимость отдельного removal/migration issue после VIG-30/VIG-31.
-- Test matrix и production startup validation.
+- Offline JWT остаётся поддерживаемым mode в runtime configuration и
+  deployment docs без removal/migration issue.
+- Startup validation обязана принимать настройки только выбранного mode и
+  отклонять смешанную configuration. Production startup принимает только JWT
+  или внешний mode; `DUMMY` fail-fast отклоняется до запуска server.
+- Test matrix обязана независимо покрывать выбор и поведение всех трёх
+  реализаций общего interface.
+- VIG-30 обязан обновить общий interface и gateway orchestration так, чтобы
+  external network wait не блокировал Armeria event loop, а cancellation и
+  timeout были наблюдаемыми частями lifecycle contract.
 
 ## Требования
 
@@ -64,12 +87,16 @@ VIG-28 задним числом.
 
 ## Критерий готовности задачи
 
-- [ ] Выбран `external-only` либо `external plus offline JWT` production mode.
-- [ ] Зафиксированы migration и backward-compatibility expectations.
-- [ ] Названы поддерживаемые development/test modes.
-- [ ] Обновлены VIG-30, VIG-31 и обязательный follow-up на сохранение либо
-  удаление offline JWT path.
-- [ ] Решение отражено в MVP, runtime configuration и coverage documentation.
+- [x] Выбран `external plus offline JWT`; `DUMMY` сохранён отдельным mode.
+- [x] Offline JWT сохраняется без removal migration; External добавляется как
+  новый явно выбираемый mode.
+- [x] `development`/`test` поддерживают `DUMMY`, JWT и внешний mode;
+  `production` поддерживает только JWT и внешний mode.
+- [x] Для всех трёх реализаций выбран единый async и cancellation-aware
+  `BearerIdentityExtractor` contract.
+- [x] VIG-30 и VIG-31 обновлены; offline JWT сохраняется, поэтому removal
+  follow-up не создаётся.
+- [x] Решение отражено в MVP, runtime configuration и coverage documentation.
 
 После принятия и публикации решения issue может быть переведена напрямую в
 `Done`, поскольку production implementation принадлежит зависимым work items.
@@ -77,10 +104,10 @@ VIG-28 задним числом.
 ## Ambiguity Report
 
 ```text
-Goals:        0.0   decision outcome identified
-Acceptance:   0.10  decision record and affected items explicit
+Goals:        0.0   three-mode outcome explicit
+Acceptance:   0.0   decision publication matrix complete
 Boundaries:   0.0   no production implementation
-Alternatives: 0.75  production mode not yet selected
-Assumptions:  0.45  backward compatibility requirements unknown
-Aggregate:    0.26  Draft: product owner decision required.
+Alternatives: 0.0   external-only rejected explicitly
+Assumptions:  0.05  VIG-30 still owns its provider protocol and JVM async type
+Aggregate:    0.01  Done: production identity mode decision published.
 ```

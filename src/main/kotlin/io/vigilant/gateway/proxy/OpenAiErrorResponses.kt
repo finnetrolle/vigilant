@@ -18,6 +18,9 @@ internal enum class OpenAiErrorOutcome {
     /** Request inspection could not safely reach a decision. */
     REQUEST_INSPECTION_UNAVAILABLE,
 
+    /** External identity service could not provide an identity. */
+    IDENTITY_UNAVAILABLE,
+
     /** Response inspection could not safely reach a decision. */
     RESPONSE_INSPECTION_UNAVAILABLE,
 
@@ -63,6 +66,14 @@ internal object OpenAiErrorResponses {
                     retryAfter = RETRY_AFTER_ONE_SECOND,
                     body =
                         """{"error":{"message":"Request inspection unavailable.","type":"server_error","code":"request_inspection_unavailable"}}""",
+                )
+
+            OpenAiErrorOutcome.IDENTITY_UNAVAILABLE ->
+                ErrorContract(
+                    status = HttpStatus.SERVICE_UNAVAILABLE,
+                    retryAfter = RETRY_AFTER_ONE_SECOND,
+                    body =
+                        """{"error":{"message":"Identity service unavailable.","type":"server_error","code":"identity_unavailable"}}""",
                 )
 
             OpenAiErrorOutcome.RESPONSE_INSPECTION_UNAVAILABLE ->
