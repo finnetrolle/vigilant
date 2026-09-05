@@ -127,6 +127,7 @@ Issue является листом mind map, если:
 | [VIG-34: Request-side PII enforcement](issues/issue_34_request_pii_enforcement.md) | `Draft` | reaction, rewrite и lifecycle contract требуют диалога | не оценено |
 | [VIG-35: Выбор production identity mode](issues/issue_35_production_identity_mode.md) | `Draft` | external-only или dual production mode не выбран | не оценено |
 | [VIG-36: Очистка superseded требований и архитектурных документов](issues/issue_36_superseded_requirements_cleanup.md) | `Draft` | требуется inventory и завершение contract dependencies | не оценено |
+| [EPIC-37: Predictable and faster test suite](epics/epic_37_predictable_test_throughput.md) | `Ready for implementation` | 0/4 | 8-13 дней |
 
 ## Active TODO: порядок следующей работы
 
@@ -226,8 +227,10 @@ Issue является листом mind map, если:
 - [ ] После стабилизации identity, enforcement и observability уточнить
   [VIG-33](issues/issue_33_availability_slo_and_operations.md).
 
-Текущий следующий шаг: принять human-owned production identity mode в VIG-35
-перед уточнением external identity leaves VIG-30/VIG-31.
+Текущий следующий шаг: реализовать Ready leaf
+[VIG-37-01](issues/epic_37/issue_37_01_test_timing_report.md) поверх завершённого
+VIG-30, затем пройти EPIC-37 по dependency order и только после этого уточнить
+и реализовать VIG-31.
 VIG-29 завершён: ordinary JSON и SSE response используют exact
 `403`/`502`/`503` matrix.
 
