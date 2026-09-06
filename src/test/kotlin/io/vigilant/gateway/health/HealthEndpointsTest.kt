@@ -17,6 +17,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import org.junit.jupiter.api.Tag
 
 /** Verifies local probes and lifecycle traffic admission through real Armeria servers. */
 class HealthEndpointsTest {
@@ -87,6 +88,7 @@ class HealthEndpointsTest {
     }
 
     /** Verifies that production shutdown exposes draining readiness before the server closes. */
+    @Tag("process-e2e")
     @Test
     fun `graceful shutdown answers readyz with 503 before the gateway closes`() {
         val upstream = startServer {

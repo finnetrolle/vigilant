@@ -3,7 +3,7 @@
 **Статус:** Ready for implementation
 **Epic:** [EPIC-37](../../epics/epic_37_predictable_test_throughput.md)
 **Ветка:** Parallel execution > fixed four-worker default and qualification
-**Зависит от:** [VIG-37-03](issue_37_03_process_test_isolation.md)
+**Зависит от:** [VIG-37-03](issue_37_03_process_test_isolation.md) (Done; serial `processTest` lane and canonical process fixture are available)
 **Блокирует:** [VIG-31](../issue_31_identity_lookup_cache.md)
 **Оценка:** 2-3 инженерных дня
 **Уверенность:** Medium

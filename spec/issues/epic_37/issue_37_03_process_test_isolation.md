@@ -1,9 +1,9 @@
 # VIG-37-03: Isolate child-process E2E
 
-**Статус:** Ready for implementation
+**Статус:** Done
 **Epic:** [EPIC-37](../../epics/epic_37_predictable_test_throughput.md)
 **Ветка:** Test topology > serial child-process lane
-**Зависит от:** [VIG-37-02](issue_37_02_gateway_e2e_split.md)
+**Зависит от:** [VIG-37-02](issue_37_02_gateway_e2e_split.md) (Done; split inventory and generated baseline evidence are available)
 **Блокирует:** [VIG-37-04](issue_37_04_four_worker_qualification.md)
 **Оценка:** 2-3 инженерных дня
 **Уверенность:** Medium
@@ -85,28 +85,72 @@ two sequential reservations и cleanup assertion.
 
 ## Критерии готовности
 
-- [ ] Complete repository sweep классифицирует каждый direct/fixture/installed/
+- [x] Complete repository sweep классифицирует каждый direct/fixture/installed/
   `MainKt` launcher; каждый executable owner из начального и найденного
   inventory имеет `process-e2e`, а non-test declarations allowlisted по имени и
   причине.
-- [ ] Sentinel Gradle contract доказывает: `processTest` выполняет каждый
+- [x] Sentinel Gradle contract доказывает: `processTest` выполняет каждый
   tagged case ровно один раз с одним fork; `test` не выполняет tagged cases и
   выполняет каждый untagged case ровно один раз.
-- [ ] Runtime report для `./gradlew test` и `./gradlew build` не содержит
+- [x] Runtime report для `./gradlew test` и `./gradlew build` не содержит
   omissions/duplicates относительно pre-isolation inventory; direct
   `processTest --tests` проходит.
-- [ ] Все gateway child processes используют `GatewayProcessFixture`; direct
+- [x] Все gateway child processes используют `GatewayProcessFixture`; direct
   gateway `ProcessBuilder` вне fixture отсутствует. Два и более reservations в
   одном invocation получают попарно разные ports.
-- [ ] Failure, normal exit, startup rejection и forced cleanup paths boundedly
+- [x] Failure, normal exit, startup rejection и forced cleanup paths boundedly
   закрывают process и readers; focused evidence не оставляет orphan child JVM
   или test worker.
-- [ ] `testTimingReport` агрегирует distinct `processTest` и `test` records с
+- [x] `testTimingReport` агрегирует distinct `processTest` и `test` records с
   correct whole-suite totals. KDoc/Javadoc описывает tag, lifecycle и port
   ownership.
-- [ ] Focused topology/fixture/process tests,
+- [x] Focused topology/fixture/process tests,
   `./gradlew test --rerun-tasks -PtestMaxParallelForks=1`,
   `./gradlew validateWorkItems` и `./gradlew build` проходят.
+
+## Dynamic evidence
+
+- Gradle topology RED был зафиксирован новым synthetic build: default `test`
+  не создавал отдельный serial process lane и sentinel execution contract не
+  мог быть выполнен. После GREEN
+  `./gradlew :buildSrc:test --tests "io.vigilant.build.ProcessTestIsolationPluginFunctionalTest" --no-daemon`
+  проходит: four sentinel cases выполняются exactly once, два tagged cases
+  используют один child PID до двух untagged cases, а JUnit XML directories
+  различны. Focused `processTest --tests` запускает только tagged sentinel.
+- Static inventory RED
+  `./gradlew test -x processTest --tests "io.vigilant.gateway.ProcessTestInventoryTest"`
+  перечислил untagged executable owners. После tagging и launcher migration
+  тот же contract проходит шестью tests: полный Kotlin/Java source sweep
+  классифицирует каждый из четырёх launcher seams, direct gateway
+  `ProcessBuilder` остаётся только в `GatewayProcessFixture`, а regression
+  fixtures доказывают Java method ownership, Kotlin/Java transitive helper
+  reachability и обнаружение нового untagged process-owning method внутри уже
+  известного mixed suite.
+- Port registry RED показал повторяемые OS-ephemeral reservations. Focused
+  GREEN `./gradlew processTest --tests "io.vigilant.gateway.GatewayProcessFixtureTest" --no-daemon`
+  проходит 7 process-owning tests: два real gateway запуска получают разные
+  ports, а normal exit, readiness failure, startup rejection, cooperative TERM
+  и forced cleanup boundedly закрывают process и оба readers; unexpected reader
+  failure пробрасывается только после завершения всего fixture-owned cleanup.
+  `./gradlew test -x processTest --tests "io.vigilant.gateway.GatewayProcessFixtureTest" --no-daemon`
+  отдельно запускает единственный port-only test, где восемь последовательных
+  reservations попарно различны.
+- Focused real process command
+  `./gradlew processTest --tests "io.vigilant.gateway.MainTest" --tests "io.vigilant.gateway.proxy.BypassProxyServiceTest" --no-daemon`
+  проходит 30 process cases. `jps -lv` после focused и full runs не показывает
+  `io.vigilant.gateway.MainKt` или `GradleWorkerMain`.
+- Required uncached
+  `./gradlew test testTimingReport --rerun-tasks -PtestMaxParallelForks=1 --no-daemon`
+  прошёл за 18m12s до review remediation.
+- Финальный verification pipeline после remediation и повторно созданный из
+  его JUnit XML `testTimingReport` содержат distinct task records
+  `:processTest` 49/0/0 и `:test` 1078/0/0, whole suite
+  1127/0/0 и не содержат duplicate identities. Это exact pre-isolation 1116
+  inventory с verified VIG-37-02 split mapping и одиннадцатью новыми
+  VIG-37-03 contract cases.
+- `./gradlew validateWorkItems --no-daemon` и `./gradlew build --no-daemon`
+  прошли. Полный pipeline включает process lane, non-process lane, detekt,
+  runtime-classpath guard, validator tests и work-item graph validation.
 
 ## Не входит
 

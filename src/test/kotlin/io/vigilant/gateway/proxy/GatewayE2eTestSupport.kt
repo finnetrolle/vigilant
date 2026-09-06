@@ -417,9 +417,13 @@ internal abstract class GatewayE2eTestSupport {
         sourceCreated: CompletableFuture<RetainedResponseSource>,
         description: String,
     ): RetainedResponseSource {
-        val source = sourceCreated.get(2, TimeUnit.SECONDS)
+        val source =
+            sourceCreated.get(
+                RETAINED_SOURCE_OBSERVATION_TIMEOUT.toNanos(),
+                TimeUnit.NANOSECONDS,
+            )
         assertTrue(
-            fixture.awaitUntil(Duration.ofSeconds(2)) { source.retainedSegments > 0 },
+            fixture.awaitUntil(RETAINED_SOURCE_OBSERVATION_TIMEOUT) { source.retainedSegments > 0 },
             "$description was not retained by the response source",
         )
         return source
@@ -436,7 +440,7 @@ internal abstract class GatewayE2eTestSupport {
         terminalEvent: String,
     ) {
         assertTrue(
-            fixture.awaitUntil(Duration.ofSeconds(2)) {
+            fixture.awaitUntil(RETAINED_SOURCE_OBSERVATION_TIMEOUT) {
                 source.retainedBytes == 0L && source.retainedSegments == 0
             },
             "$terminalEvent left response source ownership retained",
@@ -537,6 +541,9 @@ internal abstract class GatewayE2eTestSupport {
 
     /** Shared exact audit and HTTP contract constants for multiple behavior groups. */
     protected companion object {
+        /** Load-qualified bound for source creation, retained-state publication, and final release. */
+        private val RETAINED_SOURCE_OBSERVATION_TIMEOUT: Duration = Duration.ofSeconds(5)
+
         /** Field names forbidden by the safe request/response analysis stdout schema. */
         val FORBIDDEN_AUDIT_FIELDS: Set<String> =
             setOf(

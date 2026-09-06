@@ -824,37 +824,42 @@ class BridgeIdentityClientTest {
                 scheduler = timeoutScheduler,
             )
         val lookup = client.lookup("combined-race-token-sentinel")
+        val timeoutCommand = timeoutScheduler.capturedCommand()
+        val successResponse =
+            HttpResponse.of(
+                HttpStatus.OK,
+                MediaType.JSON,
+                """{"user":"user","groups":[]}""",
+            )
         val terminalCallbacks = java.util.concurrent.atomic.AtomicInteger()
         val downstreamEffects = java.util.concurrent.atomic.AtomicInteger()
+        val terminalCallbackPublished = CountDownLatch(1)
+        val downstreamCallbackSettled = CountDownLatch(1)
         val competitorsDone = CountDownLatch(4)
         val barrier = CyclicBarrier(5)
-        val competitorFailures = CopyOnWriteArrayList<Throwable>()
-        lookup.whenComplete { _, _ -> terminalCallbacks.incrementAndGet() }
+        val competitorFailures = CopyOnWriteArrayList<Pair<String, Throwable>>()
+        lookup.whenComplete { _, _ ->
+            terminalCallbacks.incrementAndGet()
+            terminalCallbackPublished.countDown()
+        }
         lookup.thenAccept { downstreamEffects.incrementAndGet() }
+            .whenComplete { _, _ -> downstreamCallbackSettled.countDown() }
         assertTrue(bridgeReached.await(2, TimeUnit.SECONDS), "combined race did not reach Bridge")
         val competitors = Executors.newFixedThreadPool(4)
         try {
             listOf(
-                {
-                    bridgeRelease.complete(
-                        HttpResponse.of(
-                            HttpStatus.OK,
-                            MediaType.JSON,
-                            """{"user":"user","groups":[]}""",
-                        ),
-                    )
-                },
-                { lookup.cancel(false) },
-                { client.close() },
-                { timeoutScheduler.capturedCommand().run() },
-            ).forEach { contender ->
+                "success" to { bridgeRelease.complete(successResponse) },
+                "cancellation" to { lookup.cancel(false) },
+                "shutdown" to { client.close() },
+                "timeout" to { timeoutCommand.run() },
+            ).forEach { (name, contender) ->
                 competitors.execute(
                     {
                         try {
                             barrier.await(2, TimeUnit.SECONDS)
                             contender()
                         } catch (failure: Throwable) {
-                            competitorFailures += failure
+                            competitorFailures += name to failure
                         } finally {
                             competitorsDone.countDown()
                         }
@@ -864,8 +869,18 @@ class BridgeIdentityClientTest {
 
             barrier.await(2, TimeUnit.SECONDS)
             assertTrue(competitorsDone.await(2, TimeUnit.SECONDS), "terminal contenders did not all run")
-            assertTrue(competitorFailures.isEmpty(), "terminal contender failed: $competitorFailures")
+            competitorFailures.firstOrNull()?.let { (name, failure) ->
+                throw AssertionError("terminal contender failed: $name", failure)
+            }
             assertTrue(fixture.awaitUntil(Duration.ofSeconds(2), lookup::isDone), "race had no terminal winner")
+            assertTrue(
+                terminalCallbackPublished.await(2, TimeUnit.SECONDS),
+                "terminal callback was not published",
+            )
+            assertTrue(
+                downstreamCallbackSettled.await(2, TimeUnit.SECONDS),
+                "downstream callback did not settle",
+            )
             assertEquals(1, terminalCallbacks.get(), "race published multiple terminal callbacks")
             assertTrue(downstreamEffects.get() in 0..1, "race duplicated its downstream side effect")
             assertReleasedAsyncOwnership(lookup, "combined-race-token-sentinel")

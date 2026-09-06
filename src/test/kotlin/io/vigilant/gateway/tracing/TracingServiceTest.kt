@@ -17,6 +17,7 @@ import io.opentelemetry.sdk.common.CompletableResultCode
 import io.opentelemetry.sdk.trace.SdkTracerProvider
 import io.opentelemetry.sdk.trace.data.SpanData
 import io.opentelemetry.sdk.trace.export.SpanExporter
+import io.vigilant.gateway.GatewayProcessFixture
 import io.vigilant.gateway.GatewayTestFixture
 import io.vigilant.gateway.config.TracingSettings
 import io.vigilant.gateway.proxy.BypassProxyService
@@ -425,7 +426,7 @@ class TracingServiceTest {
     @Test
     fun `upstream failure log carries the mdc trace id of the exchange`() {
         val gateway = fixture.startTracedGateway(
-            java.net.URI.create("http://127.0.0.1:${java.net.ServerSocket(0).use { it.localPort }}"),
+            java.net.URI.create("http://127.0.0.1:${GatewayProcessFixture.reserveNonEphemeralPort()}"),
             tracer,
         )
         val client = WebClient.of(fixture.serverUri(gateway).toString())

@@ -1,15 +1,18 @@
 package io.vigilant.gateway
 
 import java.nio.file.Files
-import java.util.concurrent.TimeUnit
+import java.time.Duration
 import kotlin.io.path.writeText
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.DynamicTest
+import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.TestFactory
 
+/** Verifies the production entry point's bounded startup-rejection contract. */
+@Tag("process-e2e")
 class MainTest {
     /** CFG-05: Production rejects non-authenticating Dummy while real identity modes remain available. */
     @Test
@@ -135,35 +138,15 @@ class MainTest {
     private fun runGateway(
         environment: Map<String, String>,
         removedEnvironment: Set<String> = emptySet(),
-    ): GatewayExit {
-        val process =
-            ProcessBuilder(
-                "${System.getProperty("java.home")}/bin/java",
-                "-cp",
-                System.getProperty("java.class.path"),
-                "io.vigilant.gateway.MainKt",
-            ).withTestRuntimeConfiguration(environment)
-                .apply { removedEnvironment.forEach(environment()::remove) }
-                .start()
+    ): GatewayProcessExit {
+        val gateway = GatewayProcessFixture.launchForStartupRejection(environment, removedEnvironment)
 
         try {
-            assertTrue(process.waitFor(10, TimeUnit.SECONDS), "gateway process did not fail within 10 seconds")
-            return GatewayExit(
-                exitCode = process.exitValue(),
-                stderr = process.errorStream.bufferedReader().readText(),
-            )
+            return gateway.awaitExit(Duration.ofSeconds(10))
         } finally {
-            if (process.isAlive) {
-                process.destroyForcibly().waitFor(10, TimeUnit.SECONDS)
-            }
+            gateway.close()
         }
     }
-
-    /** Captured process exit status and safe diagnostic stream. */
-    private data class GatewayExit(
-        val exitCode: Int,
-        val stderr: String,
-    )
 
     /** One fully expanded process-startup rejection with a value-free oracle. */
     private data class ExternalStartupFailureCase(

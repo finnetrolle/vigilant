@@ -10,9 +10,9 @@ import com.linecorp.armeria.common.ResponseHeaders
 import io.opentelemetry.api.common.AttributeKey.stringKey
 import io.opentelemetry.sdk.metrics.SdkMeterProvider
 import io.opentelemetry.sdk.metrics.data.MetricData
+import io.vigilant.gateway.GatewayProcessFixture
 import io.vigilant.gateway.GatewayTestFixture
 import java.time.Duration
-import java.net.ServerSocket
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
@@ -253,9 +253,9 @@ class MetricsServiceTest {
     /** A connection failure increments only the transport-error counter with its safe class name. */
     @Test
     fun `dead upstream increments transport error metric with cause class`() {
-        val deadUpstream = ServerSocket(0).use { socket ->
-            java.net.URI.create("http://127.0.0.1:${socket.localPort}")
-        }
+        val deadUpstream = java.net.URI.create(
+            "http://127.0.0.1:${GatewayProcessFixture.reserveNonEphemeralPort()}",
+        )
         val gateway = fixture.startMetricsGateway(deadUpstream, meter)
 
         val response = WebClient.of(fixture.serverUri(gateway).toString())

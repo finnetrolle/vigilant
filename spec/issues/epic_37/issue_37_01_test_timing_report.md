@@ -54,8 +54,8 @@ whole-suite totals, затем выводит все classes от самой м�
 с незавершённым suite приводит к понятному task failure, а не к успешному stale
 report. Generated files не добавляются в Git.
 
-До VIG-37-03 task читает текущий `test` XML. После появления `processTest`
-VIG-37-03 расширяет тот же schema/report до обоих tasks без второго формата.
+После VIG-37-03 task читает distinct `processTest` и `test` XML directories и
+агрегирует оба tasks в тот же schema/report без второго формата.
 
 ## Baseline protocol
 

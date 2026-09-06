@@ -22,8 +22,10 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import org.junit.jupiter.api.Tag
 
 /** Verifies the production gateway's externally observable graceful shutdown lifecycle. */
+@Tag("process-e2e")
 class ShutdownLifecycleTest {
     private val fixture = GatewayTestFixture()
     private val gateways = mutableListOf<GatewayProcessFixture>()

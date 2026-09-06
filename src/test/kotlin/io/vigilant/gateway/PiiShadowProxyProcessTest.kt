@@ -18,8 +18,10 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import org.junit.jupiter.api.Tag
 
 /** Production-entry-point evidence for the packaged PII shadow request path. */
+@Tag("process-e2e")
 class PiiShadowProxyProcessTest {
     private val fixture = GatewayTestFixture()
     private var gateway: GatewayProcessFixture? = null

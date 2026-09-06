@@ -42,8 +42,9 @@ explicitly requires it.
 
 ```bash
 ./gradlew build                 # compile + tests
-./gradlew test                  # tests only
-./gradlew test --tests "io.vigilant.gateway.proxy.BypassProxyServiceTest"  # single test class
+./gradlew test                  # full serial processTest lane, then non-process tests
+./gradlew test -x processTest --tests "io.vigilant.gateway.proxy.BypassProxyServiceTest"  # single non-process test class
+./gradlew processTest --tests "io.vigilant.gateway.MainTest"  # focused child-process suite
 ./gradlew run                   # run MainKt directly; same config requirements as the distribution
 ./gradlew installDist           # build distributable into build/install/vigilant/
 ./gradlew ociArtifact           # reproducible versioned tar consumed by the Dockerfile

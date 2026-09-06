@@ -1,5 +1,6 @@
 package io.vigilant.gateway.proxy
 
+import com.linecorp.armeria.client.ClientFactory
 import com.linecorp.armeria.client.WebClient
 import com.linecorp.armeria.common.HttpData
 import com.linecorp.armeria.common.HttpMethod
@@ -10,6 +11,7 @@ import com.linecorp.armeria.common.HttpStatus
 import com.linecorp.armeria.common.MediaType
 import com.linecorp.armeria.common.RequestHeaders
 import io.vigilant.gateway.GatewayTestFixture
+import io.vigilant.gateway.closeAllResources
 import java.io.ByteArrayOutputStream
 import java.time.Duration
 import java.util.concurrent.CompletableFuture
@@ -35,10 +37,16 @@ import org.reactivestreams.Subscription
 class BypassProxyRequestBackpressureTest {
     private val fixture = GatewayTestFixture()
 
-    /** Stops every real Armeria server started by the test. */
+    /** Scenario-owned client resources isolate both transport directions from the full test suite. */
+    private val clientFactory = ClientFactory.builder().build()
+
+    /** Stops every real server and the scenario-owned client resources without cleanup short-circuiting. */
     @AfterTest
     fun closeFixture() {
-        fixture.close()
+        closeAllResources(
+            fixture::close,
+            { clientFactory.closeAsync().join() },
+        )
     }
 
     /**
@@ -58,9 +66,13 @@ class BypassProxyRequestBackpressureTest {
             )
         }
         val gateway = fixture.startServer(
-            BypassProxyService(fixture.serverUri(upstream), WebClient.of()),
+            BypassProxyService(
+                fixture.serverUri(upstream),
+                WebClient.builder().factory(clientFactory).build(),
+            ),
         )
         val client = WebClient.builder(fixture.serverUri(gateway).toString())
+            .factory(clientFactory)
             .responseTimeout(RESPONSE_TIMEOUT)
             .build()
         val requestChunks = orderedBinaryChunks(REQUEST_CHUNK_COUNT, REQUEST_CHUNK_SIZE)

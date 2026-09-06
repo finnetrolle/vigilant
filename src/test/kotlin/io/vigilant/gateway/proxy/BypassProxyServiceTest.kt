@@ -24,20 +24,18 @@ import io.vigilant.gateway.assertUpstreamFailureWarning
 import io.vigilant.gateway.chatCompletionsBody
 import io.vigilant.gateway.closeAllResources
 import io.vigilant.gateway.renderForSecretScan
-import io.vigilant.gateway.withTestRuntimeConfiguration
 import java.net.URI
-import java.net.ServerSocket
 import java.time.Duration
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
 import org.slf4j.LoggerFactory
-import kotlin.concurrent.thread
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import org.junit.jupiter.api.Tag
 
 class BypassProxyServiceTest {
     private val fixture = GatewayTestFixture()
@@ -312,6 +310,8 @@ class BypassProxyServiceTest {
         assertEquals("value", outbound.get("x-keep"))
     }
 
+    /** Runs the INFO JSONL privacy contract through a real gateway child process. */
+    @Tag("process-e2e")
     @Test
     fun `gateway stdout at info level is jsonl and leaks no secrets`() {
         val run = runGatewaySession(logLevel = null)
@@ -323,6 +323,8 @@ class BypassProxyServiceTest {
         }
     }
 
+    /** Runs the DEBUG JSONL privacy contract through a real gateway child process. */
+    @Tag("process-e2e")
     @Test
     fun `gateway stdout at debug level is jsonl and leaks no secrets or bodies`() {
         val run = runGatewaySession(logLevel = "DEBUG")
@@ -380,15 +382,14 @@ class BypassProxyServiceTest {
                 )
             }
         }
-        val gatewayPort = freePort()
-        val process = launchGateway(serverUri(upstream), gatewayPort, logLevel)
-
-        val stdout = StringBuilder()
-        val stderr = StringBuilder()
-        val readers = pumpProcessOutput(process, stdout, stderr)
+        val gateway =
+            GatewayProcessFixture.launch(
+                serverUri(upstream),
+                environment = buildMap { logLevel?.let { put("VIGILANT_LOG_LEVEL", it) } },
+            )
 
         try {
-            val client = awaitGateway(process, gatewayPort, stderr)
+            val client = gateway.awaitServing()
             val ok = client.execute(
                 HttpRequest.of(
                     RequestHeaders.builder(
@@ -426,53 +427,14 @@ class BypassProxyServiceTest {
                 ).aggregate().join()
             assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, failed.status())
         } finally {
-            process.destroy()
-            if (!process.waitFor(10, TimeUnit.SECONDS)) {
-                process.destroyForcibly()
-            }
-            readers.forEach { it.join(5_000) }
+            gateway.close()
         }
 
         return GatewayRun(
-            stdout = synchronized(stdout) { stdout.toString() },
-            stderr = synchronized(stderr) { stderr.toString() },
+            stdout = gateway.stdout(),
+            stderr = gateway.stderr(),
         )
     }
-
-    /**
-     * Launches the gateway application as a subprocess configured through environment
-     * variables.
-     */
-    private fun launchGateway(upstream: URI, port: Int, logLevel: String?): Process =
-        ProcessBuilder(
-            "${System.getProperty("java.home")}/bin/java",
-            "-cp",
-            System.getProperty("java.class.path"),
-            "io.vigilant.gateway.MainKt",
-        ).withTestRuntimeConfiguration()
-            .apply {
-            environment().apply {
-                put("VIGILANT_UPSTREAM_URL", upstream.toString())
-                put("VIGILANT_PORT", port.toString())
-                logLevel?.let { put("VIGILANT_LOG_LEVEL", it) }
-            }
-        }.start()
-
-    /**
-     * Spawns threads that continuously drain the process stdout and stderr into the
-     * builders, so the subprocess never blocks on full OS pipe buffers.
-     */
-    private fun pumpProcessOutput(process: Process, stdout: StringBuilder, stderr: StringBuilder): List<Thread> =
-        listOf(
-            process.inputStream to stdout,
-            process.errorStream to stderr,
-        ).map { (stream, builder) ->
-            thread {
-                stream.bufferedReader().forEachLine { line ->
-                    synchronized(builder) { builder.append(line).append('\n') }
-                }
-            }
-        }
 
     /**
      * Asserts that every non-blank stdout line parses as an independent JSON object.
@@ -486,30 +448,6 @@ class BypassProxyServiceTest {
             }
     }
 
-    /**
-     * Waits until the freshly launched gateway accepts HTTP traffic, failing fast
-     * when the process exits before becoming ready.
-     */
-    private fun awaitGateway(process: Process, port: Int, stderr: StringBuilder): WebClient {
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
-        var lastError: Exception? = null
-        while (System.nanoTime() < deadline) {
-            if (!process.isAlive) {
-                throw AssertionError("gateway exited before becoming ready: ${synchronized(stderr) { stderr }}")
-            }
-            try {
-                val client = WebClient.of("http://127.0.0.1:$port")
-                client.get("/ready").aggregate().join()
-                return client
-            } catch (e: Exception) {
-                lastError = e
-                Thread.sleep(200)
-            }
-        }
-        throw AssertionError("gateway did not become ready within 30 seconds", lastError)
-    }
-
-    private fun freePort(): Int = ServerSocket(0).use { it.localPort }
 
     private fun startGateway(upstream: Server): Server = startGateway(serverUri(upstream), WebClient.of())
 

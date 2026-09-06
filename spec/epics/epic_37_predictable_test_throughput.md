@@ -98,7 +98,7 @@ VIG-31 Identity lookup cache clarification and implementation
 
 - [x] [VIG-37-01: Stable test timing report](../issues/epic_37/issue_37_01_test_timing_report.md) - `Done`
 - [x] [VIG-37-02: Split gateway E2E by behavior](../issues/epic_37/issue_37_02_gateway_e2e_split.md) - `Done`
-- [ ] [VIG-37-03: Isolate child-process E2E](../issues/epic_37/issue_37_03_process_test_isolation.md) - `Ready for implementation`
+- [x] [VIG-37-03: Isolate child-process E2E](../issues/epic_37/issue_37_03_process_test_isolation.md) - `Done`
 - [ ] [VIG-37-04: Qualify four test workers](../issues/epic_37/issue_37_04_four_worker_qualification.md) - `Ready for implementation`
 
 ## Не входит

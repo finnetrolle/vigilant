@@ -13,6 +13,7 @@ plugins {
     jacoco
     id("org.sonarqube") version "7.4.0.8496"
     id("io.vigilant.test-timing-report")
+    id("io.vigilant.process-test-isolation")
 }
 
 gatling {
@@ -188,8 +189,18 @@ tasks.test {
     dependsOn("installDist")
 }
 
+tasks.named<Test>("processTest") {
+    dependsOn("installDist")
+}
+
 tasks.named<TestTimingReportTask>("testTimingReport") {
     dependsOn(tasks.named("test"))
+    taskResultsDirectories.set(
+        mapOf(
+            ":processTest" to layout.buildDirectory.dir("test-results/processTest").get(),
+            ":test" to layout.buildDirectory.dir("test-results/test").get(),
+        ),
+    )
     outputs.upToDateWhen { false }
 }
 

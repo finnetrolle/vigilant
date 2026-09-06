@@ -14,6 +14,10 @@ gradlePlugin {
             id = "io.vigilant.test-timing-report"
             implementationClass = "io.vigilant.build.TestTimingReportPlugin"
         }
+        create("processTestIsolation") {
+            id = "io.vigilant.process-test-isolation"
+            implementationClass = "io.vigilant.build.ProcessTestIsolationPlugin"
+        }
     }
 }
 

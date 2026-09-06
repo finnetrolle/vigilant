@@ -17,8 +17,10 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import org.junit.jupiter.api.Tag
 
 /** Packaged-process E2E evidence for External identity startup and HTTP composition. */
+@Tag("process-e2e")
 class ExternalIdentityProcessTest {
     private val fixture = GatewayTestFixture()
     private var process: GatewayProcessFixture? = null

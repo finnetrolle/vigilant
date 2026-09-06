@@ -15,7 +15,8 @@
 ~~~bash
 ./gradlew build
 ./gradlew test
-./gradlew test --tests "io.vigilant.gateway.proxy.BypassProxyServiceTest"
+./gradlew test -x processTest --tests "io.vigilant.gateway.proxy.BypassProxyServiceTest"
+./gradlew processTest --tests "io.vigilant.gateway.MainTest"
 ./gradlew run
 ./gradlew installDist
 ./gradlew ociArtifact
@@ -40,7 +41,15 @@ graceful shutdown без application-owned audit directory.
 - validation graph в `spec/`;
 - проверку, что JMH dependencies отсутствуют в production runtime classpath.
 
+Каждый `./gradlew test` и `./gradlew build` сначала выполняет полный
+`process-e2e` набор ровно один раз через отдельный serial `processTest`, затем
+выполняет остальные tests через `test`. Focused child-process case запускается
+командой `./gradlew processTest --tests <pattern>`. Оба tasks используют один
+fork до отдельной four-worker qualification VIG-37-04.
+
 Proxy behavior tests используют реальные Armeria servers на ephemeral ports.
+Cross-process gateway tests получают never-reused loopback ports, process и
+stdout/stderr readers только через `GatewayProcessFixture`.
 
 ## Дополнительные проверки
 
@@ -60,7 +69,8 @@ Proxy behavior tests используют реальные Armeria servers на 
 ./gradlew testTimingReport
 ~~~
 
-`testTimingReport` зависит от `test`, читает его актуальные JUnit XML results и
+`testTimingReport` зависит от `test`, который завершает обе execution lanes,
+читает distinct актуальные JUnit XML results `processTest` и `test` и
 детерминированно создаёт два generated artifact:
 
 - `build/reports/test-throughput/test-timing.json` - machine-readable source

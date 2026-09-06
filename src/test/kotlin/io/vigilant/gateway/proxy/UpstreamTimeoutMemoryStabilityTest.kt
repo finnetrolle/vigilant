@@ -12,11 +12,13 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import org.junit.jupiter.api.Tag
 
 /**
  * Guards the packaged gateway against retaining completed exchanges until a
  * long upstream response timeout expires.
  */
+@Tag("process-e2e")
 class UpstreamTimeoutMemoryStabilityTest {
     private val fixture = GatewayTestFixture()
 

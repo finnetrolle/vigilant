@@ -135,7 +135,7 @@ internal class BridgeIdentityClient(
         val operations =
             synchronized(lifecycleLock) {
                 if (!closed.compareAndSet(false, true)) return
-                active.toList()
+                active.toTypedArray()
             }
         operations.forEach { operation -> operation.cancel(false) }
     }
