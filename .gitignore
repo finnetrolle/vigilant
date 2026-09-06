@@ -1,6 +1,7 @@
 # Gradle / build
 .gradle/
-build/
+/build/
+/buildSrc/build/
 out/
 
 # IDE

@@ -1,4 +1,5 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import io.vigilant.build.TestTimingReportTask
 
 plugins {
     kotlin("jvm") version "2.4.10"
@@ -11,6 +12,7 @@ plugins {
     application
     jacoco
     id("org.sonarqube") version "7.4.0.8496"
+    id("io.vigilant.test-timing-report")
 }
 
 gatling {
@@ -184,6 +186,11 @@ tasks.register("ociArtifact") {
 tasks.test {
     useJUnitPlatform()
     dependsOn("installDist")
+}
+
+tasks.named<TestTimingReportTask>("testTimingReport") {
+    dependsOn(tasks.named("test"))
+    outputs.upToDateWhen { false }
 }
 
 tasks.named<JavaCompile>("compileGatlingJava") {

@@ -1,6 +1,6 @@
 # VIG-37-01: Stable test timing report
 
-**Статус:** Ready for implementation
+**Статус:** Done
 **Epic:** [EPIC-37](../../epics/epic_37_predictable_test_throughput.md)
 **Ветка:** Measurement > deterministic report and baseline
 **Зависит от:** [VIG-30](../issue_30_external_identity_extractor.md)
@@ -73,19 +73,25 @@ dirty-tree fingerprint и одной машине, без concurrent Gradle invo
 
 ## Критерии готовности
 
-- [ ] RED/GREEN tests доказывают exact `schemaVersion=1`, metadata, task/class/
+- [x] RED/GREEN tests доказывают exact `schemaVersion=1`, metadata, task/class/
   whole-suite totals, integer milliseconds и deterministic ordering независимо
   от порядка XML files.
-- [ ] Отдельные cases доказывают clean replacement старых outputs и explicit
+- [x] Отдельные cases доказывают clean replacement старых outputs и explicit
   failure для missing, empty, malformed, duplicate и incomplete input.
-- [ ] `testTimingReport` на реальном suite создаёт JSON и Markdown только под
+- [x] `testTimingReport` на реальном suite создаёт JSON и Markdown только под
   `build/reports/test-throughput/`; `git status` не показывает generated files.
-- [ ] Три baseline runs выполнены строго последовательно с одним worker на
+- [x] Три baseline runs выполнены строго последовательно с одним worker на
   одном HEAD/tree fingerprint; summary содержит все три wall-clock values и
   median.
-- [ ] Report tests и task доступны focused commands; актуальные KDoc/Javadoc
+- [x] Report tests и task доступны focused commands; актуальные KDoc/Javadoc
   добавлены для новых build/test declarations и lifecycle helpers.
-- [ ] `./gradlew validateWorkItems` и `./gradlew build` проходят.
+- [x] `./gradlew validateWorkItems` и `./gradlew build` проходят.
+
+## Dynamic evidence
+
+- `./gradlew -p buildSrc test --tests "io.vigilant.build.TestTimingReportTaskFunctionalTest" --no-daemon` validates the synthetic Gradle-task seam, exact rendering and all five invalid-input paths.
+- `./gradlew testTimingReport -x test --no-daemon` renders the current real JUnit XML suite only under `build/reports/test-throughput/`.
+- Three strictly sequential `./gradlew test testTimingReport --rerun-tasks --no-daemon -PtestMaxParallelForks=1` runs passed on HEAD `599865db581641c629bef19e060ec1e8ba733a13` and dirty-tree fingerprint `dd2c8c5931c393ea5825d28d502546c6ac0b2038d12e676959a371eb3b538906`: 17m20s, 17m14s and 17m18s; median 17m18s. Uncommitted snapshots and summary are under `build/reports/test-throughput/baseline/`.
 
 ## Не входит
 

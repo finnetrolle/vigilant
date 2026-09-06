@@ -54,6 +54,26 @@ Proxy behavior tests используют реальные Armeria servers на 
 
 `verifyAll` объединяет `build` и OWASP dependency check.
 
+## Test timing report
+
+~~~bash
+./gradlew testTimingReport
+~~~
+
+`testTimingReport` зависит от `test`, читает его актуальные JUnit XML results и
+детерминированно создаёт два generated artifact:
+
+- `build/reports/test-throughput/test-timing.json` - machine-readable source
+  of truth с snapshot metadata и task/class/whole-suite totals;
+- `build/reports/test-throughput/test-timing.md` - human-readable представление
+  того же snapshot со всеми test classes от самой медленной к самой быстрой.
+
+Оба файла заменяются целиком при каждом выполнении task и не добавляются в
+Git. Для принудительного измерения полного uncached suite используется
+`./gradlew test testTimingReport --rerun-tasks --no-daemon`; параметры
+сопоставимого baseline зафиксированы в
+[VIG-37-01](../spec/issues/epic_37/issue_37_01_test_timing_report.md).
+
 ## PII quality
 
 Canonical synthetic corpus является gating частью обычного `test`. Отдельный

@@ -3,7 +3,7 @@
 **Статус:** Ready for implementation
 **Epic:** [EPIC-37](../../epics/epic_37_predictable_test_throughput.md)
 **Ветка:** Test structure > independently selectable gateway behaviors
-**Зависит от:** [VIG-37-01](issue_37_01_test_timing_report.md)
+**Зависит от:** [VIG-37-01](issue_37_01_test_timing_report.md) (Done; generated baseline evidence is available locally under `build/reports/test-throughput/baseline/`)
 **Блокирует:** [VIG-37-03](issue_37_03_process_test_isolation.md)
 **Оценка:** 3-5 инженерных дней
 **Уверенность:** Medium
