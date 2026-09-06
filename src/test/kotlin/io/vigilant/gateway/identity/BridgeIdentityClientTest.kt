@@ -486,17 +486,28 @@ class BridgeIdentityClientTest {
     @Test
     fun `lookup admission is an immediate bounded nonfair semaphore`() {
         val bridgeCalls = java.util.concurrent.atomic.AtomicInteger()
-        val allPermitsHeld = CountDownLatch(2)
         val bridge =
             fixture.startServer {
-                bridgeCalls.incrementAndGet()
-                allPermitsHeld.countDown()
                 HttpResponse.streaming()
             }
-        val client = newClient(URI("${fixture.serverUri(bridge)}/identity"), Duration.ofSeconds(5), 2)
+        val observingClient =
+            WebClient.builder()
+                .decorator { delegate, ctx, request ->
+                    bridgeCalls.incrementAndGet()
+                    delegate.execute(ctx, request)
+                }.build()
+        val client =
+            instrumentedClient(
+                URI("${fixture.serverUri(bridge)}/identity"),
+                Duration.ofSeconds(5),
+                observingClient,
+                2,
+            )
         val first = client.lookup("first-holder-token")
         val second = client.lookup("second-holder-token")
-        assertTrue(allPermitsHeld.await(2, TimeUnit.SECONDS), "N holders did not acquire both permits")
+        assertFalse(first.isDone, "first admitted holder completed before release")
+        assertFalse(second.isDone, "second admitted holder completed before release")
+        assertEquals(2, bridgeCalls.get(), "N admitted holders did not start Bridge exchanges")
 
         val excess = client.lookup("excess-token")
 

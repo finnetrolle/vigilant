@@ -1,6 +1,6 @@
 # VIG-37-02: Split gateway E2E by behavior
 
-**Статус:** Ready for implementation
+**Статус:** Done
 **Epic:** [EPIC-37](../../epics/epic_37_predictable_test_throughput.md)
 **Ветка:** Test structure > independently selectable gateway behaviors
 **Зависит от:** [VIG-37-01](issue_37_01_test_timing_report.md) (Done; generated baseline evidence is available locally under `build/reports/test-throughput/baseline/`)
@@ -62,26 +62,54 @@ fixed port и cross-class ordering запрещены. Synchronization оста�
 
 ## Критерии готовности
 
-- [ ] Pre-split inventory зафиксирован generated evidence VIG-37-01; post-split
+- [x] Pre-split inventory зафиксирован generated evidence VIG-37-01; post-split
   multiset display paths, total tests, failures и skipped совпадают exactly.
-- [ ] Все исходные request-side cases находятся только в
+- [x] Все исходные request-side cases находятся только в
   `RequestInspectionE2eTest`, JSON response cases только в
   `JsonResponseEnforcementE2eTest`, SSE cases только в
   `SseResponseEnforcementE2eTest`, identity/tracing/metrics/lookup cases только
   в `GatewayIdentityE2eTest`.
-- [ ] Каждый из четырёх classes проходит отдельной focused `--tests` командой;
+- [x] Каждый из четырёх classes проходит отдельной focused `--tests` командой;
   исходный `PiiShadowProxyServiceTest` больше не содержит tests и удалён.
-- [ ] Shared helpers имеют одно canonical behavior и deterministic resource
+- [x] Shared helpers имеют одно canonical behavior и deterministic resource
   ownership. Нет shared mutable server/process/port, inter-class ordering,
   новых sleeps или widened timeout/assertion contract.
-- [ ] Production sources, runtime dependencies и user-visible behavior не
+- [x] Production sources, runtime dependencies и user-visible behavior не
   изменены. Diff review подтверждает отсутствие удалённых cases и ослабленных
   assertions.
-- [ ] `testTimingReport` показывает четыре отдельных class records и тот же
+- [x] `testTimingReport` показывает четыре отдельных class records и тот же
   whole-suite inventory. Актуальные KDoc/Javadoc присутствуют у всех новых или
   изменённых declarations, test methods и lifecycle helpers.
-- [ ] Focused classes, `./gradlew test --rerun-tasks -PtestMaxParallelForks=1`,
+- [x] Focused classes, `./gradlew test --rerun-tasks -PtestMaxParallelForks=1`,
   `./gradlew validateWorkItems` и `./gradlew build` проходят.
+
+## Dynamic evidence
+
+- Pre-refactor characterization
+  `./gradlew test --tests "io.vigilant.gateway.proxy.PiiShadowProxyServiceTest" --rerun-tasks -PtestMaxParallelForks=1`
+  прошёл за 7m51s: generated XML содержит 75 unique testcase display names,
+  0 failures и 0 skipped. JUnit XML не публикует assertion count, поэтому это
+  поле недоступно для всех 75 leaves и не заменено вычисленным proxy count.
+- Discovery RED до split:
+  `./gradlew test --tests "io.vigilant.gateway.proxy.RequestInspectionE2eTest" --tests "io.vigilant.gateway.proxy.JsonResponseEnforcementE2eTest" --tests "io.vigilant.gateway.proxy.SseResponseEnforcementE2eTest" --tests "io.vigilant.gateway.proxy.GatewayIdentityE2eTest" -PtestMaxParallelForks=1`
+  завершился expected failure `No tests found for given includes`.
+- Четыре независимых focused reruns прошли: request 21/0/0, JSON 15/0/0,
+  SSE 11/0/0 и identity 28/0/0 по tests/failures/skipped. Combined rerun прошёл
+  за 7m31s; owner-independent multiset `(displayName, dynamicPath)` совпал с
+  pre-split 75/75, outcomes совпали, duplicate paths отсутствуют.
+- `./gradlew inspectionResourceContractTest --rerun-tasks --no-daemon -PtestMaxParallelForks=1`
+  прошёл за 7m52s: task сохранил полный pre-split gateway inventory через все
+  четыре новых classes (21 + 15 + 11 + 28 = 75 tests) и по-прежнему включает
+  `BoundedRequestSourceTest` (15) и `ShutdownLifecycleTest` (2). Итоговый task
+  inventory - 92 tests, 0 failures, 0 errors и 0 skipped.
+- `./gradlew test testTimingReport --rerun-tasks --no-daemon -PtestMaxParallelForks=1`
+  прошёл за 17m18s: whole suite 1116 tests, 0 failures, 0 skipped. Report содержит
+  четыре distinct records: request 21, JSON 15, SSE 11 и identity 28. Старый
+  `PiiShadowProxyServiceTest` record отсутствует; generated evidence остаётся
+  только в ignored `build/reports/test-throughput/`.
+- `./gradlew validateWorkItems --no-daemon` и `./gradlew build --no-daemon`
+  прошли; build включает detekt, runtime-classpath guard, validator tests и
+  повторную проверку work-item graph.
 
 ## Не входит
 

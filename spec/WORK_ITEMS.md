@@ -127,7 +127,7 @@ Issue является листом mind map, если:
 | [VIG-34: Request-side PII enforcement](issues/issue_34_request_pii_enforcement.md) | `Draft` | reaction, rewrite и lifecycle contract требуют диалога | не оценено |
 | [VIG-35: Выбор production identity mode](issues/issue_35_production_identity_mode.md) | `Done` | завершена | 0 дней осталось |
 | [VIG-36: Очистка superseded требований и архитектурных документов](issues/issue_36_superseded_requirements_cleanup.md) | `Draft` | требуется inventory и завершение contract dependencies | не оценено |
-| [EPIC-37: Predictable and faster test suite](epics/epic_37_predictable_test_throughput.md) | `In progress` | 1/4 | 6-11 дней |
+| [EPIC-37: Predictable and faster test suite](epics/epic_37_predictable_test_throughput.md) | `In progress` | 2/4 | 3-6 дней |
 
 ## Active TODO: порядок следующей работы
 
@@ -232,10 +232,9 @@ Issue является листом mind map, если:
 - [ ] После стабилизации identity, enforcement и observability уточнить
   [VIG-33](issues/issue_33_availability_slo_and_operations.md).
 
-Текущий следующий шаг: реализовать Ready leaf
-[VIG-37-02](issues/epic_37/issue_37_02_gateway_e2e_split.md) поверх завершённого
-VIG-37-01, затем пройти EPIC-37 по dependency order и только после этого уточнить
-и реализовать VIG-31.
+Текущий следующий шаг: реализовать
+[VIG-37-03](issues/epic_37/issue_37_03_process_test_isolation.md), затем пройти
+EPIC-37 по dependency order и только после этого уточнить и реализовать VIG-31.
 VIG-29 завершён: ordinary JSON и SSE response используют exact
 `403`/`502`/`503` matrix.
 

@@ -229,7 +229,10 @@ val inspectionResourceContractTest = tasks.register<Test>("inspectionResourceCon
     useJUnitPlatform()
     filter {
         includeTestsMatching("io.vigilant.source.BoundedRequestSourceTest")
-        includeTestsMatching("io.vigilant.gateway.proxy.PiiShadowProxyServiceTest")
+        includeTestsMatching("io.vigilant.gateway.proxy.RequestInspectionE2eTest")
+        includeTestsMatching("io.vigilant.gateway.proxy.JsonResponseEnforcementE2eTest")
+        includeTestsMatching("io.vigilant.gateway.proxy.SseResponseEnforcementE2eTest")
+        includeTestsMatching("io.vigilant.gateway.proxy.GatewayIdentityE2eTest")
         includeTestsMatching("io.vigilant.gateway.ShutdownLifecycleTest")
     }
     group = "verification"
