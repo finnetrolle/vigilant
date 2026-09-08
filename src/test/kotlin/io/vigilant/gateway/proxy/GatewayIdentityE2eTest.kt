@@ -34,6 +34,7 @@ import io.opentelemetry.sdk.trace.export.SimpleSpanProcessor
 import io.opentelemetry.sdk.trace.export.SpanExporter
 import io.vigilant.gateway.GatewayProcessFixture
 import io.vigilant.gateway.GatewayTestFixture
+import io.vigilant.gateway.closeWithinTestTimeout
 import io.vigilant.gateway.RequestAuditTestContract
 import io.vigilant.gateway.RawHttp1TestUpstream
 import io.vigilant.gateway.DemandObservingPublisher
@@ -178,7 +179,7 @@ internal class GatewayIdentityE2eTest : GatewayE2eTestSupport() {
         timeout: Duration = Duration.ofSeconds(1),
     ): BridgeIdentityClient {
         val telemetry = OpenTelemetry.noop()
-        val webClient = WebClient.of()
+        val webClient = isolatedUnboundClient()
         val bridgeClient =
             BridgeIdentityClient(
                 settings = ExternalIdentitySettings(endpoint, timeout),
@@ -234,7 +235,7 @@ internal class GatewayIdentityE2eTest : GatewayE2eTestSupport() {
                     ),
                 ),
         )
-        val client = WebClient.of(fixture.serverUri(gateway).toString())
+        val client = isolatedGatewayClient(fixture.serverUri(gateway))
         val cases = listOf("Bearer", "bEaReR upstream-token-sentinel")
 
         cases.forEachIndexed { index, authorization ->
@@ -330,7 +331,7 @@ internal class GatewayIdentityE2eTest : GatewayE2eTestSupport() {
                     .also { builder -> case.headers.forEach { (name, value) -> builder.add(name, value) } }
                     .build()
             val completed =
-                WebClient.of(fixture.serverUri(gateway))
+                isolatedGatewayClient(fixture.serverUri(gateway))
                     .execute(
                         HttpRequest.of(
                             requestHeaders,
@@ -390,7 +391,7 @@ internal class GatewayIdentityE2eTest : GatewayE2eTestSupport() {
             )
 
         val response =
-            WebClient.of(fixture.serverUri(gateway))
+            isolatedGatewayClient(fixture.serverUri(gateway))
                 .execute(chatCompletionsRequest("blocking-safe-identity"))
                 .aggregate()
                 .join()
@@ -420,7 +421,7 @@ internal class GatewayIdentityE2eTest : GatewayE2eTestSupport() {
             )
 
         val response =
-            WebClient.of(fixture.serverUri(gateway))
+            isolatedGatewayClient(fixture.serverUri(gateway))
                 .execute(chatCompletionsRequest("exceptional-identity-body-sentinel"))
                 .aggregate()
                 .get(2, TimeUnit.SECONDS)
@@ -453,7 +454,7 @@ internal class GatewayIdentityE2eTest : GatewayE2eTestSupport() {
             )
 
         val response =
-            WebClient.of(fixture.serverUri(gateway))
+            isolatedGatewayClient(fixture.serverUri(gateway))
                 .execute(chatCompletionsRequest("pending-identity-body-sentinel"))
 
         assertTrue(extractionStarted.await(2, TimeUnit.SECONDS), "identity extraction did not start")
@@ -547,7 +548,7 @@ internal class GatewayIdentityE2eTest : GatewayE2eTestSupport() {
                         .build()
 
                 val response =
-                    WebClient.of(fixture.serverUri(gateway))
+                    isolatedGatewayClient(fixture.serverUri(gateway))
                         .execute(HttpRequest.of(headers, HttpData.ofUtf8("auth-body-sentinel")))
                         .aggregate()
                         .join()
@@ -595,7 +596,7 @@ internal class GatewayIdentityE2eTest : GatewayE2eTestSupport() {
                 requestBodyDemandObserved = bodyDemanded,
             )
         val response =
-            WebClient.of(fixture.serverUri(gateway))
+            isolatedGatewayClient(fixture.serverUri(gateway))
                 .execute(
                     HttpRequest.of(
                         RequestHeaders.builder(
@@ -681,7 +682,7 @@ internal class GatewayIdentityE2eTest : GatewayE2eTestSupport() {
         val originalAuthorization = "bEaReR opaque-token.with+bytes"
         val originalBody = chatCompletionsBody("external-success-body")
         val clientResponse =
-            WebClient.of(fixture.serverUri(gateway))
+            isolatedGatewayClient(fixture.serverUri(gateway))
                 .execute(
                     HttpRequest.of(
                         RequestHeaders.builder(
@@ -765,7 +766,7 @@ internal class GatewayIdentityE2eTest : GatewayE2eTestSupport() {
                         requestBodyDemandObserved = bodyDemanded,
                     )
                 val response =
-                    WebClient.of(fixture.serverUri(gateway))
+                    isolatedGatewayClient(fixture.serverUri(gateway))
                         .execute(chatCompletionsRequestWithBody("$family-body-sentinel"))
                         .aggregate()
                         .join()
@@ -818,7 +819,7 @@ internal class GatewayIdentityE2eTest : GatewayE2eTestSupport() {
                 requestBodyDemandObserved = bodyDemanded,
             )
         val response =
-            WebClient.of(fixture.serverUri(gateway))
+            isolatedGatewayClient(fixture.serverUri(gateway))
                 .execute(chatCompletionsRequestWithBody("cancelled-external-body-sentinel"))
 
         assertTrue(bridgeReached.await(2, TimeUnit.SECONDS), "Bridge exchange did not start")
@@ -854,7 +855,7 @@ internal class GatewayIdentityE2eTest : GatewayE2eTestSupport() {
                     ),
                 requestBodyDemandObserved = bodyDemanded,
             )
-        val client = WebClient.of(fixture.serverUri(gateway))
+        val client = isolatedGatewayClient(fixture.serverUri(gateway))
         val holders =
             listOf("one", "two").map { name ->
                 client.execute(chatCompletionsRequestWithBody("holder-$name-body"))
@@ -899,7 +900,7 @@ internal class GatewayIdentityE2eTest : GatewayE2eTestSupport() {
             )
 
         val response =
-            WebClient.of(fixture.serverUri(gateway))
+            isolatedGatewayClient(fixture.serverUri(gateway))
                 .execute(chatCompletionsRequest("gateway-metric"))
                 .aggregate()
                 .join()
@@ -956,7 +957,7 @@ internal class GatewayIdentityE2eTest : GatewayE2eTestSupport() {
                 gracefulShutdownTimeout(Duration.ofMillis(50), Duration.ofSeconds(3))
             }
         val response =
-            WebClient.of(fixture.serverUri(gateway))
+            isolatedGatewayClient(fixture.serverUri(gateway))
                 .execute(chatCompletionsRequest("graceful-external"))
                 .aggregate()
         assertTrue(bridgeReached.await(2, TimeUnit.SECONDS), "admitted Bridge lookup did not start")
@@ -1014,7 +1015,7 @@ internal class GatewayIdentityE2eTest : GatewayE2eTestSupport() {
                 gracefulShutdownTimeout(Duration.ofMillis(50), Duration.ofSeconds(3))
             }
         val response =
-            WebClient.of(fixture.serverUri(gateway))
+            isolatedGatewayClient(fixture.serverUri(gateway))
                 .execute(chatCompletionsRequest("graceful-external-timeout"))
                 .aggregate()
         assertTrue(bridgeReached.await(2, TimeUnit.SECONDS), "admitted Bridge lookup did not start")
@@ -1061,12 +1062,12 @@ internal class GatewayIdentityE2eTest : GatewayE2eTestSupport() {
                 gracefulShutdownTimeout(Duration.ofMillis(50), Duration.ofMillis(500))
             }
         val response =
-            WebClient.of(fixture.serverUri(gateway))
+            isolatedGatewayClient(fixture.serverUri(gateway))
                 .execute(chatCompletionsRequestWithBody("forced-external-body-sentinel"))
                 .aggregate()
         assertTrue(bridgeReached.await(2, TimeUnit.SECONDS), "active Bridge lookup did not start")
 
-        gateway.stop().join()
+        gateway.closeWithinTestTimeout()
         bridgeClient.close()
 
         assertTrue(bridgeCancelled.await(2, TimeUnit.SECONDS), "forced drain did not cancel Bridge")
@@ -1096,7 +1097,7 @@ internal class GatewayIdentityE2eTest : GatewayE2eTestSupport() {
             )
 
         val response =
-            WebClient.of(fixture.serverUri(gateway))
+            isolatedGatewayClient(fixture.serverUri(gateway))
                 .execute(chatCompletionsRequest("executor-rejected"))
                 .aggregate()
                 .join()
@@ -1151,7 +1152,7 @@ internal class GatewayIdentityE2eTest : GatewayE2eTestSupport() {
                 HttpData.ofUtf8(chatCompletionsBody("jwt-runtime-body")),
             )
 
-        val response = WebClient.of(fixture.serverUri(gateway)).execute(request).aggregate().join()
+        val response = isolatedGatewayClient(fixture.serverUri(gateway)).execute(request).aggregate().join()
 
         assertEquals(HttpStatus.OK, response.status())
         assertEquals(listOf(authorization), upstreamAuthorizations)
@@ -1189,7 +1190,7 @@ internal class GatewayIdentityE2eTest : GatewayE2eTestSupport() {
                     ),
                 requestBodyDemandObserved = bodyDemanded,
             )
-        val client = WebClient.of(fixture.serverUri(gateway))
+        val client = isolatedGatewayClient(fixture.serverUri(gateway))
 
         cases.entries.forEach { (name, token) ->
             bodyDemanded.set(false)
@@ -1218,7 +1219,7 @@ internal class GatewayIdentityE2eTest : GatewayE2eTestSupport() {
     fun `shadow request produces sibling inspection and upstream spans`() {
         val upstream = fixture.startServer { validChatCompletionsResponse() }
         val gateway = startShadowGateway(fixture.serverUri(upstream))
-        val client = WebClient.of(fixture.serverUri(gateway).toString())
+        val client = isolatedGatewayClient(fixture.serverUri(gateway))
 
         val response = client.execute(
             HttpRequest.of(
@@ -1265,7 +1266,7 @@ internal class GatewayIdentityE2eTest : GatewayE2eTestSupport() {
                 .build()
                 .also(closeables::add)
         val telemetry = OpenTelemetry.noop()
-        val bridgeWebClient = WebClient.of()
+        val bridgeWebClient = isolatedUnboundClient()
         val bridgeClient =
             BridgeIdentityClient(
                 settings =
@@ -1287,7 +1288,7 @@ internal class GatewayIdentityE2eTest : GatewayE2eTestSupport() {
             )
 
         val response =
-            WebClient.of(fixture.serverUri(gateway))
+            isolatedGatewayClient(fixture.serverUri(gateway))
                 .execute(chatCompletionsRequest("external-parentage"))
                 .aggregate()
                 .join()

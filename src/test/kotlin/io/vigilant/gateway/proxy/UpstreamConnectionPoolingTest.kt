@@ -1,11 +1,12 @@
 package io.vigilant.gateway.proxy
 
 import com.linecorp.armeria.client.ClientFactory
-import com.linecorp.armeria.client.WebClient
 import com.linecorp.armeria.common.AggregatedHttpResponse
 import com.linecorp.armeria.common.HttpStatus
 import com.linecorp.armeria.server.Server
 import io.vigilant.gateway.GatewayTestFixture
+import io.vigilant.gateway.closeAllResources
+import io.vigilant.gateway.closeWithinTestTimeout
 import io.vigilant.gateway.readBoundedHttp1RequestHead
 import io.vigilant.gateway.config.loadAppConfig
 import java.io.BufferedInputStream
@@ -45,9 +46,12 @@ class UpstreamConnectionPoolingTest {
     /** Closes every gateway, upstream client factory, and raw upstream created by a test. */
     @AfterTest
     fun closeResources() {
-        fixture.close()
-        upstreamClientFactories.forEach { it.closeAsync().join() }
-        upstreams.asReversed().forEach(Http1KeepAliveUpstream::close)
+        val closeActions = buildList<() -> Unit> {
+            add(fixture::close)
+            upstreamClientFactories.asReversed().forEach { factory -> add(factory::closeWithinTestTimeout) }
+            upstreams.asReversed().forEach { upstream -> add(upstream::close) }
+        }
+        closeAllResources(*closeActions.toTypedArray())
     }
 
     /** Verifies that sequential requests reuse one upstream connection before its idle timeout. */
@@ -55,7 +59,7 @@ class UpstreamConnectionPoolingTest {
     fun `sequential requests before idle timeout reuse one upstream connection`() {
         val upstream = startUpstream()
         val gateway = startGateway(upstream, connectionIdleTimeout = Duration.ofSeconds(2))
-        val client = WebClient.of(fixture.serverUri(gateway).toString())
+        val client = fixture.isolatedWebClient(fixture.serverUri(gateway))
         val paths = (1..4).map { "/sequential/$it" }
 
         paths.forEach { path ->
@@ -73,7 +77,7 @@ class UpstreamConnectionPoolingTest {
     fun `bounded concurrent traffic reuses connections across requests`() {
         val upstream = startUpstream(responseDelay = Duration.ofMillis(75))
         val gateway = startGateway(upstream, connectionIdleTimeout = Duration.ofSeconds(2))
-        val client = WebClient.of(fixture.serverUri(gateway).toString())
+        val client = fixture.isolatedWebClient(fixture.serverUri(gateway))
         val paths = (1..CONCURRENT_REQUEST_COUNT).map { "/concurrent/$it" }
         val executor = Executors.newFixedThreadPool(CONCURRENT_CLIENTS)
 
@@ -104,7 +108,7 @@ class UpstreamConnectionPoolingTest {
     fun `request after configured idle timeout uses a new connection and still succeeds`() {
         val upstream = startUpstream()
         val gateway = startGateway(upstream, connectionIdleTimeout = Duration.ofMillis(200))
-        val client = WebClient.of(fixture.serverUri(gateway).toString())
+        val client = fixture.isolatedWebClient(fixture.serverUri(gateway))
         val firstPath = "/idle/first"
         val secondPath = "/idle/second"
 

@@ -1,5 +1,6 @@
 package io.vigilant.gateway.metrics
 
+import com.linecorp.armeria.client.ClientFactory
 import com.linecorp.armeria.client.WebClient
 import com.linecorp.armeria.common.HttpData
 import com.linecorp.armeria.common.HttpObject
@@ -7,11 +8,14 @@ import com.linecorp.armeria.common.HttpResponse
 import com.linecorp.armeria.common.HttpStatus
 import com.linecorp.armeria.common.MediaType
 import com.linecorp.armeria.common.ResponseHeaders
+import com.linecorp.armeria.server.Server
 import io.opentelemetry.api.common.AttributeKey.stringKey
 import io.opentelemetry.sdk.metrics.SdkMeterProvider
 import io.opentelemetry.sdk.metrics.data.MetricData
 import io.vigilant.gateway.GatewayProcessFixture
 import io.vigilant.gateway.GatewayTestFixture
+import io.vigilant.gateway.closeWithinTestTimeout
+import io.vigilant.gateway.closeAllResources
 import java.time.Duration
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -31,17 +35,24 @@ import org.reactivestreams.Subscription
  */
 class MetricsServiceTest {
     private val fixture = GatewayTestFixture()
+    private val upstreamClientFactory = ClientFactory.builder().build()
+    private val gatewayClientFactory = ClientFactory.builder().build()
+    private val upstreamClient = WebClient.builder().factory(upstreamClientFactory).build()
     private val reader = TestMetricReader()
     private val meterProvider = SdkMeterProvider.builder()
         .registerMetricReader(reader)
         .build()
     private val meter = meterProvider.get("io.vigilant.gateway.test")
 
-    /** Releases servers and the metrics SDK after every scenario. */
+    /** Releases servers, both directional client pools, and the metrics SDK after every scenario. */
     @AfterTest
     fun tearDown() {
-        fixture.close()
-        meterProvider.close()
+        closeAllResources(
+            fixture::close,
+            gatewayClientFactory::closeWithinTestTimeout,
+            upstreamClientFactory::closeWithinTestTimeout,
+            meterProvider::close,
+        )
     }
 
     /**
@@ -58,8 +69,8 @@ class MetricsServiceTest {
                 HttpData.ofUtf8("response body-secret-3A7D"),
             )
         }
-        val gateway = fixture.startMetricsGateway(fixture.serverUri(upstream), meter)
-        val client = WebClient.of(fixture.serverUri(gateway).toString())
+        val gateway = fixture.startMetricsGateway(fixture.serverUri(upstream), meter, upstreamClient)
+        val client = gatewayClient(gateway)
 
         val response = client.get("/v1/models?token=query-secret-9B2E").aggregate().join()
 
@@ -110,8 +121,8 @@ class MetricsServiceTest {
                 }
             }
         }
-        val gateway = fixture.startMetricsGateway(fixture.serverUri(upstream), meter)
-        val responseFuture = WebClient.of(fixture.serverUri(gateway).toString())
+        val gateway = fixture.startMetricsGateway(fixture.serverUri(upstream), meter, upstreamClient)
+        val responseFuture = gatewayClient(gateway)
             .get("/v1/stream")
             .aggregate()
 
@@ -153,8 +164,8 @@ class MetricsServiceTest {
                 else -> HttpResponse.of(HttpStatus.NOT_FOUND)
             }
         }
-        val gateway = fixture.startMetricsGateway(fixture.serverUri(upstream), meter)
-        val client = WebClient.of(fixture.serverUri(gateway).toString())
+        val gateway = fixture.startMetricsGateway(fixture.serverUri(upstream), meter, upstreamClient)
+        val client = gatewayClient(gateway)
 
         val clientError = client.get("/client-error").aggregate().join()
         val serverError = client.get("/server-error").aggregate().join()
@@ -179,12 +190,10 @@ class MetricsServiceTest {
     @Test
     fun `upstream response timeout increments timeout metric`() {
         val upstream = fixture.startServer { HttpResponse.streaming() }
-        val upstreamClient = WebClient.builder()
-            .responseTimeout(Duration.ofMillis(200))
-            .build()
-        val gateway = fixture.startMetricsGateway(fixture.serverUri(upstream), meter, upstreamClient)
+        val timedUpstreamClient = timedClient(Duration.ofMillis(200))
+        val gateway = fixture.startMetricsGateway(fixture.serverUri(upstream), meter, timedUpstreamClient)
 
-        val response = WebClient.of(fixture.serverUri(gateway).toString())
+        val response = gatewayClient(gateway)
             .get("/v1/models")
             .aggregate()
             .join()
@@ -206,13 +215,11 @@ class MetricsServiceTest {
                 response.write(HttpData.ofUtf8("partial"))
             }
         }
-        val upstreamClient = WebClient.builder()
-            .responseTimeout(Duration.ofMillis(200))
-            .build()
-        val gateway = fixture.startMetricsGateway(fixture.serverUri(upstream), meter, upstreamClient)
+        val timedUpstreamClient = timedClient(Duration.ofMillis(200))
+        val gateway = fixture.startMetricsGateway(fixture.serverUri(upstream), meter, timedUpstreamClient)
 
         val exchange = runCatching {
-            WebClient.of(fixture.serverUri(gateway).toString())
+            gatewayClient(gateway)
                 .get("/v1/stream")
                 .aggregate()
                 .join()
@@ -232,10 +239,10 @@ class MetricsServiceTest {
                 response.close(IllegalStateException("upstream stream failed"))
             }
         }
-        val gateway = fixture.startMetricsGateway(fixture.serverUri(upstream), meter)
+        val gateway = fixture.startMetricsGateway(fixture.serverUri(upstream), meter, upstreamClient)
 
         val exchange = runCatching {
-            WebClient.of(fixture.serverUri(gateway).toString())
+            gatewayClient(gateway)
                 .get("/v1/stream")
                 .aggregate()
                 .join()
@@ -256,9 +263,9 @@ class MetricsServiceTest {
         val deadUpstream = java.net.URI.create(
             "http://127.0.0.1:${GatewayProcessFixture.reserveNonEphemeralPort()}",
         )
-        val gateway = fixture.startMetricsGateway(deadUpstream, meter)
+        val gateway = fixture.startMetricsGateway(deadUpstream, meter, upstreamClient)
 
-        val response = WebClient.of(fixture.serverUri(gateway).toString())
+        val response = gatewayClient(gateway)
             .get("/v1/models?token=query-secret-7F4C")
             .aggregate()
             .join()
@@ -288,10 +295,10 @@ class MetricsServiceTest {
                 response
             },
         )
-        val gateway = fixture.startMetricsGateway(fixture.serverUri(upstream), meter)
+        val gateway = fixture.startMetricsGateway(fixture.serverUri(upstream), meter, upstreamClient)
         val clientCancelled = CountDownLatch(1)
 
-        WebClient.of(fixture.serverUri(gateway).toString()).get("/v1/stream").subscribe(
+        gatewayClient(gateway).get("/v1/stream").subscribe(
             object : Subscriber<HttpObject> {
                 private lateinit var subscription: Subscription
 
@@ -330,6 +337,19 @@ class MetricsServiceTest {
         assertFalse(reader.collectAllMetrics().any { it.name == "vigilant.proxy.timeouts" })
         assertFalse(reader.collectAllMetrics().any { it.name == "vigilant.proxy.transport_errors" })
     }
+
+    /** Builds a gateway client isolated from upstream transport failures in this test instance. */
+    private fun gatewayClient(server: Server): WebClient =
+        WebClient.builder(fixture.serverUri(server).toString())
+            .factory(gatewayClientFactory)
+            .build()
+
+    /** Builds an unbound upstream client with [timeout] on the upstream-only connection pool. */
+    private fun timedClient(timeout: Duration): WebClient =
+        WebClient.builder()
+            .factory(upstreamClientFactory)
+            .responseTimeout(timeout)
+            .build()
 
     /** Waits until all metrics produced by a completed request are collectable. */
     private fun awaitMetrics(): Collection<MetricData> {

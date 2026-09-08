@@ -14,6 +14,7 @@ plugins {
     id("org.sonarqube") version "7.4.0.8496"
     id("io.vigilant.test-timing-report")
     id("io.vigilant.process-test-isolation")
+    id("io.vigilant.test-throughput-qualification")
 }
 
 gatling {

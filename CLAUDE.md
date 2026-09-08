@@ -42,7 +42,7 @@ explicitly requires it.
 
 ```bash
 ./gradlew build                 # compile + tests
-./gradlew test                  # full serial processTest lane, then non-process tests
+./gradlew test                  # full serial processTest lane, then four-worker non-process tests
 ./gradlew test -x processTest --tests "io.vigilant.gateway.proxy.BypassProxyServiceTest"  # single non-process test class
 ./gradlew processTest --tests "io.vigilant.gateway.MainTest"  # focused child-process suite
 ./gradlew run                   # run MainKt directly; same config requirements as the distribution
@@ -61,6 +61,7 @@ VIGILANT_CONFIG=./vigilant.conf.example ./build/install/vigilant/bin/vigilant
 ./gradlew dependencyCheckAnalyze # OWASP CVE scan of the dependency tree
 ./gradlew validateWorkItems       # work-item graph consistency; also wired into check
 ./gradlew piiQualityReport        # canonical synthetic PII quality JSON/Markdown report
+./gradlew testThroughputQualification # exact local 3 + 3 + 10 four-worker qualification
 ./gradlew verifyAll              # full local verification: build + dependency check
 ./gradlew installGitHooks        # one-time after clone: installs pre-push hook from config/git/hooks/
 ```
@@ -274,10 +275,11 @@ They supplement the TDD loop above and do not replace its RED -> GREEN order.
 - Do not prove streaming or ordering with wall-clock timestamp races or sleeps.
   Use explicit handshakes: hold the final upstream chunk or state transition
   until the downstream observation has occurred, then release it.
-- Use Armeria `http(0)` for in-process servers. Cross-process tests must use the
-  shared port-reservation fixture or a validated non-ephemeral reservation;
-  never close `ServerSocket(0)` and later ask another process to bind the
-  released port.
+- Use the canonical Armeria loopback-address helper for in-process servers: it
+  binds `127.0.0.1` with port `0`, matching the client URI family while retaining
+  kernel-owned ephemeral allocation. Cross-process tests must use the shared
+  port-reservation fixture or a validated non-ephemeral reservation; never close
+  `ServerSocket(0)` and later ask another process to bind the released port.
 - Keep process launch configuration centralized. Whenever startup gains a
   mandatory file, environment variable, or resource, audit normal process
   tests, packaged-process tests, performance fixtures, OCI smoke tests, and

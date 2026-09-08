@@ -56,9 +56,10 @@ class BypassProxyResponseBackpressureTest {
             )
         }
         val gateway = fixture.startServer(
-            BypassProxyService(fixture.serverUri(upstream), WebClient.of()),
+            BypassProxyService(fixture.serverUri(upstream), fixture.isolatedWebClient()),
         )
         val client = WebClient.builder(fixture.serverUri(gateway).toString())
+            .factory(fixture.isolatedClientFactory())
             .responseTimeout(RESPONSE_TIMEOUT)
             .build()
         val received = SlowResponseSubscriber()

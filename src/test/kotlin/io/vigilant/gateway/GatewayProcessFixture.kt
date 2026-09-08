@@ -1,5 +1,6 @@
 package io.vigilant.gateway
 
+import com.linecorp.armeria.client.ClientFactory
 import com.linecorp.armeria.client.WebClient
 import com.linecorp.armeria.common.HttpStatus
 import java.io.IOException
@@ -33,6 +34,9 @@ internal class GatewayProcessFixture internal constructor(
     /** Reader threads, deferred failures, and the shared fixture terminal marker. */
     private val outputLifecycle: GatewayProcessOutputLifecycle,
 ) : AutoCloseable {
+    /** Isolates readiness and scenario requests from process-global connection reuse. */
+    private val clientFactory = ClientFactory.builder().build()
+
     /** Adapts one prebuilt reader for low-level fixture lifecycle tests. */
     internal constructor(
         process: Process,
@@ -59,6 +63,7 @@ internal class GatewayProcessFixture internal constructor(
      */
     fun awaitServing(probePath: String = "/readyz"): WebClient {
         val client = WebClient.builder("http://127.0.0.1:$port")
+            .factory(clientFactory)
             .responseTimeout(CLIENT_RESPONSE_TIMEOUT)
             .build()
         val deadline = System.nanoTime() + STARTUP_TIMEOUT.toNanos()
@@ -135,6 +140,7 @@ internal class GatewayProcessFixture internal constructor(
             },
             process.outputStream::close,
             ::awaitReaders,
+            clientFactory::closeWithinTestTimeout,
             process.inputStream::close,
             process.errorStream::close,
         )
@@ -388,7 +394,7 @@ internal class GatewayProcessOutputReader private constructor(
                             outputSignal.release()
                         }
                     } catch (failure: IOException) {
-                        if (!shutdownStarted.get() || failure.message != EXPECTED_STREAM_CLOSED_MESSAGE) {
+                        if (!shutdownStarted.get() || failure.message !in EXPECTED_STREAM_CLOSED_MESSAGES) {
                             throw failure
                         }
                     }
@@ -406,8 +412,9 @@ internal class GatewayProcessOutputReader private constructor(
             return GatewayProcessOutputReader(thread, failure).also { thread.start() }
         }
 
-        /** Exact JDK process-pipe failure emitted only when fixture shutdown closes a blocking reader. */
-        private const val EXPECTED_STREAM_CLOSED_MESSAGE = "Stream closed"
+        /** Exact JDK/macOS process-pipe failures emitted when shutdown closes a blocking reader. */
+        private val EXPECTED_STREAM_CLOSED_MESSAGES = setOf("Stream closed", "Bad file descriptor")
+
     }
 }
 

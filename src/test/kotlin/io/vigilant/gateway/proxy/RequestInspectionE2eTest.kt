@@ -5,7 +5,6 @@ import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.AppenderBase
 import com.linecorp.armeria.client.ClientFactory
-import com.linecorp.armeria.client.WebClient
 import com.linecorp.armeria.common.AggregatedHttpResponse
 import com.linecorp.armeria.common.AggregatedHttpRequest
 import com.linecorp.armeria.common.HttpData
@@ -299,7 +298,7 @@ internal class RequestInspectionE2eTest : GatewayE2eTestSupport() {
         val gateway = startShadowGateway(fixture.serverUri(upstream), detector = detector)
 
         val response =
-            WebClient.of(fixture.serverUri(gateway))
+            isolatedGatewayClient(fixture.serverUri(gateway))
                 .execute(chatCompletionsRequest("causal-audit"))
                 .aggregate()
 
@@ -346,7 +345,7 @@ internal class RequestInspectionE2eTest : GatewayE2eTestSupport() {
         }
         val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
         val gateway = startShadowGateway(fixture.serverUri(upstream))
-        val client = WebClient.of(fixture.serverUri(gateway).toString())
+        val client = isolatedGatewayClient(fixture.serverUri(gateway))
         val originalBody =
             """{ "model":"gpt-test", "messages":[{"role":"user","content":"contact """ +
                 """alice@example.com"}], "unknown":{"keep":true} }"""
@@ -511,7 +510,7 @@ internal class RequestInspectionE2eTest : GatewayE2eTestSupport() {
                 )
 
             val response =
-                WebClient.of(fixture.serverUri(gateway))
+                isolatedGatewayClient(fixture.serverUri(gateway))
                     .execute(chatCompletionsRequestWithBody(case.body))
                     .aggregate().join()
 
@@ -575,7 +574,7 @@ internal class RequestInspectionE2eTest : GatewayE2eTestSupport() {
         val blockingSink = BlockingAuditSink()
         attachAsyncAuditAppender("VIG-32-slow-full", blockingSink)
         val gateway = startShadowGateway(fixture.serverUri(upstream))
-        val client = WebClient.of(fixture.serverUri(gateway))
+        val client = isolatedGatewayClient(fixture.serverUri(gateway))
 
         val first = client.execute(chatCompletionsRequest("slow-sink-first")).aggregate()
 
@@ -632,7 +631,7 @@ internal class RequestInspectionE2eTest : GatewayE2eTestSupport() {
                 .build()
 
         val response =
-            WebClient.of(fixture.serverUri(gateway))
+            isolatedGatewayClient(fixture.serverUri(gateway))
                 .execute(HttpRequest.of(headers, HttpData.ofUtf8(body)))
                 .aggregate().join()
 
@@ -661,7 +660,7 @@ internal class RequestInspectionE2eTest : GatewayE2eTestSupport() {
 
         val malformedSentinel = "malformed-client-error-privacy-sentinel"
         val error =
-            WebClient.of(fixture.serverUri(gateway))
+            isolatedGatewayClient(fixture.serverUri(gateway))
                 .execute(
                     HttpRequest.of(
                         headers,
@@ -703,7 +702,7 @@ internal class RequestInspectionE2eTest : GatewayE2eTestSupport() {
             fixture.serverUri(upstream),
             requestBodyDemandObserved = requestBodyDemandObserved,
         )
-        val client = WebClient.of(fixture.serverUri(gateway).toString())
+        val client = isolatedGatewayClient(fixture.serverUri(gateway))
 
         val response =
             client.execute(
@@ -738,7 +737,7 @@ internal class RequestInspectionE2eTest : GatewayE2eTestSupport() {
             )
 
         val response =
-            WebClient.of(fixture.serverUri(gateway))
+            isolatedGatewayClient(fixture.serverUri(gateway))
                 .execute(
                     HttpRequest.of(
                         RequestHeaders.builder(HttpMethod.POST, "/v1/chat/completions")
@@ -765,7 +764,7 @@ internal class RequestInspectionE2eTest : GatewayE2eTestSupport() {
         }
         val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
         val gateway = startShadowGateway(fixture.serverUri(upstream))
-        val client = WebClient.of(fixture.serverUri(gateway).toString())
+        val client = isolatedGatewayClient(fixture.serverUri(gateway))
         val secretMalformedBody = "{\"model\":\"secret-model\",\"messages\":["
 
         val response =
@@ -794,7 +793,7 @@ internal class RequestInspectionE2eTest : GatewayE2eTestSupport() {
         }
         val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
         val gateway = startShadowGateway(fixture.serverUri(upstream))
-        val client = WebClient.of(fixture.serverUri(gateway).toString())
+        val client = isolatedGatewayClient(fixture.serverUri(gateway))
         val cases =
             listOf(
                 """{"model":"gpt-test","model":"other","messages":[{"role":"user","content":"secret"}]}""" to
@@ -833,7 +832,7 @@ internal class RequestInspectionE2eTest : GatewayE2eTestSupport() {
         }
         val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
         val gateway = startShadowGateway(fixture.serverUri(upstream))
-        val client = WebClient.of(fixture.serverUri(gateway).toString())
+        val client = isolatedGatewayClient(fixture.serverUri(gateway))
         val mediaSecret = "https://media.example/secret-image-token"
         val body =
             """{"model":"gpt-test","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"$mediaSecret"}}]}]}"""
@@ -881,7 +880,7 @@ internal class RequestInspectionE2eTest : GatewayE2eTestSupport() {
             )
         val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
         val gateway = startShadowGateway(fixture.serverUri(upstream), quota)
-        val client = WebClient.of(fixture.serverUri(gateway).toString())
+        val client = isolatedGatewayClient(fixture.serverUri(gateway))
         val body =
             """{"model":"gpt-test","messages":[{"role":"user","content":"body beyond configured capacity"}]}"""
 
@@ -923,7 +922,7 @@ internal class RequestInspectionE2eTest : GatewayE2eTestSupport() {
             )
         val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
         val gateway = startShadowGateway(fixture.serverUri(upstream), quota)
-        val client = WebClient.of(fixture.serverUri(gateway).toString())
+        val client = isolatedGatewayClient(fixture.serverUri(gateway))
         val request =
             HttpRequest.streaming(
                 RequestHeaders.builder(HttpMethod.POST, "/v1/chat/completions")
@@ -973,7 +972,7 @@ internal class RequestInspectionE2eTest : GatewayE2eTestSupport() {
         assertEquals(96, quota.retainedBytes)
         val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
         val gateway = startShadowGateway(fixture.serverUri(upstream), quota)
-        val client = WebClient.of(fixture.serverUri(gateway).toString())
+        val client = isolatedGatewayClient(fixture.serverUri(gateway))
 
         val response =
             client.execute(chatCompletionsRequest("x")).aggregate().join()
@@ -1009,7 +1008,7 @@ internal class RequestInspectionE2eTest : GatewayE2eTestSupport() {
             )
 
         val response =
-            WebClient.of(fixture.serverUri(gateway))
+            isolatedGatewayClient(fixture.serverUri(gateway))
                 .execute(chatCompletionsRequest("body failure"))
                 .aggregate().join()
 
@@ -1043,7 +1042,7 @@ internal class RequestInspectionE2eTest : GatewayE2eTestSupport() {
             detector = slowDetector,
             serviceContexts = serviceContexts,
         )
-        val client = WebClient.of(fixture.serverUri(gateway).toString())
+        val client = isolatedGatewayClient(fixture.serverUri(gateway))
         val response =
             client.execute(chatCompletionsRequest("hello"))
 
@@ -1099,7 +1098,7 @@ internal class RequestInspectionE2eTest : GatewayE2eTestSupport() {
                 quota = quota,
                 serviceContexts = serviceContexts,
             )
-        val client = WebClient.of(fixture.serverUri(gateway).toString())
+        val client = isolatedGatewayClient(fixture.serverUri(gateway))
         val request =
             HttpRequest.streaming(
                 RequestHeaders.builder(HttpMethod.POST, "/v1/chat/completions")
@@ -1155,7 +1154,7 @@ internal class RequestInspectionE2eTest : GatewayE2eTestSupport() {
                     gracefulShutdownTimeout(Duration.ofMillis(50), Duration.ofSeconds(3))
                 },
             )
-        val client = WebClient.of(fixture.serverUri(gateway).toString())
+        val client = isolatedGatewayClient(fixture.serverUri(gateway))
         val response = client.execute(chatCompletionsRequest("graceful source")).aggregate()
 
         assertTrue(detectorStarted.await(5, TimeUnit.SECONDS), "detector did not retain the complete source")
@@ -1197,7 +1196,7 @@ internal class RequestInspectionE2eTest : GatewayE2eTestSupport() {
                 slowDetector,
                 policyDeadline = Duration.ofMillis(50),
             )
-        val client = WebClient.of(fixture.serverUri(gateway).toString())
+        val client = isolatedGatewayClient(fixture.serverUri(gateway))
         val body = chatCompletionsBody("hello")
 
         val response = client.execute(chatCompletionsRequest("hello")).aggregate().join()
@@ -1242,7 +1241,7 @@ internal class RequestInspectionE2eTest : GatewayE2eTestSupport() {
         val body = chatCompletionsBody("detector error")
 
         val response =
-            WebClient.of(fixture.serverUri(gateway))
+            isolatedGatewayClient(fixture.serverUri(gateway))
                 .execute(chatCompletionsRequest("detector error"))
                 .aggregate().join()
 
@@ -1283,7 +1282,7 @@ internal class RequestInspectionE2eTest : GatewayE2eTestSupport() {
             )
 
         val response =
-            WebClient.of(fixture.serverUri(gateway))
+            isolatedGatewayClient(fixture.serverUri(gateway))
                 .execute(chatCompletionsRequest("unexpected policy failure"))
                 .aggregate().join()
 
@@ -1311,7 +1310,7 @@ internal class RequestInspectionE2eTest : GatewayE2eTestSupport() {
             quota = quota,
             serviceContexts = serviceContexts,
         )
-        val client = WebClient.of(fixture.serverUri(gateway).toString())
+        val client = isolatedGatewayClient(fixture.serverUri(gateway))
 
         val response =
             client.execute(chatCompletionsRequest("hello")).aggregate().join()

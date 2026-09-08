@@ -18,6 +18,10 @@ gradlePlugin {
             id = "io.vigilant.process-test-isolation"
             implementationClass = "io.vigilant.build.ProcessTestIsolationPlugin"
         }
+        create("testThroughputQualification") {
+            id = "io.vigilant.test-throughput-qualification"
+            implementationClass = "io.vigilant.build.TestThroughputQualificationPlugin"
+        }
     }
 }
 

@@ -5,7 +5,6 @@ import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.AppenderBase
 import com.linecorp.armeria.client.ClientFactory
-import com.linecorp.armeria.client.WebClient
 import com.linecorp.armeria.common.AggregatedHttpResponse
 import com.linecorp.armeria.common.AggregatedHttpRequest
 import com.linecorp.armeria.common.HttpData
@@ -250,7 +249,7 @@ internal class JsonResponseEnforcementE2eTest : GatewayE2eTestSupport() {
             )
         val received = ReceivedStream()
 
-        WebClient.of(fixture.serverUri(gateway))
+        isolatedGatewayClient(fixture.serverUri(gateway))
             .execute(chatCompletionsRequest("retain ordinary response"))
             .subscribe(received)
 
@@ -326,7 +325,7 @@ internal class JsonResponseEnforcementE2eTest : GatewayE2eTestSupport() {
             )
         val received = ReceivedStream()
 
-        WebClient.of(fixture.serverUri(gateway))
+        isolatedGatewayClient(fixture.serverUri(gateway))
             .execute(chatCompletionsRequest("request-safe"))
             .subscribe(received)
 
@@ -395,7 +394,7 @@ internal class JsonResponseEnforcementE2eTest : GatewayE2eTestSupport() {
                     )
 
                 val response =
-                    WebClient.of(fixture.serverUri(gateway))
+                    isolatedGatewayClient(fixture.serverUri(gateway))
                         .execute(chatCompletionsRequest("status ${status.code()}"))
                         .aggregate().join()
 
@@ -441,7 +440,7 @@ internal class JsonResponseEnforcementE2eTest : GatewayE2eTestSupport() {
         val gateway = startShadowGateway(fixture.serverUri(upstream), policyProvider = policies)
 
         val response =
-            WebClient.of(fixture.serverUri(gateway))
+            isolatedGatewayClient(fixture.serverUri(gateway))
                 .execute(chatCompletionsRequest("request-safe"))
                 .aggregate().join()
 
@@ -502,7 +501,7 @@ internal class JsonResponseEnforcementE2eTest : GatewayE2eTestSupport() {
         val gateway = startShadowGateway(fixture.serverUri(upstream), policyProvider = policies)
 
         val response =
-            WebClient.of(fixture.serverUri(gateway))
+            isolatedGatewayClient(fixture.serverUri(gateway))
                 .execute(chatCompletionsRequest("request-safe"))
                 .aggregate().join()
 
@@ -604,7 +603,7 @@ internal class JsonResponseEnforcementE2eTest : GatewayE2eTestSupport() {
             val gateway = startShadowGateway(fixture.serverUri(upstream), policyProvider = policies)
 
             val response =
-                WebClient.of(fixture.serverUri(gateway))
+                isolatedGatewayClient(fixture.serverUri(gateway))
                     .execute(chatCompletionsRequest("request-safe-$index"))
                     .aggregate().join()
 
@@ -684,7 +683,7 @@ internal class JsonResponseEnforcementE2eTest : GatewayE2eTestSupport() {
             val responseEventsBefore = events.count { event -> event.keyValue("phase") == "RESPONSE" }
 
             val response =
-                WebClient.of(fixture.serverUri(gateway))
+                isolatedGatewayClient(fixture.serverUri(gateway))
                     .execute(chatCompletionsRequest("request-safe"))
                     .aggregate().join()
 
@@ -771,7 +770,7 @@ internal class JsonResponseEnforcementE2eTest : GatewayE2eTestSupport() {
                 )
 
             val response =
-                WebClient.of(fixture.serverUri(gateway))
+                isolatedGatewayClient(fixture.serverUri(gateway))
                     .execute(chatCompletionsRequest("request-safe"))
                     .aggregate().join()
 
@@ -839,7 +838,7 @@ internal class JsonResponseEnforcementE2eTest : GatewayE2eTestSupport() {
                 HttpData.ofUtf8(chatCompletionsBody("request-body-private-sentinel")),
             )
 
-        val response = WebClient.of(fixture.serverUri(gateway)).execute(request).aggregate().join()
+        val response = isolatedGatewayClient(fixture.serverUri(gateway)).execute(request).aggregate().join()
 
         assertEquals(HttpStatus.OK, response.status())
         assertTrue(
@@ -933,7 +932,7 @@ internal class JsonResponseEnforcementE2eTest : GatewayE2eTestSupport() {
             )
 
         val response =
-            WebClient.of(fixture.serverUri(gateway))
+            isolatedGatewayClient(fixture.serverUri(gateway))
                 .execute(chatCompletionsRequest("request-safe"))
                 .aggregate().join()
 
@@ -987,7 +986,7 @@ internal class JsonResponseEnforcementE2eTest : GatewayE2eTestSupport() {
                 responseSourceCreated = responseSource::complete,
                 responseOutputObserved = disclosureProbe::observe,
             )
-        val response = WebClient.of(fixture.serverUri(gateway)).execute(chatCompletionsRequest("request-safe"))
+        val response = isolatedGatewayClient(fixture.serverUri(gateway)).execute(chatCompletionsRequest("request-safe"))
         val received = ReceivedStream()
         response.subscribe(received)
 
@@ -1035,7 +1034,7 @@ internal class JsonResponseEnforcementE2eTest : GatewayE2eTestSupport() {
                 responseSourceCreated = responseSource::complete,
                 responseOutputObserved = disclosureProbe::observe,
             )
-        val response = WebClient.of(fixture.serverUri(gateway)).execute(chatCompletionsRequest("request-safe"))
+        val response = isolatedGatewayClient(fixture.serverUri(gateway)).execute(chatCompletionsRequest("request-safe"))
         val received = ReceivedStream()
         response.subscribe(received)
 
@@ -1082,7 +1081,7 @@ internal class JsonResponseEnforcementE2eTest : GatewayE2eTestSupport() {
             ) {
                 gracefulShutdownTimeout(Duration.ofMillis(100), Duration.ofMillis(300))
             }
-        val response = WebClient.of(fixture.serverUri(gateway)).execute(chatCompletionsRequest("request-safe"))
+        val response = isolatedGatewayClient(fixture.serverUri(gateway)).execute(chatCompletionsRequest("request-safe"))
         val received = ReceivedStream()
         response.subscribe(received)
 
@@ -1124,7 +1123,9 @@ internal class JsonResponseEnforcementE2eTest : GatewayE2eTestSupport() {
                 responseSourceCreated = responseSource::complete,
                 responseOutputObserved = disclosureProbe::observe,
             )
-        val response = WebClient.of(fixture.serverUri(gateway)).execute(chatCompletionsRequest("cancel response"))
+        val response =
+            isolatedGatewayClient(fixture.serverUri(gateway))
+                .execute(chatCompletionsRequest("cancel response"))
         val received = ReceivedStream()
         response.subscribe(received)
 
@@ -1179,7 +1180,7 @@ internal class JsonResponseEnforcementE2eTest : GatewayE2eTestSupport() {
                 gracefulShutdownTimeout(Duration.ofMillis(100), Duration.ofMillis(300))
             }
         val response =
-            WebClient.of(fixture.serverUri(gateway))
+            isolatedGatewayClient(fixture.serverUri(gateway))
                 .execute(chatCompletionsRequest("shutdown response"))
         val received = ReceivedStream()
         response.subscribe(received)

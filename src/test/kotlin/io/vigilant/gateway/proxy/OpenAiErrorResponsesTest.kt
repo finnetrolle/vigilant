@@ -1,7 +1,6 @@
 package io.vigilant.gateway.proxy
 
 import com.fasterxml.jackson.databind.ObjectMapper
-import com.linecorp.armeria.client.WebClient
 import com.linecorp.armeria.common.HttpData
 import com.linecorp.armeria.common.HttpHeaderNames
 import com.linecorp.armeria.common.HttpMethod
@@ -86,7 +85,7 @@ class OpenAiErrorResponsesTest {
             fixture.startServer { request ->
                 OpenAiErrorResponses.of(requireNotNull(byPath[request.path()]).outcome)
             }
-        val client = WebClient.of(fixture.serverUri(gateway))
+        val client = fixture.isolatedWebClient(fixture.serverUri(gateway))
 
         cases.forEach { case ->
             val response =
@@ -132,7 +131,7 @@ class OpenAiErrorResponsesTest {
                     HttpData.ofUtf8(UPSTREAM_PRIVATE_BODY),
                 )
             }
-        val upstreamClient = WebClient.of(fixture.serverUri(upstream))
+        val upstreamClient = fixture.isolatedWebClient(fixture.serverUri(upstream))
         val gateway =
             fixture.startServer {
                 HttpResponse.of(
@@ -143,7 +142,7 @@ class OpenAiErrorResponsesTest {
             }
 
         val response =
-            WebClient.of(fixture.serverUri(gateway))
+            fixture.isolatedWebClient(fixture.serverUri(gateway))
                 .get("/v1/chat/completions")
                 .aggregate().join()
 

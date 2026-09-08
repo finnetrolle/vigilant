@@ -1,6 +1,5 @@
 package io.vigilant.gateway.proxy
 
-import com.linecorp.armeria.client.WebClient
 import com.linecorp.armeria.common.HttpHeaderNames
 import com.linecorp.armeria.common.HttpStatus
 import io.vigilant.gateway.GatewayTestFixture
@@ -36,9 +35,9 @@ class DynamicResponseConnectionHeadersTest {
             applicationResponse = DYNAMIC_HEADER_RESPONSE,
         ).also(upstreams::add)
         val gateway = fixture.startServer(
-            BypassProxyService(upstream.uri, WebClient.of()),
+            BypassProxyService(upstream.uri, fixture.isolatedWebClient()),
         )
-        val client = WebClient.of(fixture.serverUri(gateway).toString())
+        val client = fixture.isolatedWebClient(fixture.serverUri(gateway))
 
         val response = client.get("/v1/models").aggregate().join()
 

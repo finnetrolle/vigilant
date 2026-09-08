@@ -34,6 +34,7 @@ import io.opentelemetry.sdk.trace.export.SimpleSpanProcessor
 import io.opentelemetry.sdk.trace.export.SpanExporter
 import io.vigilant.gateway.GatewayProcessFixture
 import io.vigilant.gateway.GatewayTestFixture
+import io.vigilant.gateway.closeWithinTestTimeout
 import io.vigilant.gateway.RequestAuditTestContract
 import io.vigilant.gateway.RawHttp1TestUpstream
 import io.vigilant.gateway.DemandObservingPublisher
@@ -146,8 +147,8 @@ internal abstract class GatewayE2eTestSupport {
     /** Owns scenario resources that must close after the fixture stops accepting work. */
     protected val closeables = mutableListOf<AutoCloseable>()
 
-    /** Owns isolated upstream connection pools created by this test instance. */
-    protected val upstreamClientFactories = mutableListOf<ClientFactory>()
+    /** Owns one non-reusing client pool shared by both HTTP directions in this test instance. */
+    private val clientFactory = ClientFactory.builder().maxNumRequestsPerConnection(1).build()
 
     /** Collects completed spans emitted by this test instance. */
     protected val spans = CopyOnWriteArrayList<SpanData>()
@@ -167,13 +168,13 @@ internal abstract class GatewayE2eTestSupport {
         override fun shutdown(): CompletableResultCode = CompletableResultCode.ofSuccess()
     }
 
-    /** Stops real servers, inspection/tracing resources and isolated upstream connection pools. */
+    /** Stops real servers before their client pool, then closes inspection and tracing resources. */
     @AfterTest
     fun closeFixture() {
         val closeActions = buildList<() -> Unit> {
             add(fixture::close)
+            add(clientFactory::closeWithinTestTimeout)
             closeables.asReversed().forEach { resource -> add(resource::close) }
-            upstreamClientFactories.asReversed().forEach { factory -> add { factory.closeAsync().join() } }
         }
         closeAllResources(*closeActions.toTypedArray())
     }
@@ -372,9 +373,15 @@ internal abstract class GatewayE2eTestSupport {
 
     /** Builds a WebClient on a scenario-owned pool so recycled test ports cannot reuse stale streams. */
     protected fun isolatedUpstreamClient(): WebClient {
-        val factory = ClientFactory.builder().build().also(upstreamClientFactories::add)
-        return WebClient.builder().factory(factory).build()
+        return WebClient.builder().factory(clientFactory).build()
     }
+
+    /** Builds an unbound client on the test instance's non-reusing connection pool. */
+    protected fun isolatedUnboundClient(): WebClient = WebClient.builder().factory(clientFactory).build()
+
+    /** Builds a gateway WebClient on a scenario-owned pool isolated from the full test suite. */
+    protected fun isolatedGatewayClient(baseUri: URI): WebClient =
+        WebClient.builder(baseUri.toString()).factory(clientFactory).build()
 
     /** Asserts the canonical VIG-29 request inspection failure HTTP contract. */
     protected fun assertRequestInspectionUnavailable(response: AggregatedHttpResponse) {

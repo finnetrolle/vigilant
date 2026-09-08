@@ -4,7 +4,8 @@
 - **Тип:** Issue
 - **Статус:** Draft
 - **Приоритет:** High
-- **Зависит от:** [VIG-30](issue_30_external_identity_extractor.md)
+- **Зависит от:** [VIG-30](issue_30_external_identity_extractor.md),
+  [VIG-37-04](epic_37/issue_37_04_four_worker_qualification.md)
 - **Блокирует:** нет
 - **Оценка:** не оценено
 

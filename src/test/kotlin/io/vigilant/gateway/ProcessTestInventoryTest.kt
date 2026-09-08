@@ -370,6 +370,8 @@ class ProcessTestInventoryTest {
                 "application main-class and distribution task configuration, not a JUnit launcher",
             "buildSrc/src/main/kotlin/io/vigilant/build/TestTimingReportPlugin.kt" to
                 "build metadata git command used outside JUnit process E2E",
+            "buildSrc/src/main/kotlin/io/vigilant/build/TestThroughputQualificationPlugin.kt" to
+                "process-owning local throughput qualification runner outside JUnit process E2E",
             "scripts/installed-distribution-smoke-test" to
                 "explicit operator-invoked packaged smoke script outside Gradle test",
             "scripts/lib/packaged-smoke-helpers" to

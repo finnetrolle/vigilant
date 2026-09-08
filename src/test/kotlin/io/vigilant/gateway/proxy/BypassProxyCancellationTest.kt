@@ -1,5 +1,6 @@
 package io.vigilant.gateway.proxy
 
+import com.linecorp.armeria.client.ClientFactory
 import com.linecorp.armeria.client.WebClient
 import com.linecorp.armeria.common.HttpData
 import com.linecorp.armeria.common.HttpObject
@@ -9,7 +10,11 @@ import com.linecorp.armeria.common.MediaType
 import com.linecorp.armeria.common.ResponseHeaders
 import com.linecorp.armeria.server.Server
 import com.linecorp.armeria.server.ServiceRequestContext
+import io.vigilant.gateway.closeAllResources
+import io.vigilant.gateway.loopbackHttpAddress
+import io.vigilant.gateway.startWithinTestTimeout
 import java.net.URI
+import java.time.Duration
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -33,17 +38,29 @@ import org.reactivestreams.Subscription
  */
 class BypassProxyCancellationTest {
     private val servers = mutableListOf<Server>()
+    private val clientFactory = ClientFactory.builder().build()
+    private val upstreamClient = WebClient.builder().factory(clientFactory).build()
 
+    /** Stops servers before their instance-owned client pool and observes bounded cleanup. */
     @AfterTest
     fun stopServers() {
-        servers.asReversed().forEach { it.stop().join() }
+        val closeActions = buildList<() -> Unit> {
+            servers.asReversed().forEach { server ->
+                add { server.closeAsync().get(RESOURCE_CLOSE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS) }
+            }
+            add { clientFactory.closeAsync().get(RESOURCE_CLOSE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS) }
+        }
+        closeAllResources(*closeActions.toTypedArray())
+        assertTrue(servers.all(Server::isClosed), "every cancellation fixture server must be closed")
+        assertTrue(clientFactory.isClosed, "the cancellation fixture client pool must be closed")
     }
 
+    /** Proves that aborting after the first chunk cancels the upstream exchange. */
     @Test
     fun `client abort mid-stream cancels the upstream request`() {
         val upstream = startStreamingUpstream(chunks = listOf("chunk-1 ", "chunk-2 ", "chunk-3 "))
         val gateway = startGateway(serverUri(upstream.server))
-        val client = WebClient.of(serverUri(gateway).toString())
+        val client = gatewayClient(gateway)
 
         val received = abortAfterChunks(client.get("/v1/messages?stream=true"), chunksBeforeAbort = 1)
 
@@ -55,13 +72,14 @@ class BypassProxyCancellationTest {
         assertEquals(listOf("chunk-1 "), received.chunks.toList())
     }
 
+    /** Preserves exactly the ordered prefix received before client abort. */
     @Test
     fun `partial content received before the abort is correct and ordered`() {
         val upstream = startStreamingUpstream(
             chunks = listOf("alpha ", "beta ", "gamma ", "delta "),
         )
         val gateway = startGateway(serverUri(upstream.server))
-        val client = WebClient.of(serverUri(gateway).toString())
+        val client = gatewayClient(gateway)
 
         val received = abortAfterChunks(client.get("/v1/messages?stream=true"), chunksBeforeAbort = 2)
 
@@ -77,6 +95,7 @@ class BypassProxyCancellationTest {
         )
     }
 
+    /** Repeats bounded aborts without retaining active downstream exchanges. */
     @Test
     fun `sequential aborts do not leave dangling exchanges`() {
         val abortCount = 5
@@ -85,7 +104,7 @@ class BypassProxyCancellationTest {
             cancellationsExpected = abortCount,
         )
         val gateway = startGateway(serverUri(upstream.server))
-        val client = WebClient.of(serverUri(gateway).toString())
+        val client = gatewayClient(gateway)
 
         repeat(abortCount) {
             abortAfterChunks(client.get("/v1/messages?stream=true"), chunksBeforeAbort = 1)
@@ -182,28 +201,43 @@ class BypassProxyCancellationTest {
         val completion = CountDownLatch(1)
     }
 
+    /** Starts a bypass gateway against [upstream] on the instance-owned client pool. */
     private fun startGateway(upstream: URI): Server =
         Server.builder()
-            .http(0)
-            .serviceUnder("/", BypassProxyService(upstream, WebClient.of()))
+            .http(loopbackHttpAddress())
+            .serviceUnder("/", BypassProxyService(upstream, upstreamClient))
             .build()
             .startAndTrack()
 
+    /** Builds a gateway client on the test instance's isolated connection pool. */
+    private fun gatewayClient(server: Server): WebClient =
+        WebClient.builder(serverUri(server).toString())
+            .factory(clientFactory)
+            .build()
+
+    /** Starts an ephemeral loopback server for a context-aware cancellation service. */
     private fun startServer(
         service: (ServiceRequestContext, com.linecorp.armeria.common.HttpRequest) -> HttpResponse,
     ): Server =
         Server.builder()
-            .http(0)
+            .http(loopbackHttpAddress())
             .serviceUnder("/") { ctx, request -> service(ctx, request) }
             .build()
             .startAndTrack()
 
+    /** Starts and registers this server for reverse-order bounded cleanup. */
     private fun Server.startAndTrack(): Server {
-        start().join()
         servers += this
+        startWithinTestTimeout()
         return this
     }
 
+    /** Returns the loopback URI for a fixture-owned started server. */
     private fun serverUri(server: Server): URI =
         URI.create("http://127.0.0.1:${server.activeLocalPort()}")
+
+    private companion object {
+        /** Maximum wait for each owned cancellation fixture resource to close. */
+        val RESOURCE_CLOSE_TIMEOUT: Duration = Duration.ofSeconds(5)
+    }
 }

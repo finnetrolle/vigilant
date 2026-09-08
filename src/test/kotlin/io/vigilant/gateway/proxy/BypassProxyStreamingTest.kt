@@ -1,6 +1,5 @@
 package io.vigilant.gateway.proxy
 
-import com.linecorp.armeria.client.WebClient
 import com.linecorp.armeria.common.HttpData
 import com.linecorp.armeria.common.HttpObject
 import com.linecorp.armeria.common.HttpResponse
@@ -74,7 +73,7 @@ class BypassProxyStreamingTest {
     private fun assertStreamedWithoutBuffering(contentType: MediaType, chunks: List<String>) {
         val upstream = startGatedUpstream(contentType, chunks)
         val gateway = startGateway(fixture.serverUri(upstream.server))
-        val client = WebClient.of(fixture.serverUri(gateway).toString())
+        val client = fixture.isolatedWebClient(fixture.serverUri(gateway))
 
         val received = collectStreamedBody(client.get("/v1/messages?stream=true"))
 
@@ -219,7 +218,7 @@ class BypassProxyStreamingTest {
 
     /** Starts the real bypass gateway used by the streaming E2E seam. */
     private fun startGateway(upstream: URI): Server =
-        fixture.startServer(BypassProxyService(upstream, WebClient.of()))
+        fixture.startServer(BypassProxyService(upstream, fixture.isolatedWebClient()))
 
     private companion object {
         /** Maximum time for client proof before an aggregation-sensitive failure. */

@@ -271,6 +271,7 @@ class TestTimingReportTaskFunctionalTest {
                 "gradleVersion": "9-test",
                 "requestedTasks": ["testTimingReport"],
                 "effectiveNonProcessWorkerCount": 1,
+                "effectiveProcessWorkerCount": 1,
                 "rerunTasks": true
               },
               "tasks": [
@@ -303,6 +304,7 @@ class TestTimingReportTaskFunctionalTest {
             | Gradle version | `9-test` |
             | Requested tasks | `testTimingReport` |
             | Effective non-process workers | 1 |
+            | Effective process workers | 1 |
             | Rerun tasks | true |
 
             ## Whole suite

@@ -2,7 +2,7 @@
 
 **ID:** `EPIC-37`
 **Тип:** Epic
-**Статус:** In progress
+**Статус:** Done
 **Приоритет:** High
 **Суммарная оценка:** 8-13 инженерных дней
 **Связанные требования:** engineering productivity и deterministic test infrastructure
@@ -28,9 +28,9 @@ uncached команд.
 
 ## Нормативные решения
 
-- Epic состоит из четырёх последовательных leaves: измеримый timing report,
-  тематический split gateway E2E, изоляция process E2E и квалификация четырёх
-  workers.
+- Epic состоит из пяти последовательных leaves: измеримый timing report,
+  тематический split gateway E2E, изоляция process E2E, детерминизация
+  обнаруженного health lifecycle interleaving и квалификация четырёх workers.
 - Gradle task `testTimingReport` создаёт machine-readable JSON и Markdown со
   slowest classes в `build/reports/test-throughput/`. Generated reports не
   коммитятся.
@@ -72,6 +72,9 @@ EPIC-37 Predictable and faster test suite
 |   +-- process-e2e inventory and tag
 |   +-- serial processTest and complete default lifecycle
 |   +-- canonical process/port ownership
++-- VIG-37-05 health endpoint lifecycle determinism
+|   +-- isolated test-owned Armeria client resources
+|   +-- causal foreign-session shutdown regression
 +-- VIG-37-04 four-worker qualification
     +-- exact four-worker default
     +-- 30% median improvement gate
@@ -89,6 +92,8 @@ VIG-37-02 Gateway E2E split
     |
 VIG-37-03 Process test isolation
     |
+VIG-37-05 Health endpoint lifecycle determinism
+    |
 VIG-37-04 Four-worker qualification
     |
 VIG-31 Identity lookup cache clarification and implementation
@@ -99,7 +104,8 @@ VIG-31 Identity lookup cache clarification and implementation
 - [x] [VIG-37-01: Stable test timing report](../issues/epic_37/issue_37_01_test_timing_report.md) - `Done`
 - [x] [VIG-37-02: Split gateway E2E by behavior](../issues/epic_37/issue_37_02_gateway_e2e_split.md) - `Done`
 - [x] [VIG-37-03: Isolate child-process E2E](../issues/epic_37/issue_37_03_process_test_isolation.md) - `Done`
-- [ ] [VIG-37-04: Qualify four test workers](../issues/epic_37/issue_37_04_four_worker_qualification.md) - `Ready for implementation`
+- [x] [VIG-37-05: Stabilize health endpoint lifecycle test under four workers](../issues/epic_37/issue_37_05_health_endpoints_determinism.md) - `Done`
+- [x] [VIG-37-04: Qualify four test workers](../issues/epic_37/issue_37_04_four_worker_qualification.md) - `Done`
 
 ## Не входит
 
@@ -115,7 +121,7 @@ VIG-31 Identity lookup cache clarification and implementation
 
 ## Критерии готовности epic
 
-- Все четыре leaves имеют status `Done`, checklist и `spec/WORK_ITEMS.md`
+- Все пять leaves имеют status `Done`, checklist и `spec/WORK_ITEMS.md`
   обновлены в тех же change sets.
 - `testTimingReport` детерминированно публикует JSON и Markdown для полного
   test/processTest результата и не использует stale XML.
@@ -133,6 +139,28 @@ VIG-31 Identity lookup cache clarification and implementation
 - Все новые и изменённые Kotlin/Java declarations, test methods и lifecycle
   helpers имеют актуальный KDoc/Javadoc. Focused checks,
   `./gradlew validateWorkItems` и `./gradlew build` проходят.
+
+## Qualification evidence
+
+Первая qualification 2026-09-07 прошла exact 70% performance ratio
+`735751/1061065`, но candidate run 2 завершился с exit `1` из-за
+`HealthEndpointsTest` session-closure failure. Runner корректно не запускал
+десять stability runs. Этот historical result был invalid и не переиспользован;
+fallback на два/три workers не добавлялся.
+VIG-37-05 причинно воспроизвела и устранила instability перед
+повторным запуском полной VIG-37-04 qualification.
+
+VIG-37-05 завершена: causal real-HTTP regression назначил
+premature close process-global client-pool ownership в health test fixture;
+instance-owned factory и terminal server cleanup прошли десять
+последовательных focused four-worker runs.
+
+Новая series 2026-09-08 на одном machine/HEAD/tree snapshot прошла все 16
+runs с exact `1128` tests. Baseline median `1141539` ms, four-worker candidate
+median `744106` ms, exact ratio `0.651845`, improvement `34.82%`. Все десять
+последовательных stability runs завершились без failure, timeout, inventory
+mismatch, cleanup failure или orphan process. Generated evidence остаётся
+uncommitted под `build/reports/test-throughput/`, общий verdict `passed: true`.
 
 ## Ambiguity Report
 

@@ -1,5 +1,6 @@
 package io.vigilant.gateway.tracing
 
+import com.linecorp.armeria.client.ClientFactory
 import com.linecorp.armeria.client.WebClient
 import com.linecorp.armeria.common.HttpData
 import com.linecorp.armeria.common.HttpHeaderNames
@@ -10,6 +11,7 @@ import com.linecorp.armeria.common.HttpStatus
 import com.linecorp.armeria.common.MediaType
 import com.linecorp.armeria.common.RequestHeaders
 import com.linecorp.armeria.common.ResponseHeaders
+import com.linecorp.armeria.server.Server
 import io.opentelemetry.api.common.AttributeKey.longKey
 import io.opentelemetry.api.common.AttributeKey.stringKey
 import io.opentelemetry.api.trace.SpanKind
@@ -19,6 +21,8 @@ import io.opentelemetry.sdk.trace.data.SpanData
 import io.opentelemetry.sdk.trace.export.SpanExporter
 import io.vigilant.gateway.GatewayProcessFixture
 import io.vigilant.gateway.GatewayTestFixture
+import io.vigilant.gateway.closeWithinTestTimeout
+import io.vigilant.gateway.closeAllResources
 import io.vigilant.gateway.config.TracingSettings
 import io.vigilant.gateway.proxy.BypassProxyService
 import java.time.Duration
@@ -39,6 +43,8 @@ import kotlin.test.assertTrue
  */
 class TracingServiceTest {
     private val fixture = GatewayTestFixture()
+    private val clientFactory = ClientFactory.builder().build()
+    private val upstreamClient = WebClient.builder().factory(clientFactory).build()
     private val tracerProvider = SdkTracerProvider.builder()
         .addSpanProcessor(
             io.opentelemetry.sdk.trace.export.SimpleSpanProcessor.builder(InMemorySpanExporter).build(),
@@ -46,13 +52,18 @@ class TracingServiceTest {
         .build()
     private val tracer = tracerProvider.get("io.vigilant.gateway.test")
 
+    /** Releases servers, the isolated client pool, and tracing SDK state after each scenario. */
     @AfterTest
     fun tearDown() {
-        fixture.close()
-        tracerProvider.close()
-        InMemorySpanExporter.reset()
+        closeAllResources(
+            fixture::close,
+            clientFactory::closeWithinTestTimeout,
+            tracerProvider::close,
+            InMemorySpanExporter::reset,
+        )
     }
 
+    /** Creates one fresh trace and the exact proxy attributes when no parent is supplied. */
     @Test
     fun `request without traceparent yields one span with fresh trace id and proxy attributes`() {
         val upstream = fixture.startServer {
@@ -63,8 +74,12 @@ class TracingServiceTest {
                 HttpData.ofUtf8("response body-secret-8D07"),
             )
         }
-        val gateway = fixture.startTracedGateway(fixture.serverUri(upstream), tracer)
-        val client = WebClient.of(fixture.serverUri(gateway).toString())
+        val gateway = fixture.startTracedGateway(
+            fixture.serverUri(upstream),
+            tracer,
+            upstreamClient = upstreamClient,
+        )
+        val client = gatewayClient(gateway)
 
         val response = client.execute(
             HttpRequest.of(
@@ -113,8 +128,12 @@ class TracingServiceTest {
     @Test
     fun `missing tracing context generates root trace and uuid v7 session`() {
         val upstream = fixture.startServer { HttpResponse.of(HttpStatus.OK) }
-        val gateway = fixture.startTracedGateway(fixture.serverUri(upstream), tracer)
-        val client = WebClient.of(fixture.serverUri(gateway).toString())
+        val gateway = fixture.startTracedGateway(
+            fixture.serverUri(upstream),
+            tracer,
+            upstreamClient = upstreamClient,
+        )
+        val client = gatewayClient(gateway)
 
         val response = client.get("/v1/models").aggregate().join()
 
@@ -140,8 +159,12 @@ class TracingServiceTest {
             upstreamCalls.incrementAndGet()
             HttpResponse.of(HttpStatus.OK)
         }
-        val gateway = fixture.startTracedGateway(fixture.serverUri(upstream), tracer)
-        val client = WebClient.of(fixture.serverUri(gateway).toString())
+        val gateway = fixture.startTracedGateway(
+            fixture.serverUri(upstream),
+            tracer,
+            upstreamClient = upstreamClient,
+        )
+        val client = gatewayClient(gateway)
 
         val response = client.execute(
             HttpRequest.of(
@@ -166,8 +189,12 @@ class TracingServiceTest {
             upstreamCalls.incrementAndGet()
             HttpResponse.of(HttpStatus.OK)
         }
-        val gateway = fixture.startTracedGateway(fixture.serverUri(upstream), tracer)
-        val client = WebClient.of(fixture.serverUri(gateway).toString())
+        val gateway = fixture.startTracedGateway(
+            fixture.serverUri(upstream),
+            tracer,
+            upstreamClient = upstreamClient,
+        )
+        val client = gatewayClient(gateway)
 
         val response = client.execute(
             HttpRequest.of(
@@ -182,11 +209,16 @@ class TracingServiceTest {
         assertEquals(0, upstreamCalls.get())
     }
 
+    /** Continues a valid incoming W3C traceparent without changing its trace identity. */
     @Test
     fun `incoming w3c traceparent is continued`() {
         val upstream = fixture.startServer { HttpResponse.of(HttpStatus.OK) }
-        val gateway = fixture.startTracedGateway(fixture.serverUri(upstream), tracer)
-        val client = WebClient.of(fixture.serverUri(gateway).toString())
+        val gateway = fixture.startTracedGateway(
+            fixture.serverUri(upstream),
+            tracer,
+            upstreamClient = upstreamClient,
+        )
+        val client = gatewayClient(gateway)
         val incomingTraceId = "4bf92f3577b34da6a3ce929d0e0e4736"
 
         val response = client.execute(
@@ -215,8 +247,13 @@ class TracingServiceTest {
             traceparentHeader = "x-agent-traceparent",
         )
         val upstream = fixture.startServer { HttpResponse.of(HttpStatus.OK) }
-        val gateway = fixture.startTracedGateway(fixture.serverUri(upstream), tracer, settings)
-        val client = WebClient.of(fixture.serverUri(gateway).toString())
+        val gateway = fixture.startTracedGateway(
+            fixture.serverUri(upstream),
+            tracer,
+            settings,
+            upstreamClient,
+        )
+        val client = gatewayClient(gateway)
         val incomingTraceId = "4bf92f3577b34da6a3ce929d0e0e4736"
         val incomingParentSpanId = "00f067aa0ba902b7"
 
@@ -255,8 +292,13 @@ class TracingServiceTest {
             upstreamHeaders.complete(request.headers())
             HttpResponse.of(HttpStatus.OK)
         }
-        val gateway = fixture.startTracedGateway(fixture.serverUri(upstream), tracer, settings)
-        val client = WebClient.of(fixture.serverUri(gateway).toString())
+        val gateway = fixture.startTracedGateway(
+            fixture.serverUri(upstream),
+            tracer,
+            settings,
+            upstreamClient,
+        )
+        val client = gatewayClient(gateway)
         val traceId = "4bf92f3577b34da6a3ce929d0e0e4736"
 
         val response = client.execute(
@@ -293,8 +335,12 @@ class TracingServiceTest {
             upstreamHeaders.complete(request.headers())
             HttpResponse.of(HttpStatus.OK)
         }
-        val gateway = fixture.startTracedGateway(fixture.serverUri(upstream), tracer)
-        val client = WebClient.of(fixture.serverUri(gateway).toString())
+        val gateway = fixture.startTracedGateway(
+            fixture.serverUri(upstream),
+            tracer,
+            upstreamClient = upstreamClient,
+        )
+        val client = gatewayClient(gateway)
 
         val response = client.execute(
             HttpRequest.of(
@@ -328,8 +374,12 @@ class TracingServiceTest {
             upstreamHeaders.complete(request.headers())
             HttpResponse.of(HttpStatus.OK)
         }
-        val gateway = fixture.startTracedGateway(fixture.serverUri(upstream), tracer)
-        val client = WebClient.of(fixture.serverUri(gateway).toString())
+        val gateway = fixture.startTracedGateway(
+            fixture.serverUri(upstream),
+            tracer,
+            upstreamClient = upstreamClient,
+        )
+        val client = gatewayClient(gateway)
         val events = fixture.attachAppenderTo(TracingService::class.java)
 
         try {
@@ -354,11 +404,16 @@ class TracingServiceTest {
         }
     }
 
+    /** Logs completion once with the same trace identifier exported by the span. */
     @Test
     fun `request completion is logged once with mdc trace id matching the span`() {
         val upstream = fixture.startServer { HttpResponse.of(HttpStatus.OK) }
-        val gateway = fixture.startTracedGateway(fixture.serverUri(upstream), tracer)
-        val client = WebClient.of(fixture.serverUri(gateway).toString())
+        val gateway = fixture.startTracedGateway(
+            fixture.serverUri(upstream),
+            tracer,
+            upstreamClient = upstreamClient,
+        )
+        val client = gatewayClient(gateway)
         val events = fixture.attachAppenderTo(TracingService::class.java)
 
         try {
@@ -383,8 +438,12 @@ class TracingServiceTest {
     @Test
     fun `request completion log contains received and effective tracing context`() {
         val upstream = fixture.startServer { HttpResponse.of(HttpStatus.OK) }
-        val gateway = fixture.startTracedGateway(fixture.serverUri(upstream), tracer)
-        val client = WebClient.of(fixture.serverUri(gateway).toString())
+        val gateway = fixture.startTracedGateway(
+            fixture.serverUri(upstream),
+            tracer,
+            upstreamClient = upstreamClient,
+        )
+        val client = gatewayClient(gateway)
         val events = fixture.attachAppenderTo(TracingService::class.java)
         val traceId = "4bf92f3577b34da6a3ce929d0e0e4736"
         val parentSpanId = "00f067aa0ba902b7"
@@ -428,8 +487,9 @@ class TracingServiceTest {
         val gateway = fixture.startTracedGateway(
             java.net.URI.create("http://127.0.0.1:${GatewayProcessFixture.reserveNonEphemeralPort()}"),
             tracer,
+            upstreamClient = upstreamClient,
         )
-        val client = WebClient.of(fixture.serverUri(gateway).toString())
+        val client = gatewayClient(gateway)
         val events = fixture.attachAppenderTo(BypassProxyService::class.java)
         val traceId = "4bf92f3577b34da6a3ce929d0e0e4736"
         val parentSpanId = "00f067aa0ba902b7"
@@ -471,6 +531,12 @@ class TracingServiceTest {
         "query-secret-1C6A",
         "body-secret-8D07",
     )
+
+    /** Builds a gateway client on this test instance's isolated connection pool. */
+    private fun gatewayClient(server: Server): WebClient =
+        WebClient.builder(fixture.serverUri(server).toString())
+            .factory(clientFactory)
+            .build()
 
     /**
      * Waits for and returns the single SERVER span without coupling callers to

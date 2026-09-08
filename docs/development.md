@@ -44,8 +44,10 @@ graceful shutdown без application-owned audit directory.
 Каждый `./gradlew test` и `./gradlew build` сначала выполняет полный
 `process-e2e` набор ровно один раз через отдельный serial `processTest`, затем
 выполняет остальные tests через `test`. Focused child-process case запускается
-командой `./gradlew processTest --tests <pattern>`. Оба tasks используют один
-fork до отдельной four-worker qualification VIG-37-04.
+командой `./gradlew processTest --tests <pattern>`. `processTest` всегда
+использует один fork. `test` по умолчанию использует ровно четыре forks;
+`-PtestMaxParallelForks=N` переопределяет только `test` и принимает exact
+integer `1..4`.
 
 Proxy behavior tests используют реальные Armeria servers на ephemeral ports.
 Cross-process gateway tests получают never-reused loopback ports, process и
@@ -83,6 +85,20 @@ Git. Для принудительного измерения полного unc
 `./gradlew test testTimingReport --rerun-tasks --no-daemon`; параметры
 сопоставимого baseline зафиксированы в
 [VIG-37-01](../spec/issues/epic_37/issue_37_01_test_timing_report.md).
+Metadata каждого report содержит effective worker counts для `test` и
+`processTest`.
+
+Полная локальная квалификация four-worker topology запускается одной командой:
+
+~~~bash
+./gradlew testThroughputQualification --no-daemon
+~~~
+
+Task последовательно выполняет три single-worker baseline runs, три
+four-worker candidate runs и, только после performance gate, десять
+four-worker stability runs. Generated `qualification.json`,
+`qualification.md` и per-run logs находятся только под
+`build/reports/test-throughput/` и не добавляются в Git.
 
 ## PII quality
 

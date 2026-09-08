@@ -51,8 +51,9 @@ class MalformedUpstreamResponseTest {
         ).also(upstreams::add)
         val logEvents = fixture.attachAppenderTo(BypassProxyService::class.java)
         val armeriaEvents = fixture.attachAppenderTo(ARMERIA_LOGGER_NAME)
-        val gateway = fixture.startMetricsGateway(upstream.uri, meter)
+        val gateway = fixture.startMetricsGateway(upstream.uri, meter, fixture.isolatedWebClient())
         val client = WebClient.builder(fixture.serverUri(gateway).toString())
+            .factory(fixture.isolatedClientFactory())
             .responseTimeout(Duration.ofSeconds(5))
             .build()
 

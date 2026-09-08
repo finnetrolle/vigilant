@@ -46,6 +46,11 @@ class TestTimingReportPlugin : Plugin<Project> {
                     (project.tasks.findByName("test") as? org.gradle.api.tasks.testing.Test)?.maxParallelForks ?: 1
                 }),
             )
+            task.effectiveProcessWorkerCount.convention(
+                project.providers.provider(Callable {
+                    (project.tasks.findByName("processTest") as? org.gradle.api.tasks.testing.Test)?.maxParallelForks ?: 1
+                }),
+            )
             task.rerunTasks.convention(project.gradle.startParameter.isRerunTasks)
         }
     }
@@ -88,6 +93,9 @@ abstract class TestTimingReportTask : DefaultTask() {
     /** Records the effective worker count used by the non-process test task. */
     @get:Internal abstract val effectiveNonProcessWorkerCount: Property<Int>
 
+    /** Records the effective worker count used by the process test task. */
+    @get:Internal abstract val effectiveProcessWorkerCount: Property<Int>
+
     /** Records whether the invocation requested task reruns. */
     @get:Internal abstract val rerunTasks: Property<Boolean>
 
@@ -110,7 +118,7 @@ abstract class TestTimingReportTask : DefaultTask() {
         }.sortedBy(TaskRecord::taskPath)
         val orderedClasses = classes.sortedWith(compareByDescending<ClassRecord> { it.totals.durationMillis }.thenBy(ClassRecord::taskPath).thenBy(ClassRecord::className))
         val totals = tasks.map(TaskRecord::totals).sumTotals()
-        val metadata = SnapshotMetadata(gitHead.get(), dirtyTreeFingerprint.get(), operatingSystem.get(), architecture.get(), availableProcessors.get(), javaVersion.get(), gradleVersion.get(), requestedTasks.get().sorted(), effectiveNonProcessWorkerCount.get(), rerunTasks.get())
+        val metadata = SnapshotMetadata(gitHead.get(), dirtyTreeFingerprint.get(), operatingSystem.get(), architecture.get(), availableProcessors.get(), javaVersion.get(), gradleVersion.get(), requestedTasks.get().sorted(), effectiveNonProcessWorkerCount.get(), effectiveProcessWorkerCount.get(), rerunTasks.get())
         jsonFile.parentFile.mkdirs()
         markdownFile.parentFile.mkdirs()
         jsonFile.writeText(renderJson(metadata, tasks, orderedClasses, totals), StandardCharsets.UTF_8)
@@ -191,6 +199,7 @@ abstract class TestTimingReportTask : DefaultTask() {
         appendLine("    \"gradleVersion\": \"${metadata.gradleVersion.jsonEscape()}\",")
         appendLine("    \"requestedTasks\": [${metadata.requestedTasks.joinToString(",") { "\"${it.jsonEscape()}\"" }}],")
         appendLine("    \"effectiveNonProcessWorkerCount\": ${metadata.effectiveNonProcessWorkerCount},")
+        appendLine("    \"effectiveProcessWorkerCount\": ${metadata.effectiveProcessWorkerCount},")
         appendLine("    \"rerunTasks\": ${metadata.rerunTasks}")
         appendLine("  },")
         appendRecords("tasks", tasks) { record -> "{\"taskPath\": \"${record.taskPath.jsonEscape()}\", ${record.totals.renderJsonFields()}}" }
@@ -223,6 +232,7 @@ abstract class TestTimingReportTask : DefaultTask() {
         appendLine("| Gradle version | `${metadata.gradleVersion.markdownEscape()}` |")
         appendLine("| Requested tasks | `${metadata.requestedTasks.joinToString("`, `") { it.markdownEscape() }}` |")
         appendLine("| Effective non-process workers | ${metadata.effectiveNonProcessWorkerCount} |")
+        appendLine("| Effective process workers | ${metadata.effectiveProcessWorkerCount} |")
         appendLine("| Rerun tasks | ${metadata.rerunTasks} |")
         appendLine()
         appendLine("## Whole suite")
@@ -244,12 +254,6 @@ abstract class TestTimingReportTask : DefaultTask() {
         classes.forEach { record -> appendLine("| `${record.taskPath.markdownEscape()}` | `${record.className.markdownEscape()}` | ${record.totals.renderMarkdownFields()} |") }
     }
 
-    /** Returns text escaped for a JSON string literal. */
-    private fun String.jsonEscape(): String = replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
-
-    /** Returns table-safe inline-code content for Markdown. */
-    private fun String.markdownEscape(): String = replace("`", "\\`").replace("|", "\\|").replace("\n", " ")
-
     /**
      * Holds one immutable snapshot metadata record.
      *
@@ -262,9 +266,10 @@ abstract class TestTimingReportTask : DefaultTask() {
      * @property gradleVersion Gradle version executing the task.
      * @property requestedTasks sorted task names from the invocation.
      * @property effectiveNonProcessWorkerCount actual worker count of the non-process test task.
+     * @property effectiveProcessWorkerCount actual worker count of the process test task.
      * @property rerunTasks whether the invocation requested task reruns.
      */
-    private data class SnapshotMetadata(val gitHead: String, val dirtyTreeFingerprint: String, val operatingSystem: String, val architecture: String, val availableProcessors: Int, val javaVersion: String, val gradleVersion: String, val requestedTasks: List<String>, val effectiveNonProcessWorkerCount: Int, val rerunTasks: Boolean)
+    private data class SnapshotMetadata(val gitHead: String, val dirtyTreeFingerprint: String, val operatingSystem: String, val architecture: String, val availableProcessors: Int, val javaVersion: String, val gradleVersion: String, val requestedTasks: List<String>, val effectiveNonProcessWorkerCount: Int, val effectiveProcessWorkerCount: Int, val rerunTasks: Boolean)
 
     /**
      * Holds one deterministic task aggregate.
@@ -350,7 +355,7 @@ private fun Element.directChildren(vararg names: String): List<Element> = (0 unt
 private fun Element.requiredAttribute(name: String, file: Path): String = getAttribute(name).takeIf(String::isNotBlank) ?: throw GradleException("Incomplete JUnit XML suite: $file is missing $name")
 
 /** Executes a Git command from the root project and returns its standard output. */
-private fun Project.runGit(vararg arguments: String): String {
+internal fun Project.runGit(vararg arguments: String): String {
     val process = ProcessBuilder(listOf("git") + arguments).directory(rootDir).redirectErrorStream(true).start()
     val output = process.inputStream.readAllBytes().toString(StandardCharsets.UTF_8)
     check(process.waitFor() == 0) { "Unable to read Git metadata: $output" }
@@ -358,7 +363,7 @@ private fun Project.runGit(vararg arguments: String): String {
 }
 
 /** Hashes tracked differences and untracked file content into one dirty-tree fingerprint. */
-private fun Project.dirtyTreeFingerprint(): String {
+internal fun Project.dirtyTreeFingerprint(): String {
     val digest = MessageDigest.getInstance("SHA-256")
     digest.update(runGit("diff", "--binary", "HEAD").toByteArray(StandardCharsets.UTF_8))
     runGit("ls-files", "--others", "--exclude-standard", "-z").split('\u0000').filter(String::isNotEmpty).sorted().forEach { pathText ->
@@ -375,3 +380,9 @@ private fun Project.dirtyTreeFingerprint(): String {
     }
     return digest.digest().joinToString("") { byte -> "%02x".format(byte) }
 }
+
+/** Returns text escaped for a JSON string literal shared by deterministic build reports. */
+internal fun String.jsonEscape(): String = replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
+
+/** Returns table-safe inline-code content shared by deterministic Markdown reports. */
+internal fun String.markdownEscape(): String = replace("`", "\\`").replace("|", "\\|").replace("\n", " ")

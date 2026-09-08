@@ -28,6 +28,8 @@ import io.vigilant.gateway.DisconnectingTestUpstream
 import io.vigilant.gateway.GatewayProcessFixture
 import io.vigilant.gateway.GatewayTestFixture
 import io.vigilant.gateway.HoldingTestEndpoint
+import io.vigilant.gateway.closeAllResources
+import io.vigilant.gateway.closeWithinTestTimeout
 import io.vigilant.gateway.config.ExternalIdentitySettings
 import io.vigilant.gateway.metrics.TestMetricReader
 import java.net.URI
@@ -59,10 +61,20 @@ import org.junit.jupiter.api.TestFactory
 class BridgeIdentityClientTest {
     private val fixture = GatewayTestFixture()
 
-    /** Stops every real server after the scenario. */
+    /** Owns the isolated HTTP transport used by ordinary Bridge scenarios in this test instance. */
+    private val clientFactory = ClientFactory.builder().workerGroup(1).build()
+
+    /** Dispatches ordinary Bridge requests without sharing an event-loop pool with unrelated tests. */
+    private val webClient = WebClient.builder().factory(clientFactory).build()
+
+    /** Boundedly closes the isolated client transport and every real server after the scenario. */
     @AfterTest
     fun closeFixture() {
-        fixture.close()
+        closeAllResources(
+            { clientFactory.closeAsync().get(RESOURCE_CLOSE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS) },
+            fixture::close,
+        )
+        assertTrue(clientFactory.isClosed, "the Bridge fixture-owned client factory must be closed")
     }
 
     /** REQ-01 and OK-01: One exact empty POST resolves one normalized identity. */
@@ -91,7 +103,6 @@ class BridgeIdentityClientTest {
             }
         val endpoint = URI("${fixture.serverUri(bridge)}/base/v1/identity?tenant=alpha%2Fbeta")
         val telemetry = OpenTelemetry.noop()
-        val webClient = WebClient.of()
         val client =
             BridgeIdentityClient(
                 settings = ExternalIdentitySettings(endpoint, Duration.ofSeconds(1)),
@@ -396,7 +407,7 @@ class BridgeIdentityClientTest {
             client.close()
         } finally {
             endpointGroup.close()
-            factory.closeAsync().join()
+            factory.closeWithinTestTimeout()
         }
     }
 
@@ -434,7 +445,7 @@ class BridgeIdentityClientTest {
                 endpoint.close()
                 client.close()
             } finally {
-                factory.closeAsync().join()
+                factory.closeWithinTestTimeout()
             }
         }
     }
@@ -477,7 +488,7 @@ class BridgeIdentityClientTest {
                 endpoint.close()
                 client.close()
             } finally {
-                factory.closeAsync().join()
+                factory.closeWithinTestTimeout()
             }
         }
     }
@@ -757,6 +768,7 @@ class BridgeIdentityClientTest {
                             endpoint = URI("${fixture.serverUri(bridge)}/identity"),
                             timeout = if (winner == "timeout") Duration.ofMillis(300) else Duration.ofSeconds(5),
                             maxConcurrentLookups = 1,
+                            webClient = webClient,
                         )
                     val terminalCallbacks = java.util.concurrent.atomic.AtomicInteger()
                     val downstreamEffects = java.util.concurrent.atomic.AtomicInteger()
@@ -790,7 +802,14 @@ class BridgeIdentityClientTest {
                         else -> assertFailsWith<CancellationException> { lookup.join() }
                     }
                     assertEquals(1, terminalCallbacks.get(), "$winner published multiple callbacks")
-                    assertEquals(if (winner in setOf("success", "timeout")) 1 else 0, downstreamEffects.get(), winner)
+                    val expectedDownstreamEffects = if (winner in setOf("success", "timeout")) 1 else 0
+                    if (expectedDownstreamEffects == 1) {
+                        assertTrue(
+                            fixture.awaitUntil(Duration.ofSeconds(2)) { downstreamEffects.get() == 1 },
+                            "$winner did not publish its downstream effect",
+                        )
+                    }
+                    assertEquals(expectedDownstreamEffects, downstreamEffects.get(), winner)
                     if (winner != "success") {
                         assertTrue(bridgeCancelled.await(2, TimeUnit.SECONDS), "$winner did not abort Bridge")
                     }
@@ -813,7 +832,6 @@ class BridgeIdentityClientTest {
             bridgeReached.countDown()
             HttpResponse.of(bridgeRelease)
         }
-        val webClient = WebClient.of()
         val timeoutScheduler = CapturingTimeoutScheduler()
         val client =
             instrumentedClient(
@@ -945,7 +963,10 @@ class BridgeIdentityClientTest {
                             HttpResponse.of(status)
                         }
                     }
-                    telemetry.newClient(URI("${fixture.serverUri(bridge)}/identity"))
+                    telemetry.newClient(
+                        endpoint = URI("${fixture.serverUri(bridge)}/identity"),
+                        webClient = webClient,
+                    )
                         .lookup("status-token-sentinel")
                         .join()
 
@@ -1004,7 +1025,7 @@ class BridgeIdentityClientTest {
                         } else {
                             URI("${fixture.serverUri(bridge)}/$endpointSentinel")
                         }
-                    val client = telemetry.newClient(endpoint, Duration.ofMillis(500), 1)
+                    val client = telemetry.newClient(endpoint, Duration.ofMillis(500), 1, webClient)
                     val result =
                         when (outcome.name) {
                             "overloaded" -> {
@@ -1103,7 +1124,7 @@ class BridgeIdentityClientTest {
             } else {
                 URI("${fixture.serverUri(bridge)}/identity")
             }
-        val client = telemetry.newClient(endpoint, Duration.ofMillis(500), 1)
+        val client = telemetry.newClient(endpoint, Duration.ofMillis(500), 1, webClient)
         val execution =
             when (outcome.name) {
                 "overloaded" -> {
@@ -1167,7 +1188,7 @@ class BridgeIdentityClientTest {
         timeout: Duration = Duration.ofSeconds(1),
         maxConcurrentLookups: Int = 2,
     ): BridgeIdentityClient =
-        instrumentedClient(endpoint, timeout, WebClient.of(), maxConcurrentLookups)
+        instrumentedClient(endpoint, timeout, webClient, maxConcurrentLookups)
 
     /** Builds one Bridge client around a phase-controllable real Armeria client. */
     private fun instrumentedClient(
@@ -1332,7 +1353,7 @@ class BridgeIdentityClientTest {
             endpoint: URI,
             timeout: Duration = Duration.ofSeconds(1),
             maxConcurrentLookups: Int = 2,
-            webClient: WebClient = WebClient.of(),
+            webClient: WebClient,
         ): BridgeIdentityClient =
             BridgeIdentityClient(
                 settings = ExternalIdentitySettings(endpoint, timeout),
@@ -1397,6 +1418,9 @@ class BridgeIdentityClientTest {
     }
 
     private companion object {
+        /** Bound for closing the isolated Bridge test transport. */
+        val RESOURCE_CLOSE_TIMEOUT: Duration = Duration.ofSeconds(5)
+
         const val TLS_HANDSHAKE_RECORD_TYPE = 0x16
         val TELEMETRY_OUTCOMES =
             listOf(

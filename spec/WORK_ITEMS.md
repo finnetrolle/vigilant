@@ -127,7 +127,7 @@ Issue является листом mind map, если:
 | [VIG-34: Request-side PII enforcement](issues/issue_34_request_pii_enforcement.md) | `Draft` | reaction, rewrite и lifecycle contract требуют диалога | не оценено |
 | [VIG-35: Выбор production identity mode](issues/issue_35_production_identity_mode.md) | `Done` | завершена | 0 дней осталось |
 | [VIG-36: Очистка superseded требований и архитектурных документов](issues/issue_36_superseded_requirements_cleanup.md) | `Draft` | требуется inventory и завершение contract dependencies | не оценено |
-| [EPIC-37: Predictable and faster test suite](epics/epic_37_predictable_test_throughput.md) | `In progress` | 3/4 | 2-3 дня |
+| [EPIC-37: Predictable and faster test suite](epics/epic_37_predictable_test_throughput.md) | `Done` | 5/5 | 0 дней осталось |
 
 ## Active TODO: порядок следующей работы
 
@@ -214,10 +214,11 @@ Issue является листом mind map, если:
   `DUMMY`, `JWT` и `EXTERNAL` реализуют общий async identity contract.
 - [x] Реализовать
   [VIG-30](issues/issue_30_external_identity_extractor.md).
-- [ ] Выполнить [EPIC-37](epics/epic_37_predictable_test_throughput.md) строго в
-  порядке VIG-37-01 -> VIG-37-02 -> VIG-37-03 -> VIG-37-04: зафиксировать
-  baseline, разделить gateway E2E, изолировать serial process tests и
-  квалифицировать ровно четыре non-process workers.
+- [x] Выполнить [EPIC-37](epics/epic_37_predictable_test_throughput.md) строго в
+  порядке VIG-37-01 -> VIG-37-02 -> VIG-37-03 -> VIG-37-05 -> VIG-37-04:
+  зафиксировать baseline, разделить gateway E2E, изолировать serial process
+  tests, устранить обнаруженную health lifecycle instability и квалифицировать
+  ровно четыре non-process workers.
 - [ ] После EPIC-37 уточнить и реализовать
   [VIG-31](issues/issue_31_identity_lookup_cache.md).
 - [ ] Провести отдельный requirements dialogue по
@@ -232,9 +233,11 @@ Issue является листом mind map, если:
 - [ ] После стабилизации identity, enforcement и observability уточнить
   [VIG-33](issues/issue_33_availability_slo_and_operations.md).
 
-Текущий следующий шаг: реализовать
-[VIG-37-04](issues/epic_37/issue_37_04_four_worker_qualification.md), завершить
-EPIC-37 и только после этого уточнить и реализовать VIG-31.
+Текущий следующий шаг: уточнить через requirements dialogue
+[VIG-31](issues/issue_31_identity_lookup_cache.md), перевести её из `Draft` в
+`Ready for implementation` и только затем реализовывать. EPIC-37 завершена:
+four-worker qualification дала improvement медианы `34.82%`, а все десять
+stability runs прошли с exact `1128` tests и clean process lifecycle.
 VIG-29 завершён: ordinary JSON и SSE response используют exact
 `403`/`502`/`503` matrix.
 

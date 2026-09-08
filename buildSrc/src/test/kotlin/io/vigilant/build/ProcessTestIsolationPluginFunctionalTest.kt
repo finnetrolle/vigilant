@@ -10,12 +10,52 @@ import org.gradle.testkit.runner.GradleRunner
 import org.gradle.testkit.runner.TaskOutcome
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.MethodSource
 
 /** Verifies the public Gradle execution seam for tagged and untagged sentinel tests. */
 class ProcessTestIsolationPluginFunctionalTest {
     /** Owns one isolated Gradle project root for each topology scenario. */
     @TempDir
     lateinit var temporaryDirectory: java.nio.file.Path
+
+    /** Uses four non-process forks by default while the process lane remains serial. */
+    @Test
+    fun `default worker topology is four plus one serial process fork`() {
+        val observation = observeWorkerTopology(createFixtureProject())
+
+        assertEquals("4|1", observation)
+    }
+
+    /** Applies each exact supported override only to the non-process lane. */
+    @ParameterizedTest(name = "non-process workers={0}")
+    @MethodSource("validWorkerOverrides")
+    fun `valid worker override preserves the serial process fork`(workerCount: Int) {
+        val observation = observeWorkerTopology(
+            createFixtureProject(),
+            "-PtestMaxParallelForks=$workerCount",
+        )
+
+        assertEquals("$workerCount|1", observation)
+    }
+
+    /** Rejects every malformed or out-of-range worker override during Gradle configuration. */
+    @ParameterizedTest(name = "invalid non-process workers={0}")
+    @MethodSource("invalidWorkerOverrides")
+    fun `invalid worker override fails with the stable range contract`(workerCount: String) {
+        val result = runner(
+            createFixtureProject(),
+            "writeWorkerTopology",
+            "-PtestMaxParallelForks=$workerCount",
+        ).buildAndFail()
+
+        assertTrue(
+            result.output.contains(
+                "Invalid -PtestMaxParallelForks value '$workerCount': expected an exact integer from 1 to 4.",
+            ),
+            result.output,
+        )
+    }
 
     /** Default `test` runs both lanes in order and executes every sentinel exactly once. */
     @Test
@@ -90,6 +130,15 @@ class ProcessTestIsolationPluginFunctionalTest {
                 systemProperty("sentinel.output", layout.buildDirectory.file("sentinel-execution.log").get().asFile.absolutePath)
                 systemProperty("vigilant.test.task.path", path)
             }
+            tasks.register("writeWorkerTopology") {
+                val output = layout.buildDirectory.file("worker-topology.txt")
+                outputs.file(output)
+                doLast {
+                    val nonProcessForks = tasks.named<Test>("test").get().maxParallelForks
+                    val processForks = tasks.named<Test>("processTest").get().maxParallelForks
+                    output.get().asFile.writeText("${'$'}nonProcessForks|${'$'}processForks")
+                }
+            }
             """.trimIndent(),
         )
         val sourceDirectory = projectDirectory.resolve("src/test/java/sample").createDirectories()
@@ -155,4 +204,25 @@ class ProcessTestIsolationPluginFunctionalTest {
             .withProjectDir(projectDirectory.toFile())
             .withPluginClasspath()
             .withArguments(*arguments, "--stacktrace")
+
+    /** Executes the public topology observation task and returns both effective fork counts. */
+    private fun observeWorkerTopology(
+        projectDirectory: java.nio.file.Path,
+        vararg arguments: String,
+    ): String {
+        val result = runner(projectDirectory, "writeWorkerTopology", *arguments).build()
+        assertEquals(TaskOutcome.SUCCESS, result.task(":writeWorkerTopology")?.outcome)
+        return projectDirectory.resolve("build/worker-topology.txt").toFile().readText()
+    }
+
+    /** Owns the complete valid and invalid property matrices for the topology contract. */
+    private companion object {
+        /** Supplies every exact supported non-process worker override. */
+        @JvmStatic
+        fun validWorkerOverrides(): List<Int> = listOf(1, 2, 3, 4)
+
+        /** Supplies every required malformed or out-of-range worker override. */
+        @JvmStatic
+        fun invalidWorkerOverrides(): List<String> = listOf("0", "-1", "1.5", "   ", "four", "5")
+    }
 }

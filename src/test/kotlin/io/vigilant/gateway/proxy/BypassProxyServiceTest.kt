@@ -23,7 +23,10 @@ import io.vigilant.gateway.GatewayTestFixture
 import io.vigilant.gateway.assertUpstreamFailureWarning
 import io.vigilant.gateway.chatCompletionsBody
 import io.vigilant.gateway.closeAllResources
+import io.vigilant.gateway.closeWithinTestTimeout
+import io.vigilant.gateway.loopbackHttpAddress
 import io.vigilant.gateway.renderForSecretScan
+import io.vigilant.gateway.startWithinTestTimeout
 import java.net.URI
 import java.time.Duration
 import java.util.concurrent.CompletableFuture
@@ -47,14 +50,15 @@ class BypassProxyServiceTest {
     @AfterTest
     fun closeResources() {
         val closeActions = buildList<() -> Unit> {
-            servers.asReversed().forEach { server -> add { server.stop().join() } }
-            clientFactories.asReversed().forEach { factory -> add { factory.closeAsync().join() } }
+            servers.asReversed().forEach { server -> add(server::closeWithinTestTimeout) }
+            clientFactories.asReversed().forEach { factory -> add(factory::closeWithinTestTimeout) }
             disconnectingUpstreams.asReversed().forEach { upstream -> add(upstream::close) }
             add(fixture::close)
         }
         closeAllResources(*closeActions.toTypedArray())
     }
 
+    /** Proxies the complete HTTP request surface and preserves the upstream response. */
     @Test
     fun `proxies method path query headers body and response`() {
         val upstream = startServer { request ->
@@ -78,7 +82,7 @@ class BypassProxyServiceTest {
             )
         }
         val gateway = startGateway(upstream)
-        val client = WebClient.of(serverUri(gateway).toString())
+        val client = isolatedWebClient(serverUri(gateway))
 
         val request = HttpRequest.of(
             RequestHeaders.builder(HttpMethod.POST, "/v1/messages?stream=false")
@@ -97,10 +101,11 @@ class BypassProxyServiceTest {
         )
     }
 
+    /** Maps an upstream connection failure to the stable 502 proxy contract. */
     @Test
     fun `connection failure upstream is answered with stable 502 proxy error`() {
-        val gateway = startGateway(deadUpstreamUri(), WebClient.of())
-        val client = WebClient.of(serverUri(gateway).toString())
+        val gateway = startGateway(deadUpstreamUri(), isolatedWebClient())
+        val client = isolatedWebClient(serverUri(gateway))
 
         val response = client.get("/v1/models").aggregate().join()
 
@@ -108,16 +113,15 @@ class BypassProxyServiceTest {
         assertEquals("""{"error":"upstream_unavailable"}""", response.contentUtf8())
     }
 
+    /** Maps an upstream response timeout to the stable 504 proxy contract. */
     @Test
     fun `upstream that never responds is answered with stable 504 proxy error`() {
         val hungUpstream = startServer { HttpResponse.streaming() }
         val gateway = startGateway(
             serverUri(hungUpstream),
-            WebClient.builder().responseTimeout(Duration.ofMillis(300)).build(),
+            isolatedWebClient(responseTimeout = Duration.ofMillis(300)),
         )
-        val client = WebClient.builder(serverUri(gateway).toString())
-            .responseTimeout(Duration.ofSeconds(10))
-            .build()
+        val client = isolatedWebClient(serverUri(gateway), Duration.ofSeconds(10))
 
         val response = client.get("/v1/models").aggregate().join()
 
@@ -125,6 +129,7 @@ class BypassProxyServiceTest {
         assertEquals("""{"error":"upstream_timeout"}""", response.contentUtf8())
     }
 
+    /** Aborts a started downstream exchange without surfacing an Armeria internal error. */
     @Test
     fun `upstream failure mid response aborts the exchange without an internal framework error`() {
         val armeriaEvents = CopyOnWriteArrayList<ILoggingEvent>()
@@ -144,11 +149,9 @@ class BypassProxyServiceTest {
             }
             val gateway = startGateway(
                 serverUri(stalledUpstream),
-                WebClient.builder().responseTimeout(Duration.ofMillis(300)).build(),
+                isolatedWebClient(responseTimeout = Duration.ofMillis(300)),
             )
-            val client = WebClient.builder(serverUri(gateway).toString())
-                .responseTimeout(Duration.ofSeconds(10))
-                .build()
+            val client = isolatedWebClient(serverUri(gateway), Duration.ofSeconds(10))
 
             val exchange = runCatching { client.get("/v1/models").aggregate().join() }
 
@@ -171,15 +174,14 @@ class BypassProxyServiceTest {
         }
     }
 
+    /** Maps DNS resolution failure to the same stable 502 proxy contract. */
     @Test
     fun `unresolvable upstream host is answered with the same 502 proxy error`() {
         val gateway = startGateway(
             URI.create("http://vigilant-unreachable.invalid:8081"),
-            WebClient.builder().responseTimeout(Duration.ofSeconds(10)).build(),
+            isolatedWebClient(responseTimeout = Duration.ofSeconds(10)),
         )
-        val client = WebClient.builder(serverUri(gateway).toString())
-            .responseTimeout(Duration.ofSeconds(10))
-            .build()
+        val client = isolatedWebClient(serverUri(gateway), Duration.ofSeconds(10))
 
         val response = client.get("/v1/models").aggregate().join()
 
@@ -239,11 +241,9 @@ class BypassProxyServiceTest {
             }
             val gateway = startGateway(
                 serverUri(stalledUpstream),
-                WebClient.builder().responseTimeout(Duration.ofMillis(300)).build(),
+                isolatedWebClient(responseTimeout = Duration.ofMillis(300)),
             )
-            val client = WebClient.builder(serverUri(gateway).toString())
-                .responseTimeout(Duration.ofSeconds(10))
-                .build()
+            val client = isolatedWebClient(serverUri(gateway), Duration.ofSeconds(10))
 
             runCatching { client.get("/v1/models").aggregate().join() }
 
@@ -259,6 +259,7 @@ class BypassProxyServiceTest {
         event.assertUpstreamFailureWarning("upstream_timeout")
     }
 
+    /** Removes upstream response headers that are valid only for one transport hop. */
     @Test
     fun `removes hop by hop headers from the upstream response`() {
         val upstream = startServer {
@@ -274,7 +275,7 @@ class BypassProxyServiceTest {
             )
         }
         val gateway = startGateway(upstream)
-        val client = WebClient.of(serverUri(gateway).toString())
+        val client = isolatedWebClient(serverUri(gateway))
 
         val response = client.get("/v1/models").aggregate().join()
 
@@ -289,9 +290,10 @@ class BypassProxyServiceTest {
             }
     }
 
+    /** Rewrites outbound authority and strips request headers named by the connection hop. */
     @Test
     fun `rewrites authority and removes hop by hop request headers`() {
-        val service = BypassProxyService(URI.create("https://upstream.example:8443/base"), WebClient.of())
+        val service = BypassProxyService(URI.create("https://upstream.example:8443/base"), isolatedWebClient())
         val inbound = RequestHeaders.builder(HttpMethod.GET, "/v1/models?active=true")
             .scheme("http")
             .authority("gateway.example")
@@ -447,24 +449,27 @@ class BypassProxyServiceTest {
                 mapper.readTree(line)
             }
     }
+    /** Starts a bypass gateway against a fixture-owned upstream server. */
+    private fun startGateway(upstream: Server): Server = startGateway(serverUri(upstream), isolatedWebClient())
 
-
-    private fun startGateway(upstream: Server): Server = startGateway(serverUri(upstream), WebClient.of())
-
+    /** Starts a bypass gateway against [upstream] using the explicitly owned [client]. */
     private fun startGateway(upstream: URI, client: WebClient): Server =
         Server.builder()
-            .http(0)
+            .http(loopbackHttpAddress())
             .serviceUnder("/", BypassProxyService(upstream, client))
             .build()
             .startAndTrack()
 
     /** Builds and tracks a WebClient on a scenario-owned connection factory. */
-    private fun isolatedWebClient(baseUri: URI? = null): WebClient {
+    private fun isolatedWebClient(
+        baseUri: URI? = null,
+        responseTimeout: Duration = UPSTREAM_FAILURE_TIMEOUT,
+    ): WebClient {
         val factory = ClientFactory.builder().build().also(clientFactories::add)
         val builder = baseUri?.let { WebClient.builder(it.toString()) } ?: WebClient.builder()
         return builder
             .factory(factory)
-            .responseTimeout(UPSTREAM_FAILURE_TIMEOUT)
+            .responseTimeout(responseTimeout)
             .build()
     }
 
@@ -520,24 +525,31 @@ class BypassProxyServiceTest {
     private fun deadUpstreamUri(): URI =
         URI.create("http://127.0.0.1:${GatewayProcessFixture.reserveNonEphemeralPort()}")
 
+    /** Starts an ephemeral loopback server and registers it for reverse-order cleanup. */
     private fun startServer(service: (HttpRequest) -> HttpResponse): Server =
         Server.builder()
-            .http(0)
+            .http(loopbackHttpAddress())
             .serviceUnder("/") { _, request -> service(request) }
             .build()
             .startAndTrack()
 
+    /** Starts and registers this server within the shared lifecycle deadline. */
     private fun Server.startAndTrack(): Server {
-        start().join()
         servers += this
+        startWithinTestTimeout()
         return this
     }
 
+    /** Returns the loopback URI for a fixture-owned started server. */
     private fun serverUri(server: Server): URI =
         URI.create("http://127.0.0.1:${server.activeLocalPort()}")
 
+    /** Owns stable paths and deadlines shared by upstream-failure scenarios. */
     private companion object {
+        /** Request path used to correlate safe upstream-failure evidence. */
         const val UPSTREAM_FAILURE_PATH = "/v1/upstream-error-evidence"
+
+        /** Maximum time allowed for one upstream-failure observation. */
         val UPSTREAM_FAILURE_TIMEOUT: Duration = Duration.ofSeconds(5)
     }
 
