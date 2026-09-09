@@ -91,13 +91,20 @@ class BoundedRequestSourceOwner internal constructor(
     private val knownContentLength: Long?,
 ) : AutoCloseable {
     private val lock = Any()
+    /** Opaque immutable binding shared by successive parser/planner view leases. */
+    private val sourceIdentity = Any()
     private val segments = ArrayList<StorageSegment>()
+    /** Sole owner of prepared metadata until terminal replay cleanup. */
+    private var replayPatches: List<RequestSourcePatch> = emptyList()
+    /** Storage-sized output scratch retained through the active output callback only. */
+    private var replayScratch: ByteArray? = null
     private val segmentCapacity =
         ((quota.limits.perRequestLimitBytes + quota.limits.maxRetainedSegmentsPerRequest - 1) /
             quota.limits.maxRetainedSegmentsPerRequest).toInt()
     private var lifecycleState = RequestSourceState.NEW
     private var retainedBytes = 0L
     private var resourcesReleased = false
+    private var outputCallbackActive = false
     private var activeAccess = false
     private var ingestSubscription: Flow.Subscription? = null
     private var ingestFuture: IngestFuture? = null
@@ -143,24 +150,35 @@ class BoundedRequestSourceOwner internal constructor(
             }
         }
 
-    /** Acquires the sole sequential demand-driven replay lease. */
-    fun replay(): RequestSourceReplayResult =
+    /** Acquires the sole exact replay lease and its validated output length. */
+    fun replay(): RequestSourceReplayResult = preparePatchedReplay(emptyList())
+
+    /** Prepares one owner-bound replay after validating every non-expanding raw replacement. */
+    fun preparePatchedReplay(patches: Collection<RequestSourcePatch>): RequestSourceReplayResult =
         synchronized(lock) {
-            when {
-                lifecycleState == RequestSourceState.CLOSED ->
-                    RequestSourceReplayResult.Unavailable(RequestSourceOutcomeCode.SOURCE_CLOSED)
-
-                lifecycleState != RequestSourceState.COMPLETE || activeAccess ->
-                    RequestSourceReplayResult.Unavailable(RequestSourceOutcomeCode.INVALID_SOURCE_STATE)
-
-                else -> {
-                    activeAccess = true
-                    RequestSourceReplayResult.Available(ReplayPublisher())
-                }
+            if (lifecycleState != RequestSourceState.COMPLETE || activeAccess) {
+                return@synchronized RequestSourceReplayResult.Unavailable(stateFailure())
             }
+            val snapshot: List<RequestSourcePatch> = java.util.List.copyOf(patches)
+            var previousEnd = 0L
+            var outputLength = retainedBytes
+            for (patch in snapshot) {
+                val invalidRange = patch.start < previousEnd || patch.end <= patch.start || patch.end > retainedBytes
+                if (invalidRange || patch.replacement.size > patch.end - patch.start) {
+                    return@synchronized RequestSourceReplayResult.Unavailable(
+                        RequestSourceOutcomeCode.INVALID_SOURCE_STATE,
+                    )
+                }
+                outputLength -= patch.end - patch.start - patch.replacement.size
+                previousEnd = patch.end
+            }
+            activeAccess = true
+            replayPatches = snapshot
+            if (snapshot.isNotEmpty()) replayScratch = ByteArray(segmentCapacity)
+            RequestSourceReplayResult.Available(ReplayPublisher(), outputLength)
         }
 
-    /** Idempotently releases all owner, byte, and bookkeeping reservations. */
+    /** Requests close immediately; an active output callback retains bytes until it returns. */
     override fun close() {
         val subscription: Flow.Subscription?
         val future: IngestFuture?
@@ -262,15 +280,18 @@ class BoundedRequestSourceOwner internal constructor(
         future?.complete(RequestSourceIngestResult.Rejected(code))
     }
 
-    /** Clears source bytes and releases quota exactly once. */
+    /** Clears source, compact plan and scratch, then releases quota once after borrowed output returns. */
     private fun releaseResourcesLocked() {
-        if (resourcesReleased) {
+        if (resourcesReleased || outputCallbackActive) {
             return
         }
         resourcesReleased = true
         val segmentCount = segments.size
         segments.forEach(StorageSegment::clear)
         segments.clear()
+        replayPatches = emptyList()
+        replayScratch?.fill(0)
+        replayScratch = null
         quota.releaseOwner(retainedBytes, segmentCount)
         retainedBytes = 0
     }
@@ -432,6 +453,9 @@ class BoundedRequestSourceOwner internal constructor(
 
     /** Single-use read-only view whose stream close releases the sequential lease. */
     private inner class SourceView : RequestSourceView {
+        /** Binds parser metadata to this owner without retaining its payload or lifecycle object. */
+        override val sourceIdentity: Any get() = this@BoundedRequestSourceOwner.sourceIdentity
+
         private val viewLock = Any()
         private var opened = false
         private var closed = false
@@ -522,18 +546,24 @@ class BoundedRequestSourceOwner internal constructor(
         }
     }
 
-    /** Single-subscriber publisher that emits one retained segment per demand unit. */
+    /** Single-subscriber publisher that emits one bounded output chunk per demand unit. */
     private inner class ReplayPublisher : Flow.Publisher<ByteBuffer> {
         private val subscribed = AtomicBoolean()
 
-        /** Connects one downstream subscriber to exact-byte replay. */
+        /** Connects one subscriber to exact or patched replay and cleans up a rejected subscription callback. */
         override fun subscribe(subscriber: Flow.Subscriber<in ByteBuffer>) {
             if (!subscribed.compareAndSet(false, true)) {
                 subscriber.onSubscribe(EmptySubscription)
                 subscriber.onError(IllegalStateException("Request source replay supports one subscriber"))
                 return
             }
-            subscriber.onSubscribe(ReplaySubscription(subscriber))
+            val subscription = ReplaySubscription(subscriber)
+            try {
+                subscriber.onSubscribe(subscription)
+            } catch (failure: Throwable) {
+                subscription.cancel()
+                throw failure
+            }
         }
     }
 
@@ -544,10 +574,15 @@ class BoundedRequestSourceOwner internal constructor(
         private val demandLock = Any()
         private var demand = 0L
         private var segmentIndex = 0
+        private var sourceOffset = 0L
+        private var patchIndex = 0
+        private var replacementOffset = 0
+        private var outputFinished = false
         private var draining = false
         private var terminated = false
+        private var pendingFailure: Throwable? = null
 
-        /** Adds bounded demand and drains no more segments than requested. */
+        /** Adds bounded demand and drains no more output chunks than requested. */
         override fun request(n: Long) {
             if (n <= 0) {
                 fail(IllegalArgumentException("Replay demand must be positive"))
@@ -577,60 +612,126 @@ class BoundedRequestSourceOwner internal constructor(
             finishReplay()
         }
 
-        /** Emits retained segments sequentially until current demand is exhausted. */
+        /** Emits bounded chunks serially and releases ownership after any downstream throwable. */
         private fun drain() {
             while (true) {
-                synchronized(demandLock) {
-                    if (terminated || demand == 0L) {
-                        draining = false
-                        return
-                    } else {
-                        demand--
+                val terminalRequested = synchronized(demandLock) {
+                    when {
+                        terminated -> true
+                        demand == 0L -> { draining = false; return }
+                        else -> { demand--; false }
                     }
                 }
-                val segment = replaySegment(segmentIndex)
+                if (terminalRequested) {
+                    complete()
+                    return
+                }
+                val segment = nextOutput()
                 if (segment == null) {
                     complete()
                     return
                 }
-                segmentIndex++
-                try {
-                    subscriber.onNext(segment)
-                } catch (failure: RuntimeException) {
-                    fail(failure)
+                val callbackFailure = emitOutput(segment)
+                if (callbackFailure != null) {
+                    fail(callbackFailure)
+                    complete()
                     return
                 }
-                if (segmentIndex >= replaySegmentCount()) {
+                if (outputFinished) {
                     complete()
                     return
                 }
             }
         }
 
-        /** Completes replay and releases the owner before publishing terminal completion. */
-        private fun complete() {
-            synchronized(demandLock) {
-                if (terminated) {
-                    return
-                }
-                terminated = true
-                draining = false
+        /**
+         * Invokes downstream outside the owner lock and returns any subscriber throwable.
+         * Ends the borrowed callback under the owner lock, releasing a closed owner's resources even on failure.
+         */
+        private fun emitOutput(segment: ByteBuffer): Throwable? = try {
+            subscriber.onNext(segment)
+            null
+        } catch (failure: Throwable) {
+            failure
+        } finally {
+            synchronized(lock) {
+                outputCallbackActive = false
+                if (lifecycleState == RequestSourceState.CLOSED) releaseResourcesLocked()
             }
-            finishReplay()
-            subscriber.onComplete()
         }
 
-        /** Terminates replay with a safe structural error and releases the owner. */
-        private fun fail(failure: RuntimeException) {
-            synchronized(demandLock) {
-                if (terminated) {
-                    return
+        /** Produces at most one storage-sized output chunk without allocating a rewritten body. */
+        private fun nextOutput(): ByteBuffer? = synchronized(lock) {
+            if (lifecycleState != RequestSourceState.COMPLETE) return@synchronized null
+            if (replayPatches.isEmpty()) nextOriginalOutputLocked() else nextPatchedOutputLocked()
+        }
+
+        /** Borrows one original segment while the caller holds the owner lock. */
+        private fun nextOriginalOutputLocked(): ByteBuffer? {
+            val next = replaySegment(segmentIndex++)
+            outputFinished = segmentIndex >= replaySegmentCount()
+            if (next != null) outputCallbackActive = true
+            return next
+        }
+
+        /** Fills and borrows the bounded patch scratch buffer while the caller holds the owner lock. */
+        private fun nextPatchedOutputLocked(): ByteBuffer? {
+            val output = checkNotNull(replayScratch)
+            var written = 0
+            while (written < output.size && sourceOffset < retainedBytes) {
+                val patch = replayPatches.getOrNull(patchIndex)
+                if (patch != null && sourceOffset == patch.start) {
+                    val count = minOf(output.size - written, patch.replacement.size - replacementOffset)
+                    patch.replacement.copyInto(output, written, replacementOffset, replacementOffset + count)
+                    written += count
+                    replacementOffset += count
+                    if (replacementOffset == patch.replacement.size) {
+                        sourceOffset = patch.end
+                        patchIndex++
+                        replacementOffset = 0
+                    }
+                } else {
+                    val until = minOf(patch?.start ?: retainedBytes, retainedBytes)
+                    val index = (sourceOffset / segmentCapacity).toInt()
+                    val offset = (sourceOffset % segmentCapacity).toInt()
+                    val copied = segments[index].copyTo(offset, output, written, minOf(output.size - written,
+                        (until - sourceOffset).toInt()))
+                    written += copied
+                    sourceOffset += copied
                 }
+            }
+            outputFinished = sourceOffset == retainedBytes
+            return if (written == 0) null else {
+                outputCallbackActive = true
+                ByteBuffer.wrap(output, 0, written).slice().asReadOnlyBuffer()
+            }
+        }
+
+        /** Publishes one terminal signal after the serialized drain has returned its borrowed callback. */
+        private fun complete() {
+            val failure: Throwable?
+            val notifyComplete: Boolean
+            synchronized(demandLock) {
+                failure = pendingFailure
+                pendingFailure = null
+                notifyComplete = !terminated
                 terminated = true
                 draining = false
             }
             finishReplay()
-            subscriber.onError(failure)
+            if (failure != null) subscriber.onError(failure) else if (notifyComplete) subscriber.onComplete()
+        }
+
+        /** Requests a terminal error without overlapping an active output callback. */
+        private fun fail(failure: Throwable) {
+            val signalNow = synchronized(demandLock) {
+                if (terminated) return
+                terminated = true
+                pendingFailure = failure
+                !draining
+            }
+            finishReplay()
+            if (signalNow) complete()
         }
     }
 

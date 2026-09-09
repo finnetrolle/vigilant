@@ -2,12 +2,13 @@ package io.vigilant.gateway.proxy
 
 import io.vigilant.source.BoundedRequestSourceOwner
 import io.vigilant.source.RequestSourceReplayResult
+import io.vigilant.source.RequestSourcePatch
 import java.nio.ByteBuffer
 import java.util.concurrent.Flow
 import java.util.concurrent.atomic.AtomicReference
 
 /**
- * One-shot ownership boundary between complete shadow inspection and transport replay.
+ * One-shot ownership boundary between complete request enforcement and transport replay.
  *
  * Before a successful [transferTo], this object owns source cleanup. After the forwarding
  * callback returns, terminal replay completion, failure, or cancellation owns cleanup.
@@ -16,6 +17,8 @@ import java.util.concurrent.atomic.AtomicReference
 internal class ReplayReadyRequest private constructor(
     private val owner: BoundedRequestSourceOwner,
     private val publisher: Flow.Publisher<ByteBuffer>,
+    /** Validated patched body length; null preserves original request header handling. */
+    val maskedContentLength: Long? = null,
 ) : AutoCloseable {
     private val state = AtomicReference(TransferState.READY)
 
@@ -53,6 +56,15 @@ internal class ReplayReadyRequest private constructor(
     }
 
     companion object {
+        /** Acquires one owner-bound validated patched replay; invalid preparation is a technical refusal. */
+        fun masked(owner: BoundedRequestSourceOwner, patches: Collection<RequestSourcePatch>): ReplayReadyRequest =
+            when (val replay = owner.preparePatchedReplay(patches)) {
+                is RequestSourceReplayResult.Available -> ReplayReadyRequest(owner, replay.publisher,
+                    replay.contentLength)
+                is RequestSourceReplayResult.Unavailable ->
+                    throw SafeContextFailure(ShadowInspectionError.InspectionFailed)
+            }
+
         /**
          * Acquires exact replay and creates its transfer boundary over one complete owner.
          *

@@ -200,7 +200,7 @@ final class InspectionQualificationReportTest {
             shape(
                 InspectionQualificationShape.MAX_SINGLE_FRAGMENT,
                 1,
-                new InspectionQualificationHttpOutcome(200, "qualification-ok"),
+                new InspectionQualificationHttpOutcome(200, "{\"id\":\"chatcmpl-test\",\"object\":\"chat.completion\",\"model\":\"gpt-test\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"qualification-ok\"},\"finish_reason\":\"stop\"}]}"),
                 new InspectionQualificationAuditOutcome(
                     Decision.CLEAN,
                     Coverage.FULLY_INSPECTABLE,
@@ -211,7 +211,7 @@ final class InspectionQualificationReportTest {
             shape(
                 InspectionQualificationShape.MAX_NORMALIZED_FRAGMENTS,
                 16_384,
-                new InspectionQualificationHttpOutcome(200, "qualification-ok"),
+                new InspectionQualificationHttpOutcome(200, "{\"id\":\"chatcmpl-test\",\"object\":\"chat.completion\",\"model\":\"gpt-test\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"qualification-ok\"},\"finish_reason\":\"stop\"}]}"),
                 new InspectionQualificationAuditOutcome(
                     Decision.CLEAN,
                     Coverage.FULLY_INSPECTABLE,
@@ -233,7 +233,7 @@ final class InspectionQualificationReportTest {
             shape(
                 InspectionQualificationShape.GAP_DENSE,
                 0,
-                new InspectionQualificationHttpOutcome(200, "qualification-ok"),
+                new InspectionQualificationHttpOutcome(200, "{\"id\":\"chatcmpl-test\",\"object\":\"chat.completion\",\"model\":\"gpt-test\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"qualification-ok\"},\"finish_reason\":\"stop\"}]}"),
                 new InspectionQualificationAuditOutcome(
                     Decision.INSPECTION_GAP,
                     Coverage.UNINSPECTABLE,

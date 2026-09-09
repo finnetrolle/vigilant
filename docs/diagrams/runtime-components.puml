@@ -25,6 +25,8 @@ node "Процесс Vigilant" as Vigilant {
   component "fast-pii adapter и recognizers" as FastPii
   component "Generic windowing core" as Windowing
   component "ShadowAuditLogger\nLogback AsyncAppender" as AuditLogger
+  component "RequestRewritePlanner + RequestMaskingFormatter" as RequestRewrite
+  component "BoundedRequestSourceOwner\noriginal quota + patch plan + bounded scratch" as RequestSource
   component "ReplayReadyRequest" as Replay
   component "BypassProxyService" as Transport
   component "RetainedResponseHandler" as ResponseHandler
@@ -57,9 +59,13 @@ PolicyEngine --> FastPii : независимые фрагменты
 FastPii --> Windowing : capability и detector contract
 Workflow --> AuditLogger : started/completed\nbest-effort pair
 AuditLogger --> Stdout : non-blocking JSONL
-Workflow --> Replay : решение Forward
+Workflow --> RequestRewrite : selected free-text MASK
+RequestRewrite --> RequestSource : compact immutable patches
+Workflow --> Replay : validated ALLOW/MASK Forward
+Workflow --> ShadowProxy : policy/structural 403 or technical 503
+Replay --> RequestSource : one terminal owner
 Replay --> Transport : одноразовая передача владения
-Transport --> Upstream : точное воспроизведение запроса
+Transport --> Upstream : original или exact patched bytes
 Upstream --> Transport : потоковый ответ
 Transport --> ShadowProxy : gateway-owned exchange handle
 ShadowProxy --> ResponseHandler : upstream response

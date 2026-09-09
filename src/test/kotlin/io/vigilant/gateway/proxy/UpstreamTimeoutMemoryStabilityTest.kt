@@ -4,6 +4,7 @@ import com.linecorp.armeria.common.HttpStatus
 import io.vigilant.gateway.GatewayProcessFixture
 import io.vigilant.gateway.GatewayTestFixture
 import io.vigilant.gateway.chatCompletions
+import io.vigilant.gateway.testPolicyConfiguration
 import io.vigilant.gateway.validChatCompletionsResponse
 import java.time.Duration
 import java.util.concurrent.CompletableFuture
@@ -31,6 +32,7 @@ class UpstreamTimeoutMemoryStabilityTest {
     /**
      * A bounded gateway keeps serving after enough successful exchanges to
      * exhaust its heap if every completed request remains retained for 30 s.
+     * An explicit empty snapshot isolates transport timeout retention from inspection load/deadlines.
      */
     @Test
     fun `completed responses do not remain retained until response timeout`() {
@@ -42,6 +44,7 @@ class UpstreamTimeoutMemoryStabilityTest {
                 "VIGILANT_UPSTREAM_RESPONSE_TIMEOUT" to "30s",
                 "VIGILANT_OTLP_ENABLED" to "false",
                 "VIGILANT_LOG_LEVEL" to "WARN",
+                "VIGILANT_POLITICS_CONFIG" to testPolicyConfiguration { "policies = []" },
             ),
         )
         val process = gateway.process
@@ -68,7 +71,8 @@ class UpstreamTimeoutMemoryStabilityTest {
                     )
                 }
                 responses.forEach { response ->
-                    assertEquals(HttpStatus.OK, response.join().status())
+                    val completed = response.join()
+                    assertEquals(HttpStatus.OK, completed.status(), completed.contentUtf8())
                 }
             }
 

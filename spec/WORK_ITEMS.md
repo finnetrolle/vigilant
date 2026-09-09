@@ -124,7 +124,7 @@ Issue является листом mind map, если:
 | [VIG-31: Cache external identity lookup](issues/issue_31_identity_lookup_cache.md) | `Done` | завершена | 0 дней осталось |
 | [EPIC-32: Best-effort stdout audit migration](epics/epic_32_best_effort_stdout_audit.md) | `Done` | 2/2 | 0 дней осталось |
 | [VIG-33: Availability SLO and operational evidence](issues/issue_33_availability_slo_and_operations.md) | `Draft` | production SLO не определён | не оценено |
-| [VIG-34: Request-side PII enforcement](issues/issue_34_request_pii_enforcement.md) | `Draft` | reaction, rewrite и lifecycle contract требуют диалога | не оценено |
+| [VIG-34: Request-side PII enforcement](issues/issue_34_request_pii_enforcement.md) | `Done` | завершена; request/source/process/OCI evidence и build GREEN | 0 дней осталось |
 | [VIG-35: Выбор production identity mode](issues/issue_35_production_identity_mode.md) | `Done` | завершена | 0 дней осталось |
 | [VIG-36: Очистка superseded требований и архитектурных документов](issues/issue_36_superseded_requirements_cleanup.md) | `Draft` | требуется inventory и завершение contract dependencies | не оценено |
 | [EPIC-37: Predictable and faster test suite](epics/epic_37_predictable_test_throughput.md) | `Done` | 5/5 | 0 дней осталось |
@@ -224,9 +224,13 @@ Issue является листом mind map, если:
   Caffeine decorator и отдельный HMAC hasher, configurable TTL/size,
   coalescing/cancellation и safe metrics реализованы; полный build и packaged
   lifecycle cases прошли. Нагрузочное тестирование cache не входило в issue.
-- [ ] Провести отдельный requirements dialogue по
-  [VIG-34](issues/issue_34_request_pii_enforcement.md), перевести issue в Ready
-  и только затем реализовать request `ALLOW`/`MASK`/`BLOCK`.
+- [x] Провести requirements dialogue по
+  [VIG-34](issues/issue_34_request_pii_enforcement.md) и перевести issue в Ready:
+  selection, field classification, reactions, shortening, replay/lifecycle
+  и evidence contracts зафиксированы.
+- [x] Реализовать [VIG-34](issues/issue_34_request_pii_enforcement.md):
+  request `ALLOW`/`MASK`/`BLOCK`, bounded exact patches и lifecycle/privacy
+  matrices подтверждены; required process/OCI/validator/build GREEN.
 
 ### Phase 6: финальная документация и operations
 
@@ -236,8 +240,12 @@ Issue является листом mind map, если:
 - [ ] После стабилизации identity, enforcement и observability уточнить
   [VIG-33](issues/issue_33_availability_slo_and_operations.md).
 
-Текущий следующий шаг: отдельный requirements dialogue по
-[VIG-34](issues/issue_34_request_pii_enforcement.md) перед request enforcement.
+Текущий следующий шаг: уточнить inventory и acceptance
+[VIG-36](issues/issue_36_superseded_requirements_cleanup.md), `Draft`.
+[VIG-34](issues/issue_34_request_pii_enforcement.md) завершена: полный request,
+source, privacy и packaged lifecycle contract подтверждён, обязательные
+HTTP/process/OCI/validator/build gates GREEN; точное evidence находится в
+[closure ledger](../docs/request-enforcement-evidence.md).
 [VIG-31](issues/issue_31_identity_lookup_cache.md) завершена: config, HMAC cache,
 HTTP/race/process evidence и full build GREEN; нового performance claim нет.
 EPIC-37 завершена:

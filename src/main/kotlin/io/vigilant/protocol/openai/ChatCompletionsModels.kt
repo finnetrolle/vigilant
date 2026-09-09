@@ -8,6 +8,9 @@ import java.util.Collections
 
 /** Complete immutable byte source that can open independent read-only streams. */
 fun interface CompleteByteSource {
+    /** Stable source binding; leased views override this with a shared opaque owner token. */
+    val sourceIdentity: Any get() = this
+
     /** Opens a stream over the complete source without transferring source ownership. */
     fun openStream(): InputStream
 
@@ -19,8 +22,12 @@ fun interface CompleteByteSource {
         /** Creates a source backed by defensive copies of ordered [segments]. */
         fun copyOf(segments: Collection<ByteArray>): CompleteByteSource {
             val snapshot = segments.map(ByteArray::copyOf)
-            return CompleteByteSource {
-                SequenceInputStream(
+            return object : CompleteByteSource {
+                /** Opaque identity does not retain source payload through normalized request metadata. */
+                override val sourceIdentity: Any = Any()
+
+                /** Opens one independent stream over the immutable snapshot. */
+                override fun openStream(): InputStream = SequenceInputStream(
                     Collections.enumeration(snapshot.map(::ByteArrayInputStream)),
                 )
             }
@@ -278,7 +285,13 @@ class NormalizedChatCompletionsRequest(
     inspectionGaps: Collection<InspectionGap>,
     /** Explicit inspection coverage. */
     val coverage: InspectionCoverage,
+    sources: Collection<RequestFragmentSource> = emptyList(),
+    /** Opaque parser-source binding; null denotes metadata without rewrite authority. */
+    val sourceIdentity: Any? = null,
 ) {
+    /** Parser-owned immutable classification and raw token metadata in fragment order. */
+    val sources: List<RequestFragmentSource> = java.util.List.copyOf(sources)
+
     /** Ordered immutable logical text fragments. */
     val fragments: List<TextFragment> = Collections.unmodifiableList(ArrayList(fragments))
 
@@ -324,3 +337,23 @@ sealed interface ChatCompletionsParseResult {
         val code: ChatCompletionsParseFailureCode,
     ) : ChatCompletionsParseResult
 }
+
+/** Protocol-owned rewrite eligibility independent of generic semantic kinds. */
+enum class RequestFieldClass {
+    /** A value whose exact selected text spans may be replaced. */
+    FREE_TEXT,
+    /** A name, constraint, argument or formal input requiring whole-request rejection under MASK. */
+    STRUCTURAL,
+}
+
+/** Immutable parser-owned association of a request fragment with its recognized source field. */
+data class RequestFragmentSource(
+    /** Original source-order fragment ordinal. */
+    val fragmentOrdinal: Int,
+    /** Exact protocol locator, including escaped schema keys. */
+    val locator: ProtocolLocator,
+    /** Classification assigned by the recognized protocol-field collector. */
+    val fieldClass: RequestFieldClass,
+    /** Opening quote byte offset for free text; structural fields never receive rewrite coordinates. */
+    val rawTokenStart: Long?,
+)

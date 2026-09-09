@@ -37,20 +37,69 @@ heap sizing и runtime OOM policy принадлежат deployment.
 только PII spans, найденные `MASK` policies; `ALLOW` не изменяет text. Mutation
 сохраняет valid OpenAI JSON, unknown fields и всю нетронутую структуру.
 
+Для request действует согласованное ограничение
+[VIG-34](issues/issue_34_request_pii_enforcement.md): если выбранный `MASK`
+затрагивает структурное содержимое, весь request блокируется вместо его
+переписывания. Это имена инструментов, участников и схем; model-visible ключи
+JSON Schema; modern/deprecated function arguments и custom tool input;
+строковые `enum`, `const`, `default`, `pattern`; грамматики инструментов и поля
+местоположения. Вложенный JSON или другой язык не разбирается ради masking.
+
+Маскируется свободный текст: сообщения и результаты инструментов, описания,
+заголовки, примеры, имена файлов, открытый reasoning и predicted output.
+Точный конечный перечень recognized fields принадлежит VIG-34. Наличие
+структурной находки только у `ALLOW` policy не вызывает блокировку. Этот request contract и его evidence принадлежат VIG-34.
+
+При request `MASK` replacement занимает не больше UTF-8 bytes, чем selected
+decoded PII span. Помещающийся полный marker сохраняется; иначе внутреннее
+слово обрезается справа с сохранением brackets. Для span длиной 1 или 2 bytes
+используются `*` или `**`. Заменяется весь PII span; сохранять часть исходного
+PII ради длины запрещено. Остальные raw JSON bytes не меняются, поэтому
+masked body не больше исходного и не отклоняется из-за роста marker.
+Полные типы findings сохраняются в safe aggregate metadata. Точный rendering
+contract принадлежит VIG-34; текущая RESPONSE representation не меняется.
+
+В REQUEST policy реакция `clean` обязательна и допускает только `ALLOW` без
+transformations. Это вклад успешно завершённой чистой проверки одного
+fragment; он не отменяет `MASK` или `BLOCK` от других проверок. Невалидный
+`clean` отклоняется при startup, в том числе у disabled policies. Доменный
+engine и текущий RESPONSE contract сохраняют свои возможности; ограничение
+исполняемого REQUEST path определено VIG-34.
+
+В REQUEST policy `error` обязательна и допускает только `BLOCK` без
+transformations. Ошибка или timeout настроенной проверки возвращает VIG-29
+`503` с `Retry-After: 1` до upstream handoff; обнаружение PII при этом не
+утверждается. `error = ALLOW` отклоняется при startup, в том числе у disabled
+policies. Переход на VIG-34 требует явного обновления прежних shadow policy
+files; автоматический fallback на пропуск запроса отсутствует. Текущая
+RESPONSE configuration semantics этим request contract не изменяется.
+
 Точный HTTP status и OpenAI-compatible error body для `BLOCK` принадлежат
 [VIG-29](issues/issue_29_openai_error_contract.md).
 
+При request aggregation technical error/timeout имеет приоритет над policy
+`BLOCK` и structural `MASK`: итог `503`. При отсутствии technical failure
+любой блокирующий результат даёт `403`; иначе применяются текстовые masks
+или original replay. Это согласованный приоритет VIG-34, не новый response
+contract.
+
 ## MVP-04. Policies и группы
 
-`politics.conf` загружается и строго валидируется при startup. Каждая policy
-имеет unique `id`, `direction` (`REQUEST`, `RESPONSE` или `BOTH_WAYS`), deadline,
-reaction и список groups. Group selector использует exact group name либо `*`;
-matching работает по `ANY`.
+`politics.conf` загружается и строго валидируется при startup. VIG-34 сохраняет
+текущую полную policy schema: unique `id`, `version`, `enabled`, `match`,
+`detectors`, `deadline`, `reactions` и `overrides`. Matching включает URL,
+model, phase `REQUEST|RESPONSE` и subject `USER|GROUP|*`; existing exact/wildcard
+rules и simultaneous overrides сохраняются. Замена этой schema на
+`direction`/`BOTH_WAYS` или упрощённый список groups не входит в VIG-34.
 
 Request и response выбирают независимые policy sets из одного immutable startup
-snapshot и одной resolved identity. Пользователь без совпавшей policy проходит
-без PII inspection. При startup полный загруженный policy file записывается в
-technical logs для расследований.
+snapshot и одной resolved identity. Применение проверки выбирает администратор:
+явный `policies = []` допустим, global coverage не требуется, без applied
+PII policy `fast-pii` не запускается. Identity, protocol validation и source
+admission при этом сохраняются. Файл остаётся обязательным; его полное
+содержимое не записывается в logs, используются safe policy references и
+validation diagnostics согласно audit/privacy contract. Эти изменения startup coverage принадлежат VIG-34;
+[реестр](WORK_ITEMS.md) фиксирует статус обязательного implementation evidence.
 
 ## MVP-05. Identity
 

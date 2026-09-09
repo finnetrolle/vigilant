@@ -9,6 +9,10 @@
 - **Оценка:** 2-3 инженерных дня
 - **Уверенность:** High
 
+## Текущий successor
+
+[VIG-34](issue_34_request_pii_enforcement.md) заменяет обязательную global coverage и shadow-only startup validation: explicit empty/disabled/unmatched snapshot допустим; REQUEST clean требует ALLOW, error требует BLOCK, detected допускает ALLOW/MASK/BLOCK. Исторические Done и evidence ниже сохраняют исходный VIG-12 contract.
+
 ## Результат
 
 Startup принимает policy snapshot только когда он содержит effective enabled

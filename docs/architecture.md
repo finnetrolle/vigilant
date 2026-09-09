@@ -4,8 +4,9 @@
 
 Vigilant - однопроцессный HTTP gateway на Kotlin и Armeria. Текущий
 production increment поддерживает request-side PII inspection для OpenAI Chat
-Completions в shadow mode и ordinary JSON/SSE response enforcement. Request не
-блокируется и не изменяется. Upstream response полностью удерживается в памяти;
+Completions с ALLOW/MASK/BLOCK и ordinary JSON/SSE response enforcement. Request
+MASK patch-ит free text, structural MASK блокирует весь request, technical error
+имеет приоритет 503 над policy BLOCK. Upstream response полностью удерживается в памяти;
 оба transport проходят общий policy `ALLOW`/`MASK`/`BLOCK`. Client не
 получает status, headers или body до terminal protocol state и final outcome.
 
@@ -16,7 +17,7 @@ Completions в shadow mode и ordinary JSON/SSE response enforcement. Request н
 - schema-tolerant Chat Completions JSON, который можно однозначно разобрать для
   проверки.
 
-Request-side `MASK`/`BLOCK`, OpenAI Responses API и `REMOVE` пока не
+OpenAI Responses API и `REMOVE` пока не
 подключены к runtime.
 Подробные границы HTTP-контракта приведены в
 [runtime contract](runtime-contract.md).
@@ -28,6 +29,9 @@ Request-side `MASK`/`BLOCK`, OpenAI Responses API и `REMOVE` пока не
 - [диаграмма компонентов исполняемой системы](diagrams/runtime-components.puml)
   показывает границу процесса, внутренние компоненты, вышестоящий сервер и
   container-managed stdout;
+- [диаграмма основных классов runtime](diagrams/runtime-classes.puml)
+  показывает composition root, HTTP decorator chain, identity-стратегии,
+  request/response ownership и внутреннюю структуру policy/PII orchestration;
 - [последовательность проверки запроса](diagrams/request-inspection-sequence.puml)
   показывает отсутствие audit до detector execution, stdout lifecycle pair,
   точное воспроизведение и атомарно удержанный response;
@@ -48,7 +52,7 @@ context клиенту и передаёт его upstream.
 
 `PiiShadowProxyService` до чтения body проверяет method, path и media type.
 Неподдерживаемый descriptor получает stable `400 unsupported_schema` и не
-создаёт shadow audit.
+создаёт analysis audit.
 
 Затем выбранная реализация общего `BearerIdentityExtractor` выполняется на
 blocking-safe request executor. Development/test `DummyIdentityExtractor`
@@ -77,16 +81,19 @@ body demand и upstream call. Raw token не сохраняется, а прин
 проверяется до body demand, а фактический размер - во время ingest.
 
 Complete source имеет последовательные leases: сначала read-only view для
-parser, затем demand-driven replay. После ingest HTTP-адаптер атомарно передаёт
+parser, затем optional sequential rewrite view и demand-driven original/patched replay. После ingest HTTP-адаптер атомарно передаёт
 owner в `ShadowInspectionWorkflow`. При expected reject, exception или
 cancellation workflow закрывает owner; при `Forward` ownership переходит в
 `ReplayReadyRequest`. Cancellation закрывает owner, отменяет
-ingest/inspection/replay и освобождает квоты.
+ingest/inspection/replay; квоты освобождаются после последнего активного output
+callback. Owner удерживает original bytes, компактный immutable patch plan и
+bounded scratch до terminal output, даже если последний input уже прочитан.
 
 ### 3. Lossless parsing
 
 `ChatCompletionsRequestParser` читает отдельный view и строит только
-нормализованное представление model-visible text. Исходные bytes не
+нормализованное представление model-visible text, immutable field class,
+source binding и raw token coordinates для free text. Исходные bytes не
 пересериализуются и не заменяются DTO.
 
 Parser извлекает модель и независимые text fragments из поддержанных message,
@@ -126,13 +133,14 @@ Armeria `ServiceRequestContext`. Public handoff создаёт response context,
 detector execution между policies, соблюдает deadline каждой policy и строит
 детерминированное объяснение решения.
 
-Строгая структура HOCON, точное сопоставление и ограничения теневого режима при
+Строгая структура HOCON, точное сопоставление и executable REQUEST ограничения при
 запуске описаны в [руководстве по политикам](policies.md).
 
-Policy domain поддерживает `ALLOW`/`BLOCK` и `MASK` transformation plans. Startup
-validation сохраняет `REQUEST` policies shadow-only, но разрешает existing valid
-enforcement reactions для `RESPONSE`. Detector error/deadline в request остаётся
-shadow audit `ERROR`; response даёт fail-closed `503` без reaction fallback.
+Policy domain поддерживает ALLOW/BLOCK и canonical MASK instructions. REQUEST
+startup требует clean ALLOW/error BLOCK без transformations и разрешает detected
+ALLOW/MASK/BLOCK. Empty selection и global override допустимы, implicit detector
+отсутствует. Response validation сохраняется. Workflow оценивает все fragments:
+technical error/deadline даёт 503 выше policy BLOCK/structural MASK (403).
 
 ### 5. Fast PII detector
 
@@ -166,7 +174,11 @@ request context и оценивает каждый независимый text f
 и непосредственно перед первым detector execution `ShadowAuditLogger`
 best-effort публикует `policy.analysis_started`. После terminal outcome и до
 transport handoff он публикует `policy.analysis_completed` с safe aggregate
-coverage/counts и stable ERROR code либо successful `reaction=ALLOW`.
+coverage/counts и stable ERROR code либо actual reaction ALLOW/MASK/BLOCK.
+Перед MASK completion `RequestRewritePlanner` проверяет raw tokens в bounded
+sequential view, переиспользует canonical JSON scalar decoding и validated
+`RequestMaskingFormatter` shortening. Structural parse/detector не повторяются;
+original source не копируется в full transformed body.
 Тот же logger обрамляет actual ordinary/SSE response detector execution парой с
 `phase=RESPONSE`; terminal reaction может быть `ALLOW`, `MASK` или `BLOCK`.
 
@@ -183,11 +195,13 @@ container runtime и deployment.
 `ReplayReadyRequest` инкапсулирует demand-driven publisher. Его `transferTo`
 допускает ровно один transport handoff. `close()` до
 handoff и synchronous callback failure освобождают source; после принятого
-handoff owner освобождается только terminal signal replay. Это исключает окно
+handoff owner освобождается только после terminal output callback replay. Это исключает окно
 без владельца между workflow и transport.
 
 Во время handoff исходные end-to-end headers, включая accepted Authorization,
-и исходные bytes передаются в `BypassProxyService`. Этот transport слой:
+и original/validated patched bytes передаются в `BypassProxyService`. MASK
+пересчитывает Content-Length и удаляет только stale body digests, сохраняя
+preferences и остальные end-to-end headers. Этот transport слой:
 
 - переписывает scheme, authority и base path под upstream URL;
 - удаляет стандартные hop-by-hop headers и headers из `Connection`;
@@ -282,6 +296,7 @@ Quiet period и force timeout настраиваются. Полный опер�
 | Response inspection и lifecycle | `gateway/proxy/RetainedResponseHandler.kt`, `gateway/proxy/ResponseInspectionWorkflow.kt`, `gateway/proxy/ReplayReadyResponse.kt`, `gateway/proxy/ResponseAnalysisLifecycle.kt`, `source/RetainedResponseSource.kt` |
 | Transport и outbound lifecycle | `gateway/proxy/BypassProxyService.kt`, `gateway/proxy/OutboundClientResources.kt`, `gateway/identity/BridgeIdentityClient.kt`, `gateway/identity/CachingExternalIdentityLookup.kt`, `gateway/identity/ExternalIdentityCacheKeyHasher.kt` |
 | OpenAI normalization | `protocol/openai/*` |
+| Request rewrite | `protocol/openai/RequestRewritePlanner.kt`, `policy/masking/RequestMaskingFormatter.kt` |
 | Bounded request source | `source/*` |
 | Policy loading и engine | `policy/config/*`, `policy/selection/*`, `policy/execution/*`, `policy/engine/*` |
 | Generic windowing core | `windowing/WindowedInspectionModels.kt`, `windowing/WindowedInspectionExecutor.kt` |

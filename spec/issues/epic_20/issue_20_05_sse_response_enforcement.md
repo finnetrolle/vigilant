@@ -8,6 +8,10 @@
 **Оценка:** 4-5 инженерных дней
 **Уверенность:** Medium
 
+## Текущий request successor
+
+[VIG-34](../issue_34_request_pii_enforcement.md) добавляет REQUEST ALLOW/MASK/BLOCK перед SSE response workflow. REQUEST technical failure возвращает 503 до handoff. Этот Done leaf, его response parser/enforcement и полные markers сохраняют прежние semantics и историческое evidence.
+
 ## Цель
 
 После полного получения Chat Completions SSE response выполнить response

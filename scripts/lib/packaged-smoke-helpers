@@ -179,7 +179,7 @@ smoke_proxy_exact_request() {
     local session_id="$5"
     local owner="$6"
     local request_sha256
-    request_sha256="$(smoke_request_sha256 "$request_file")"
+    request_sha256="$(smoke_request_sha256 "${7:-$request_file}")"
 
     curl --fail --silent --show-error \
         --connect-timeout "$SMOKE_CONNECT_TIMEOUT_SECONDS" \
@@ -192,7 +192,7 @@ smoke_proxy_exact_request() {
         --data-binary "@$request_file" \
         --output "$response_file" \
         "$gateway_url/v1/chat/completions"
-    if [[ "$(<"$response_file")" != 'qualification-ok' ]]; then
+    if [[ "$(<"$response_file")" != '{"id":"chatcmpl-test","object":"chat.completion","model":"gpt-test","choices":[{"index":0,"message":{"role":"assistant","content":"qualification-ok"},"finish_reason":"stop"}]}' ]]; then
         echo "unexpected $owner response" >&2
         return 1
     fi
@@ -201,7 +201,7 @@ smoke_proxy_exact_request() {
 smoke_stdout_audit_is_valid() {
     local log_file="$1"
     local sentinel="$2"
-    python3 - "$log_file" "$sentinel" <<'PY'
+    python3 - "$log_file" "$sentinel" "${3:-ALLOW}" "${4:-EMAIL_ADDRESS}" <<'PY'
 import json
 import pathlib
 import sys
@@ -230,11 +230,11 @@ expected = {
     "protocol": "openai.chat_completions",
     "phase": "REQUEST",
     "outcome": "DETECTED",
-    "reaction": "ALLOW",
+    "reaction": sys.argv[3],
     "coverage": "FULLY_INSPECTABLE",
     "detector.id": "fast-pii",
     "detector.version": "fast-pii@1",
-    "findings.by_type": "EMAIL_ADDRESS:1",
+    "findings.by_type": sys.argv[4] + ":1",
 }
 mismatches = {
     key: (expected_value, completed.get(key))
@@ -255,11 +255,11 @@ smoke_await_stdout_audit() {
         if [[ -n "$refresh_function" ]]; then
             "$refresh_function"
         fi
-        if smoke_stdout_audit_is_valid "$log_file" "$sentinel" 2>/dev/null; then
+        if smoke_stdout_audit_is_valid "$log_file" "$sentinel" "${5:-ALLOW}" "${6:-EMAIL_ADDRESS}" 2>/dev/null; then
             return
         fi
         sleep 0.25
     done
     echo "$owner did not publish the expected stdout request-audit pair" >&2
-    smoke_stdout_audit_is_valid "$log_file" "$sentinel"
+    smoke_stdout_audit_is_valid "$log_file" "$sentinel" "${5:-ALLOW}" "${6:-EMAIL_ADDRESS}"
 }

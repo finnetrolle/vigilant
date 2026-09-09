@@ -19,7 +19,414 @@ import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 /** Public lifecycle tests for bounded in-memory request source ingest and replay. */
+@Suppress("LargeClass") // One public source seam shares quota and deterministic publisher fixtures.
 class BoundedRequestSourceTest {
+    /** Caller mutation after preparation cannot change the owner-retained replacement bytes or patch sequence. */
+    @Test
+    fun `prepared replay owns immutable replacement and patch snapshots`() {
+        val quota = RequestSourceQuota()
+        val owner = assertIs<RequestSourceOpenResult.Open>(quota.open()).owner
+        owner.ingest(ControlledBytePublisher(listOf("abcdef".toByteArray()))).join()
+        val bytes = "X".toByteArray()
+        val patches = mutableListOf(RequestSourcePatch(2, 4, bytes))
+        val ready = assertIs<RequestSourceReplayResult.Available>(owner.preparePatchedReplay(patches))
+        bytes[0] = 'Y'.code.toByte()
+        patches.clear()
+        val subscriber = CollectingSubscriber()
+        ready.publisher.subscribe(subscriber)
+        subscriber.await()
+        assertEquals("abXef", subscriber.bytes().toString(Charsets.UTF_8))
+        assertEquals(0, quota.activeOwners)
+        assertEquals(0L, quota.retainedBytes)
+        assertEquals(0, quota.retainedSegments)
+    }
+
+    /** Patched output retains the original quota while downstream demand holds its final suffix. */
+    @Test
+    fun `patched replay holds original quota until final output`() {
+        val quota = RequestSourceQuota(RequestSourceLimits(12, 12, 1, 3))
+        val owner = assertIs<RequestSourceOpenResult.Open>(quota.open()).owner
+        owner.ingest(ControlledBytePublisher(listOf("abcdefghijkl".toByteArray()))).join()
+        val ready = assertIs<RequestSourceReplayResult.Available>(
+            owner.preparePatchedReplay(listOf(RequestSourcePatch(2, 10, "X".toByteArray()))),
+        )
+        assertEquals(5L, ready.contentLength)
+        val subscriber = ManualReplaySubscriber()
+        ready.publisher.subscribe(subscriber)
+        assertEquals(12L, quota.retainedBytes)
+        subscriber.subscription.request(1)
+        assertEquals("abXk", subscriber.chunks.single().toString(Charsets.UTF_8))
+        assertEquals(12L, quota.retainedBytes)
+        subscriber.subscription.request(1)
+        assertEquals("abXkl", subscriber.chunks.flatMap { it.toList() }.toByteArray().toString(Charsets.UTF_8))
+        assertEquals(0L, quota.retainedBytes)
+        assertEquals(0, quota.activeOwners)
+        assertEquals(0, quota.retainedSegments)
+    }
+
+    /** Concurrent close preserves actual original and patched bytes until the held output callback returns. */
+    @org.junit.jupiter.api.TestFactory
+    fun `owner close defers cleanup through active output callback`() = listOf(false, true).map { masked ->
+        org.junit.jupiter.api.DynamicTest.dynamicTest(if (masked) "MASK abXk" else "ALLOW abcd") {
+            val quota = RequestSourceQuota(RequestSourceLimits(12, 12, 1, 3))
+            val owner = assertIs<RequestSourceOpenResult.Open>(quota.open()).owner
+            owner.ingest(ControlledBytePublisher(listOf("abcdefghijkl".toByteArray()))).join()
+            val replay = assertIs<RequestSourceReplayResult.Available>(if (masked)
+                owner.preparePatchedReplay(listOf(RequestSourcePatch(2, 10, "X".toByteArray()))) else owner.replay())
+            val entered = CountDownLatch(1)
+            val release = CountDownLatch(1)
+            val observed = AtomicReference<String>()
+            val handle = AtomicReference<Flow.Subscription>()
+            replay.publisher.subscribe(object : Flow.Subscriber<ByteBuffer> {
+                /** Publishes the demand handle before the worker begins. */
+                override fun onSubscribe(subscription: Flow.Subscription) { handle.set(subscription) }
+                /** Holds borrowed bytes until concurrent close has demonstrably returned. */
+                override fun onNext(item: ByteBuffer) {
+                    entered.countDown()
+                    check(release.await(5, TimeUnit.SECONDS))
+                    observed.set(Charsets.UTF_8.decode(item).toString())
+                }
+                /** Any terminal failure is propagated to the caller-owned worker. */
+                override fun onError(throwable: Throwable) { throw AssertionError(throwable) }
+                /** Completion is permitted after close finishes the held callback. */
+                override fun onComplete() = Unit
+            })
+            Executors.newSingleThreadExecutor().use { executor ->
+                val drained = executor.submit { handle.get().request(1) }
+                try {
+                    assertTrue(entered.await(5, TimeUnit.SECONDS))
+                    owner.close()
+                    assertEquals(12L, quota.retainedBytes, "close released bytes still borrowed by onNext")
+                    assertEquals(1, quota.activeOwners)
+                } finally { release.countDown() }
+                drained.get(5, TimeUnit.SECONDS)
+            }
+            assertEquals(if (masked) "abXk" else "abcd", observed.get())
+            assertEquals(0L, quota.retainedBytes)
+            assertEquals(0, quota.activeOwners)
+            assertEquals(0, quota.retainedSegments)
+        }
+    }
+
+    /** A subscriber that fails while accepting the sole replay lease cannot retain either replay owner. */
+    @Test
+    fun `subscribe failure closes original and patched owners`() {
+        listOf(false, true).forEach { masked ->
+            val quota = RequestSourceQuota(RequestSourceLimits(12, 12, 1, 3))
+            val owner = completeOwner(quota, "abcdefghijkl".toByteArray())
+            val replay = assertIs<RequestSourceReplayResult.Available>(if (masked)
+                owner.preparePatchedReplay(listOf(RequestSourcePatch(2, 10, "X".toByteArray()))) else owner.replay())
+            assertEquals(if (masked) 5L else 12L, replay.contentLength)
+            val subscriber = object : Flow.Subscriber<ByteBuffer> {
+                /** Rejects the subscription synchronously before demanding any bytes. */
+                override fun onSubscribe(subscription: Flow.Subscription) { error("subscriber refused") }
+                /** No output is legal after the failed subscription callback. */
+                override fun onNext(item: ByteBuffer) = error("unexpected output")
+                /** A failed onSubscribe callback is propagated to its caller, with no second callback. */
+                override fun onError(throwable: Throwable) = error("unexpected error callback")
+                /** A failed subscription cannot complete normally. */
+                override fun onComplete() = error("unexpected completion")
+            }
+            assertFailsWith<IllegalStateException> { replay.publisher.subscribe(subscriber) }
+            assertEquals(RequestSourceState.CLOSED, owner.state)
+            assertEquals(0, quota.activeOwners)
+            assertEquals(0L, quota.retainedBytes)
+            assertEquals(0, quota.retainedSegments)
+        }
+    }
+
+    /** Literal source ranges and expected output for distinct storage-segment boundary positions. */
+    private data class PatchBoundaryCase(val name: String, val patches: List<RequestSourcePatch>, val expected: String)
+
+    /** The full patch-position and demand matrix retains original admission until terminal output or cancellation. */
+    @Test
+    @Suppress("LongMethod", "NestedBlockDepth")
+    // Finite matrix keeps each literal oracle beside its setup and terminal observation.
+    fun `patched replay demand boundary and quota matrix`() {
+        val cases = listOf(
+            PatchBoundaryCase("INSIDE", listOf(RequestSourcePatch(1, 3, "X".toByteArray())), "aXdefghijkl"),
+            PatchBoundaryCase("START_BOUNDARY", listOf(RequestSourcePatch(4, 6, "X".toByteArray())), "abcdXghijkl"),
+            PatchBoundaryCase("END_BOUNDARY", listOf(RequestSourcePatch(2, 4, "X".toByteArray())), "abXefghijkl"),
+            PatchBoundaryCase("CROSS_TWO", listOf(RequestSourcePatch(3, 6, "X".toByteArray())), "abcXghijkl"),
+            PatchBoundaryCase("CROSS_THREE", listOf(RequestSourcePatch(2, 10, "X".toByteArray())), "abXkl"),
+            PatchBoundaryCase("ADJACENT", listOf(RequestSourcePatch(2, 4, "X".toByteArray()),
+                RequestSourcePatch(4, 6, "Y".toByteArray())), "abXYghijkl"),
+            PatchBoundaryCase("FINAL_SUFFIX", listOf(RequestSourcePatch(8, 11, "X".toByteArray())), "abcdefghXl"),
+            PatchBoundaryCase("WHOLE_SOURCE", listOf(RequestSourcePatch(0, 12, "X".toByteArray())), "X"),
+        )
+        cases.forEach { case ->
+            listOf("NO_DEMAND", "ONE", "BATCH", "UNBOUNDED", "ZERO", "NEGATIVE").forEach { demand ->
+                val label = "${case.name}/$demand"
+                val quota = RequestSourceQuota(RequestSourceLimits(12, 12, 1, 3))
+                val owner = assertIs<RequestSourceOpenResult.Open>(quota.open()).owner
+                owner.ingest(ControlledBytePublisher("abcdefghijkl".toByteArray().map { byteArrayOf(it) })).join()
+                assertEquals(3, quota.retainedSegments, label)
+                val ready = assertIs<RequestSourceReplayResult.Available>(owner.preparePatchedReplay(case.patches))
+                assertEquals(case.expected.length.toLong(), ready.contentLength, label)
+                val subscriber = ManualReplaySubscriber()
+                ready.publisher.subscribe(subscriber)
+                assertTrue(subscriber.chunks.isEmpty(), label)
+                assertEquals(12L, quota.retainedBytes, label)
+                assertEquals(
+                    RequestSourceOpenResult.Rejected(RequestSourceOutcomeCode.INSPECTION_CAPACITY_EXHAUSTED),
+                    quota.open(), label,
+                )
+                when (demand) {
+                    "NO_DEMAND" -> subscriber.subscription.cancel()
+                    "ZERO", "NEGATIVE" -> {
+                        subscriber.subscription.request(if (demand == "ZERO") 0 else -1)
+                        assertIs<IllegalArgumentException>(subscriber.failure, label)
+                        assertTrue(subscriber.chunks.isEmpty(), label)
+                    }
+                    else -> {
+                        val count = when (demand) { "ONE" -> 1L; "BATCH" -> 2L; else -> Long.MAX_VALUE }
+                        repeat(3) {
+                            if (!subscriber.completed) {
+                                val before = subscriber.chunks.size
+                                subscriber.subscription.request(count)
+                                assertTrue(subscriber.chunks.size.toLong() - before <= count, label)
+                                if (!subscriber.completed) {
+                                    assertEquals(12L, quota.retainedBytes, label)
+                                    assertEquals(1, quota.activeOwners, label)
+                                    assertEquals(3, quota.retainedSegments, label)
+                                }
+                            }
+                        }
+                        assertTrue(subscriber.completed, label)
+                        assertEquals(null, subscriber.failure, label)
+                        assertTrue(subscriber.chunks.all { it.size <= 4 }, label)
+                        assertEquals(case.expected,
+                            subscriber.chunks.flatMap { it.toList() }.toByteArray().toString(Charsets.UTF_8), label)
+                    }
+                }
+                subscriber.subscription.request(Long.MAX_VALUE)
+                owner.close()
+                assertEquals(0L, quota.retainedBytes, label)
+                assertEquals(0, quota.activeOwners, label)
+                assertEquals(0, quota.retainedSegments, label)
+                assertIs<RequestSourceOpenResult.Open>(quota.open()).owner.close()
+            }
+        }
+    }
+
+    /** Invalid plans leave the complete owner available for a later valid exact replay. */
+    @Test
+    fun `patch validation rejects invalid ranges expansion and active views without stealing ownership`() {
+        val invalid = listOf(
+            listOf(RequestSourcePatch(-1, 2, "X".toByteArray())),
+            listOf(RequestSourcePatch(2, 2, "X".toByteArray())),
+            listOf(RequestSourcePatch(3, 2, "X".toByteArray())),
+            listOf(RequestSourcePatch(2, 13, "X".toByteArray())),
+            listOf(RequestSourcePatch(2, 3, "XX".toByteArray())),
+            listOf(RequestSourcePatch(4, 6, "X".toByteArray()), RequestSourcePatch(2, 4, "Y".toByteArray())),
+            listOf(RequestSourcePatch(2, 6, "X".toByteArray()), RequestSourcePatch(4, 8, "Y".toByteArray())),
+        )
+        invalid.forEach { plan ->
+            val quota = RequestSourceQuota(RequestSourceLimits(12, 12, 1, 3))
+            val owner = completeOwner(quota, "abcdefghijkl".toByteArray())
+            assertIs<RequestSourceReplayResult.Unavailable>(owner.preparePatchedReplay(plan))
+            assertEquals(12L, quota.retainedBytes)
+            val view = assertIs<RequestSourceViewResult.Available>(owner.acquireView()).view
+            assertIs<RequestSourceReplayResult.Unavailable>(owner.preparePatchedReplay(emptyList()))
+            view.close()
+            val subscriber = ManualReplaySubscriber()
+            assertIs<RequestSourceReplayResult.Available>(owner.replay()).publisher.subscribe(subscriber)
+            subscriber.subscription.request(Long.MAX_VALUE)
+            assertEquals("abcdefghijkl",
+                subscriber.chunks.flatMap { it.toList() }.toByteArray().toString(Charsets.UTF_8))
+            assertTrue(subscriber.completed)
+            assertEquals(0, quota.activeOwners)
+        }
+    }
+
+    /** Invalid concurrent demand serializes its terminal signal after the currently borrowed output callback. */
+    @Test
+    @Suppress("NestedBlockDepth")
+    // Finite matrix keeps each literal oracle beside its setup and terminal observation.
+    fun `invalid demand during callback waits for original and patched output return`() {
+        listOf(false, true).forEach { masked ->
+            listOf(0L, -1L).forEach { invalid ->
+                val quota = RequestSourceQuota(RequestSourceLimits(12, 12, 1, 3))
+                val owner = completeOwner(quota, "abcdefghijkl".toByteArray())
+                val replay = assertIs<RequestSourceReplayResult.Available>(if (masked)
+                    owner.preparePatchedReplay(listOf(RequestSourcePatch(2, 10,
+                        "X".toByteArray()))) else owner.replay())
+                val entered = CountDownLatch(1)
+                val release = CountDownLatch(1)
+                val handle = AtomicReference<Flow.Subscription>()
+                val failure = AtomicReference<Throwable>()
+                val bytes = AtomicReference<String>()
+                replay.publisher.subscribe(object : Flow.Subscriber<ByteBuffer> {
+                    /** Publishes a demand handle for the two deterministically ordered contenders. */
+                    override fun onSubscribe(subscription: Flow.Subscription) { handle.set(subscription) }
+                    /**
+                     * Keeps the original or patched borrowed buffer live while the second thread sends invalid
+                     * demand.
+                     */
+                    override fun onNext(item: ByteBuffer) {
+                        entered.countDown()
+                        check(release.await(5, TimeUnit.SECONDS))
+                        bytes.set(Charsets.UTF_8.decode(item).toString())
+                    }
+                    /** Records the terminal signal only after the held callback returns. */
+                    override fun onError(throwable: Throwable) { failure.set(throwable) }
+                    /** Invalid demand cannot produce a successful completion. */
+                    override fun onComplete() = error("unexpected completion")
+                })
+                Executors.newSingleThreadExecutor().use { executor ->
+                    val draining = executor.submit { handle.get().request(1) }
+                    try {
+                        assertTrue(entered.await(5, TimeUnit.SECONDS))
+                        handle.get().request(invalid)
+                        assertEquals(null, failure.get(), "onError overlapped borrowed onNext")
+                        assertEquals(12L, quota.retainedBytes)
+                    } finally { release.countDown() }
+                    draining.get(5, TimeUnit.SECONDS)
+                }
+                assertEquals(if (masked) "abXk" else "abcd", bytes.get())
+                assertIs<IllegalArgumentException>(failure.get())
+                assertEquals(0L, quota.retainedBytes)
+                assertEquals(0, quota.activeOwners)
+                assertEquals(0, quota.retainedSegments)
+            }
+        }
+    }
+
+    /** A downstream throwable after observing actual output terminates both replay modes and releases ownership. */
+    @Test
+    fun `subscriber throwable after original or patched output releases owner`() {
+        listOf(false, true).forEach { masked ->
+            val quota = RequestSourceQuota(RequestSourceLimits(12, 12, 1, 3))
+            val owner = completeOwner(quota, "abcdefghijkl".toByteArray())
+            val replay = assertIs<RequestSourceReplayResult.Available>(if (masked)
+                owner.preparePatchedReplay(listOf(RequestSourcePatch(2, 10, "X".toByteArray()))) else owner.replay())
+            val handle = AtomicReference<Flow.Subscription>()
+            val failure = AtomicReference<Throwable>()
+            val bytes = AtomicReference<String>()
+            val sentinel = AssertionError("subscriber failure")
+            replay.publisher.subscribe(object : Flow.Subscriber<ByteBuffer> {
+                /** Publishes the handle before issuing controlled output demand. */
+                override fun onSubscribe(subscription: Flow.Subscription) { handle.set(subscription) }
+                /** Copies actual original/patched output, then throws a non-RuntimeException failure. */
+                override fun onNext(item: ByteBuffer) {
+                    bytes.set(Charsets.UTF_8.decode(item).toString())
+                    throw sentinel
+                }
+                /** Records the one terminal failure after borrowed output is returned. */
+                override fun onError(throwable: Throwable) { failure.set(throwable) }
+                /** A failed subscriber cannot complete normally. */
+                override fun onComplete() = error("unexpected completion")
+            })
+            handle.get().request(Long.MAX_VALUE)
+            assertEquals(if (masked) "abXk" else "abcd", bytes.get())
+            assertTrue(failure.get() === sentinel)
+            assertEquals(0L, quota.retainedBytes)
+            assertEquals(0, quota.activeOwners)
+            assertEquals(0, quota.retainedSegments)
+        }
+    }
+
+    /** The last input and output may be consumed, but quota and borrowed bytes remain owned until callback return. */
+    @Test
+    fun `close during final original and patched callback defers final cleanup`() {
+        listOf(false, true).forEach { masked ->
+            val quota = RequestSourceQuota(RequestSourceLimits(12, 12, 1, 3))
+            val owner = completeOwner(quota, "abcdefghijkl".toByteArray())
+            val replay = assertIs<RequestSourceReplayResult.Available>(if (masked)
+                owner.preparePatchedReplay(listOf(RequestSourcePatch(2, 10, "X".toByteArray()))) else owner.replay())
+            val entered = CountDownLatch(1)
+            val release = CountDownLatch(1)
+            val handle = AtomicReference<Flow.Subscription>()
+            val output = ByteArrayOutputStream()
+            var callbacks = 0
+            replay.publisher.subscribe(object : Flow.Subscriber<ByteBuffer> {
+                /** Publishes the demand handle before the worker begins. */
+                override fun onSubscribe(subscription: Flow.Subscription) { handle.set(subscription) }
+                /** Holds only the final callback, after all prior output was independently copied. */
+                override fun onNext(item: ByteBuffer) {
+                    callbacks++
+                    if (callbacks == if (masked) 2 else 3) {
+                        entered.countDown()
+                        check(release.await(5, TimeUnit.SECONDS))
+                    }
+                    output.write(ByteArray(item.remaining()).also { item.get(it) })
+                }
+                /** Any unexpected terminal failure fails the worker future. */
+                override fun onError(throwable: Throwable) { throw AssertionError(throwable) }
+                /** Normal completion follows final callback return and original-source release. */
+                override fun onComplete() { assertEquals(0L, quota.retainedBytes) }
+            })
+            Executors.newSingleThreadExecutor().use { executor ->
+                val drained = executor.submit { handle.get().request(Long.MAX_VALUE) }
+                try {
+                    assertTrue(entered.await(5, TimeUnit.SECONDS))
+                    owner.close()
+                    assertEquals(12L, quota.retainedBytes)
+                    assertEquals(1, quota.activeOwners)
+                    assertEquals(3, quota.retainedSegments)
+                } finally { release.countDown() }
+                drained.get(5, TimeUnit.SECONDS)
+            }
+            assertEquals(if (masked) "abXkl" else "abcdefghijkl", output.toString(Charsets.UTF_8))
+            owner.close()
+            assertEquals(0L, quota.retainedBytes)
+            assertEquals(0, quota.activeOwners)
+            assertEquals(0, quota.retainedSegments)
+        }
+    }
+
+    /** A held first subscription and competing lease requests cannot steal or prematurely release either replay. */
+    @Test
+    fun `original and patched concurrent subscription and view conflicts preserve first owner`() {
+        listOf(false, true).forEach { masked ->
+            val quota = RequestSourceQuota(RequestSourceLimits(12, 12, 1, 3))
+            val owner = completeOwner(quota, "abcdefghijkl".toByteArray())
+            val entered = CountDownLatch(1)
+            val release = CountDownLatch(1)
+            val first = ManualReplaySubscriber()
+            val view = assertIs<RequestSourceViewResult.Available>(owner.acquireView()).view
+            Executors.newSingleThreadExecutor().use { executor ->
+                val conflicting = executor.submit<RequestSourceReplayResult> {
+                    owner.preparePatchedReplay(listOf(RequestSourcePatch(2, 10, "X".toByteArray())))
+                }
+                assertIs<RequestSourceReplayResult.Unavailable>(conflicting.get(5, TimeUnit.SECONDS))
+                assertEquals(12L, quota.retainedBytes)
+                view.close()
+                val replay = assertIs<RequestSourceReplayResult.Available>(if (masked)
+                    owner.preparePatchedReplay(listOf(RequestSourcePatch(2, 10,
+                        "X".toByteArray()))) else owner.replay())
+                val subscribed = executor.submit {
+                    replay.publisher.subscribe(object : Flow.Subscriber<ByteBuffer> by first {
+                        /** Holds the first accepted subscriber after publishing its actual demand handle. */
+                        override fun onSubscribe(subscription: Flow.Subscription) {
+                            first.onSubscribe(subscription)
+                            entered.countDown()
+                            check(release.await(5, TimeUnit.SECONDS))
+                        }
+                    })
+                }
+                try {
+                    assertTrue(entered.await(5, TimeUnit.SECONDS))
+                    assertIs<RequestSourceViewResult.Unavailable>(owner.acquireView())
+                    assertIs<RequestSourceReplayResult.Unavailable>(owner.preparePatchedReplay(emptyList()))
+                    val second = ManualReplaySubscriber()
+                    replay.publisher.subscribe(second)
+                    assertIs<IllegalStateException>(second.failure)
+                    assertTrue(second.chunks.isEmpty())
+                    assertEquals(12L, quota.retainedBytes)
+                } finally { release.countDown() }
+                subscribed.get(5, TimeUnit.SECONDS)
+            }
+            first.subscription.request(Long.MAX_VALUE)
+            assertTrue(first.completed)
+            assertEquals(if (masked) "abXkl" else "abcdefghijkl",
+                first.chunks.flatMap { it.toList() }.toByteArray().toString(Charsets.UTF_8))
+            assertEquals(0L, quota.retainedBytes)
+            assertEquals(0, quota.activeOwners)
+            assertEquals(0, quota.retainedSegments)
+        }
+    }
+
     /** Client bytes are demanded one chunk at a time and replayed exactly by downstream demand. */
     @Test
     fun `complete source provides read-only view and byte-identical replay with backpressure`() {
@@ -593,6 +1000,22 @@ class BoundedRequestSourceTest {
             assertTrue(terminal.await(5, TimeUnit.SECONDS))
             return terminalError.get() ?: error("Expected replay error")
         }
+    }
+
+    /** Records actual output while the test explicitly controls each demand transition. */
+    private class ManualReplaySubscriber : Flow.Subscriber<ByteBuffer> {
+        lateinit var subscription: Flow.Subscription
+        val chunks = mutableListOf<ByteArray>()
+        var completed = false
+        var failure: Throwable? = null
+        /** Publishes the handle without requesting any bytes. */
+        override fun onSubscribe(subscription: Flow.Subscription) { this.subscription = subscription }
+        /** Copies borrowed bytes before returning their callback ownership. */
+        override fun onNext(item: ByteBuffer) { chunks += ByteArray(item.remaining()).also { item.get(it) } }
+        /** Publishes one terminal failure. */
+        override fun onError(throwable: Throwable) { failure = throwable }
+        /** Publishes terminal success after source cleanup. */
+        override fun onComplete() { completed = true }
     }
 
     /** First replay subscriber that holds the lease without demanding bytes. */

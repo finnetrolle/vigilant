@@ -89,7 +89,7 @@ class MetricsService(
         return delegate.serve(ctx, request)
     }
 
-    /** Records status and duration measurements from one completed exchange. */
+    /** Records status and duration, with upstream latency only after an actual transport handoff. */
     private fun recordCompletedExchange(ctx: ServiceRequestContext, log: RequestLog) {
         if (log.isAvailable(RequestLogProperty.RESPONSE_HEADERS)) {
             val statusCode = log.responseHeaders().status().code()
@@ -100,7 +100,9 @@ class MetricsService(
                 )
             }
         }
-        if (log.isAvailable(RequestLogProperty.RESPONSE_START_TIME)) {
+        if (ctx.attr(ProxyRequestOutcome.UPSTREAM_STARTED) == true &&
+            log.isAvailable(RequestLogProperty.RESPONSE_START_TIME)
+        ) {
             upstreamDuration.record(
                 (log.responseStartTimeNanos() - log.requestStartTimeNanos()) / NANOS_PER_SECOND,
             )

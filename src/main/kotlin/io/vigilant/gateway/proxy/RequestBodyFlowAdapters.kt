@@ -24,17 +24,23 @@ internal fun requestBodyFlowPublisher(request: HttpRequest): Flow.Publisher<Byte
  * the original end-to-end headers, including accepted Authorization.
  *
  * @param original inbound request providing the end-to-end headers to preserve.
- * @param body quota-owned exact replay publisher.
+ * @param body quota-owned original or patched replay publisher.
+ * @param maskedContentLength validated patched length, or null for exact original replay.
  */
 internal fun replayRequest(
     original: HttpRequest,
     body: Flow.Publisher<ByteBuffer>,
+    maskedContentLength: Long? = null,
 ): HttpRequest {
     val dataPublisher: Publisher<HttpData> =
         Publisher { downstream ->
             FlowAdapters.toPublisher(body).subscribe(replayBufferSubscriber(downstream))
         }
-    return HttpRequest.of(original.headers(), dataPublisher)
+    val headers = if (maskedContentLength == null) original.headers() else original.headers().toBuilder()
+        .contentLength(maskedContentLength)
+        .apply { REQUEST_BODY_DIGEST_HEADERS.forEach(::remove) }
+        .build()
+    return HttpRequest.of(headers, dataPublisher)
 }
 
 /** Maps Armeria body objects to read-only buffers copied synchronously by the source. */
@@ -98,3 +104,6 @@ private class CallbackSubscriber<T>(
     /** Publishes successful completion to the configured callback. */
     override fun onComplete() = onCompleteCallback()
 }
+
+/** Body-dependent request integrity fields invalidated by an exact source transformation. */
+private val REQUEST_BODY_DIGEST_HEADERS = listOf("content-md5", "digest", "content-digest", "repr-digest")

@@ -4,7 +4,7 @@
 **Epic:** [EPIC-08](../../epics/epic_08_message_spooling_replay.md)  
 **Ветка:** Request source > bounded in-memory ingest and replay  
 **Зависит от:** [VIG-08-01](issue_08_01_spool_contract.md), [VIG-06-01](../epic_06/issue_06_01_protocol_contract.md)  
-**Блокирует:** PII shadow request tracer bullet  
+**Блокирует:** PII shadow request tracer bullet, [VIG-34](../issue_34_request_pii_enforcement.md)
 **Оценка:** 3-5 инженерных дней  
 **Уверенность:** Medium
 

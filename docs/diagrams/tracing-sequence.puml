@@ -29,8 +29,9 @@ opt External cold miss creator only (no span on hit/join)
 end
 RequestInspect -> RequestInspect : parse/context/select
 RequestInspect -> RequestInspect : stdout analysis_started,\ndetector execution, stdout analysis_completed
-RequestInspect --> Server : теневое решение
+RequestInspect --> Server : validated ALLOW/MASK или safe 403/503
 deactivate RequestInspect
+opt ALLOW/MASK и handoff claim принят
 Server -> UpstreamSpan : создать непосредственный дочерний span
 activate UpstreamSpan
 UpstreamSpan -> Upstream : запрос с итоговым контекстом трассы
@@ -43,6 +44,7 @@ ResponseInspect -> ResponseInspect : ordinary/SSE protocol parse
 ResponseInspect -> ResponseInspect : stdout analysis_started,\ndetectors/reaction, stdout analysis_completed
 ResponseInspect --> Server : exact forward / masked forward / safe reject
 deactivate ResponseInspect
+end
 Server --> Client : ответ с итоговым сеансом и SERVER traceparent
 deactivate Server
 @enduml

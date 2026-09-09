@@ -9,6 +9,8 @@
 
 - [runtime-components.puml](runtime-components.puml) - компоненты текущей
   исполняемой системы и внешние границы;
+- [runtime-classes.puml](runtime-classes.puml) - основные production-классы,
+  интерфейсы, стратегии и отношения владения в текущем runtime;
 - [request-inspection-sequence.puml](request-inspection-sequence.puml) -
   последовательность обработки поддержанного запроса;
 - [policy-selection-activity.puml](policy-selection-activity.puml) -

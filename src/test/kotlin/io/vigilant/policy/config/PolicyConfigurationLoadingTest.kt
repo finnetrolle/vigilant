@@ -46,47 +46,31 @@ class PolicyConfigurationLoadingTest {
         assertEquals("default-policy", policies.single().reference.id.value)
     }
 
-    /** Verifies that production startup cannot silently run without global PII coverage. */
+    /** Allows an administrator to select no inspection policies explicitly. */
     @Test
-    fun `explicitly empty policy configuration is rejected without shadow coverage`() {
+    fun `explicitly empty policy configuration loads without implicit coverage`() {
         val configFile = writeConfig("policies = []")
-
-        val exception = assertFailsWith<IllegalArgumentException> {
-            loadPolicySnapshot(
-                env = mapOf("VIGILANT_POLITICS_CONFIG" to configFile.toString()),
-                defaultConfigPath = Path.of("unused-politics.conf"),
-                availableDetectorIds = setOf(DetectorId("fast-pii")),
-            )
-        }
-
-        assertEquals(
-            "Policy configuration must contain an enabled global REQUEST policy for detector 'fast-pii'",
-            exception.message,
+        val policies = loadPolicySnapshot(
+            env = mapOf("VIGILANT_POLITICS_CONFIG" to configFile.toString()),
+            availableDetectorIds = setOf(DetectorId("fast-pii")),
         )
+        assertEquals(emptyList(), policies)
     }
 
-    /** Verifies the first increment cannot activate blocking or transforming reactions. */
+    /** Accepts configured request MASK while requiring fail-closed inspection errors. */
     @Test
-    fun `non shadow reactions are rejected before startup`() {
-        val configFile = writeConfig(completePolicyConfig("non-shadow-policy"))
-
-        val exception = assertFailsWith<IllegalArgumentException> {
-            loadPolicySnapshot(
-                env = mapOf("VIGILANT_POLITICS_CONFIG" to configFile.toString()),
-                defaultConfigPath = Path.of("unused-politics.conf"),
-                availableDetectorIds = setOf(DetectorId("fast-pii")),
-            )
-        }
-
-        assertEquals(
-            "Request policies require ALLOW reactions without transformations",
-            exception.message,
+    fun `request mask reactions load with clean allow and error block`() {
+        val policies = loadPolicySnapshot(
+            env = mapOf("VIGILANT_POLITICS_CONFIG" to writeConfig(completePolicyConfig()).toString()),
+            availableDetectorIds = setOf(DetectorId("fast-pii")),
         )
+        assertEquals(setOf(Transformation.MASK), policies.single().reactions.detected.transformations)
+        assertEquals(Disposition.BLOCK, policies.single().reactions.error.disposition)
     }
 
-    /** Response policies may configure existing MASK/BLOCK reactions beside request shadow coverage. */
+    /** Response policies retain their existing MASK/BLOCK reactions beside request enforcement. */
     @Test
-    fun `response enforcement reactions load without weakening request shadow restriction`() {
+    fun `response enforcement reactions retain their existing contract`() {
         val responsePolicy =
             shadowPolicyEntry("response-enforcement")
                 .replace("phase = \"REQUEST\"", "phase = \"RESPONSE\"")
@@ -144,32 +128,59 @@ class PolicyConfigurationLoadingTest {
         )
     }
 
-    /** Verifies a matching policy cannot remove the only mandatory coverage policy. */
+    /** Allows scoped policies to override a global policy without mandatory coverage. */
     @Test
-    fun `overridden global coverage policy is rejected`() {
-        val configFile =
-            writeConfig(
-                """
-                policies = [
-                  ${shadowPolicyEntry("coverage")},
-                  ${shadowPolicyEntry("overrider", overrides = listOf("coverage")).replace("model = \"*\"", "model = \"gpt-4\"")}
-                ]
-                """.trimIndent(),
-            )
-
-        val exception = assertFailsWith<IllegalArgumentException> {
-            loadPolicySnapshot(
-                env = mapOf("VIGILANT_POLITICS_CONFIG" to configFile.toString()),
-                defaultConfigPath = Path.of("unused-politics.conf"),
-                availableDetectorIds = setOf(DetectorId("fast-pii")),
-            )
-        }
-
-        assertEquals(
-            "Global Fast PII coverage policy must not be overridden",
-            exception.message,
+    fun `overridden global coverage policy loads`() {
+        val file = writeConfig("policies = [" + shadowPolicyEntry("coverage") + "," +
+            shadowPolicyEntry("overrider", listOf("coverage")).replace("model = \"*\"", "model = \"gpt-4\"") + "]")
+        val policies = loadPolicySnapshot(
+            env = mapOf("VIGILANT_POLITICS_CONFIG" to file.toString()),
+            availableDetectorIds = setOf(DetectorId("fast-pii")),
         )
+        assertEquals(listOf("coverage", "overrider"), policies.map { it.reference.id.value })
     }
+
+    /** Validates every clean/error form even for disabled and overridden REQUEST policies. */
+    @org.junit.jupiter.api.TestFactory
+    fun `request clean and error startup matrix`(): List<org.junit.jupiter.api.DynamicTest> =
+        listOf("clean", "error").flatMap { state ->
+            listOf(
+                "ALLOW" to "disposition = \"ALLOW\", transformations = []",
+                "BLOCK" to "disposition = \"BLOCK\", transformations = []",
+                "ALLOW_MASK" to "disposition = \"ALLOW\", transformations = [\"MASK\"]",
+                "BLOCK_MASK" to "disposition = \"BLOCK\", transformations = [\"MASK\"]",
+                "MISSING" to null,
+                "WRONG_TYPE" to "wrong-type",
+            ).flatMap { (name, value) ->
+                listOf("enabled", "disabled", "overridden").map { mode ->
+                    org.junit.jupiter.api.DynamicTest.dynamicTest("$state/$name/$mode") {
+                        val replacement = when (value) {
+                            null -> ""
+                            "wrong-type" -> "$state = 42"
+                            else -> "$state { $value }"
+                        }
+                        val policy = shadowPolicyEntry("tested")
+                            .replace(Regex("$state \\{[^}]*}"), replacement)
+                            .replace("enabled = true", "enabled = ${mode != "disabled"}")
+                        val overriding = if (mode == "overridden") "," + shadowPolicyEntry("override",
+                            listOf("tested")) else ""
+                        val file = writeConfig("policies = [$policy$overriding]")
+                        val load = {
+                            loadPolicySnapshot(
+                                env = mapOf("VIGILANT_POLITICS_CONFIG" to file.toString()),
+                                availableDetectorIds = setOf(DetectorId("fast-pii")),
+                            )
+                        }
+                        val acceptedName = if (state == "clean") "ALLOW" else "BLOCK"
+                        if (name == acceptedName) {
+                            assertEquals(if (mode == "overridden") 2 else 1, load().size)
+                        } else {
+                            assertFailsWith<IllegalArgumentException>("$state/$name/$mode") { load() }
+                        }
+                    }
+                }
+            }
+        }
 
     /** Verifies that absence of the mandatory default file produces a stable safe failure. */
     @Test

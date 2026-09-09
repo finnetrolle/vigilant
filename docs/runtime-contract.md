@@ -19,8 +19,10 @@
 Для поддержанного descriptor gateway проверяет identity, затем полностью
 принимает request body в bounded in-memory source. Parser
 создаёт отдельное normalized view model-visible content,
-а исходные bytes остаются неизменными. После shadow inspection upstream
-получает исходные method, path/query, end-to-end headers и byte-identical body.
+а original bytes остаются неизменными у единственного source owner. ALLOW и
+no-policy передают их byte-identical; MASK передаёт validated non-expanding
+free-text patches с сохранением остальных raw bytes. BLOCK/technical refusal
+не начинают upstream handoff. Method/path/query и end-to-end headers сохраняются.
 Hop-by-hop headers, authority, `Host` и `Content-Length` обрабатывает gateway.
 Принятый `Authorization` остаётся обычным end-to-end header и передаётся
 upstream с исходным значением без изменений.
@@ -118,8 +120,9 @@ Policy snapshot выбирает request или response policies и запус�
 - `INSPECTION_GAP` - известный non-text content передан без изменений;
 - `ERROR` - inspection не удалось завершить корректно.
 
-Для request phase current startup contract остаётся shadow-only `ALLOW`. Response
-phase разрешает `ALLOW`, detected `MASK` или `BLOCK`; любой fragment с
+REQUEST допускает detected ALLOW/MASK/BLOCK, clean только ALLOW, error только
+BLOCK без transformations. Technical failure даёт 503 выше PII BLOCK; structural
+MASK даёт whole-request 403. RESPONSE phase разрешает `ALLOW`, detected `MASK` или `BLOCK`; любой fragment с
 `BLOCK` блокирует весь response. `ERROR` не содержит reaction и публикует
 stable `error.code`.
 
@@ -142,7 +145,7 @@ content-bearing structure обрабатываются fail-closed и не до�
 | Per-request byte limit | `413` | нет | `{"error":"request_too_large"}` |
 | Owner/global retained capacity | `503` | `1` | `{"error":{"message":"Request inspection unavailable.","type":"server_error","code":"request_inspection_unavailable"}}` |
 | Inspection executor admission failure | `503` | `1` | `{"error":{"message":"Request inspection unavailable.","type":"server_error","code":"request_inspection_unavailable"}}` |
-| Request source или orchestration failure | `503` | `1` | `{"error":{"message":"Request inspection unavailable.","type":"server_error","code":"request_inspection_unavailable"}}` |
+| Detector error/deadline, invalid rewrite, request source или orchestration failure | `503` | `1` | `{"error":{"message":"Request inspection unavailable.","type":"server_error","code":"request_inspection_unavailable"}}` |
 
 Descriptor проверяется до identity и body demand. Некорректный session ID
 отклоняется ещё раньше, в tracing decorator. Identity, source, parser, context,
@@ -158,18 +161,20 @@ Application-owned audit persistence и delivery отсутствуют. Lifecycl
 независимо сохраняет plain `503 draining` для нового traffic.
 
 Policy deadline или typed detector error отражается как outcome `ERROR` со
-stable `error.code` и без reaction. Current shadow policy не блокирует request,
-поэтому при завершённой orchestration исходный body всё равно отправляется
-upstream.
+stable `error.code` и без reaction, возвращает `503` с `Retry-After: 1` до
+upstream и имеет приоритет над PII BLOCK независимо от порядка fragments/policies.
 Непредвиденный сбой request source, orchestration или context assembly
 возвращает закрытый VIG-29 `503 request_inspection_unavailable` до upstream
 handoff и не раскрывает внутреннюю причину.
 
 Client cancellation до analysis отменяет ingest/inspection, освобождает
-source и не публикует пару. Cancellation после start best-effort
+source и не публикует пару. Cancellation во время analysis best-effort
 публикует terminal `ERROR` с `error.code=ANALYSIS_CANCELLED`; новый
 upstream handoff запрещён. Отменённому соединению delivery HTTP error не
-гарантируется.
+гарантируется. После validated ready completion отмена не создаёт второй
+audit event. Original reservations освобождаются после terminal replay callback,
+а не после последнего прочитанного input; partial upload может уже раскрыть
+upstream отправленный prefix и никогда не повторяется как unmasked fallback.
 
 ## Response enforcement
 
@@ -216,9 +221,8 @@ credentials, identity, policy references или внутренние причи�
 имеет ровно поле `error`, а оно ровно три string fields: `message`, `type`,
 `code`.
 
-В runtime подключены request technical outcomes, response `BLOCK`, response
-inspection unavailable и `invalid_upstream_response`. Request `BLOCK` остаётся до
-owning request-enforcement work item.
+Все пять outcomes подключены к runtime. Request BLOCK выбирается для policy
+BLOCK и structural MASK, technical refusal никогда не утверждает обнаружение PII.
 
 ## Upstream errors
 

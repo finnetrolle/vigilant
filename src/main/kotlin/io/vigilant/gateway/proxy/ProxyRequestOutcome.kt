@@ -37,6 +37,9 @@ internal data class UpstreamFailureObservation(
 
 /** Context contract shared by the proxy and its outer metrics decorator. */
 internal object ProxyRequestOutcome {
+    /** True only after the canonical transport path starts an upstream exchange. */
+    val UPSTREAM_STARTED: AttributeKey<Boolean> = AttributeKey.valueOf("vigilant.upstreamStarted")
+
     /** Upstream failure observed while handling the current exchange. */
     val UPSTREAM_FAILURE: AttributeKey<UpstreamFailureObservation> =
         AttributeKey.valueOf("vigilant.upstreamFailure")

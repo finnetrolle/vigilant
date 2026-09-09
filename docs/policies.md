@@ -7,17 +7,19 @@ Vigilant загружает один неизменяемый снимок по�
 `./politics.conf`. Горячая перезагрузка, удалённый поставщик политик и скрытая
 политика по умолчанию отсутствуют.
 
-Текущий производственный этап сохраняет request phase в теневом режиме и
-разрешает enforcement для ordinary JSON и SSE response:
+REQUEST и ordinary JSON/SSE RESPONSE применяют явно настроенные политики:
 
-- хотя бы одна действующая включённая политика обязана глобально покрывать все
-  контексты `REQUEST` с помощью детектора `fast-pii`;
-- реакции `detected`, `clean` и `error` во всех `REQUEST` политиках обязаны иметь
-  `disposition = "ALLOW"` и пустые `transformations`;
-- `RESPONSE` политика может выбрать detected `ALLOW`, `ALLOW+MASK` или `BLOCK`;
-  clean/error сохраняют existing legal `ALLOW|BLOCK` combinations;
-- `REMOVE` отвергается semantic validation;
-- решение политики не изменяет тело запроса и не блокирует срабатывание PII.
+- `policies = []`, disabled-only и unmatched snapshots допустимы; global
+  REQUEST coverage и implicit default policy отсутствуют;
+- detected допускает `ALLOW`, `ALLOW+MASK` или `BLOCK`;
+- REQUEST `clean` требует ALLOW без transformations, `error` требует BLOCK без
+  transformations, даже у disabled или overridden policies;
+- RESPONSE clean/error сохраняют прежние legal ALLOW/BLOCK combinations;
+- `REMOVE` отвергается semantic validation.
+
+Без applied policy соответствующей фазы `fast-pii` не запускается и analysis
+pair отсутствует. Identity, strict protocol validation, source admission и
+request-to-response context handoff сохраняются.
 
 Диаграмма деятельности UML 2.0:
 [policy-selection-activity.puml](diagrams/policy-selection-activity.puml).
@@ -49,18 +51,18 @@ policies = [
     reactions {
       detected { disposition = "ALLOW", transformations = [] }
       clean { disposition = "ALLOW", transformations = [] }
-      error { disposition = "ALLOW", transformations = [] }
+      error { disposition = "BLOCK", transformations = [] }
     }
     overrides = []
   }
 ]
 ```
 
-Это минимальное mandatory request shadow coverage. Для response enforcement
+Это явная REQUEST policy с detected ALLOW. Для response enforcement
 к тому же snapshot добавляется политика с `match.phase = "RESPONSE"`. Например,
 `detected { disposition = "ALLOW", transformations = ["MASK"] }` маскирует
 findings, а `detected { disposition = "BLOCK", transformations = [] }` блокирует
-весь ordinary или SSE response. `REMOVE` и transformations для `clean`/`error` невалидны.
+весь request или response. `REMOVE` и transformations для `clean`/`error` невалидны.
 
 Рабочий пример находится в
 [`politics.conf.example`](../politics.conf.example).
@@ -89,7 +91,7 @@ findings, а `detected { disposition = "BLOCK", transformations = [] }` блок
 |---|---|---|
 | `url` | Нормализованный итоговый URL вышестоящего сервера | Точное совпадение без учёта регистра или `*`; строка запроса, фрагмент и учётные данные отсутствуют |
 | `model` | Непустое поле `model` из тела запроса | Точное совпадение без учёта регистра или `*` |
-| `phase` | Фаза обработки | `REQUEST` для shadow request analysis или `RESPONSE` для ordinary JSON и SSE enforcement |
+| `phase` | Фаза обработки | `REQUEST` для request enforcement или `RESPONSE` для ordinary JSON и SSE enforcement |
 | `subject.type` | Режим идентификации | `USER`, `GROUP` или глобальное значение `*` |
 | `subject.id` | Нормализованные пользователь и группы | Точное совпадение без учёта регистра или `*` |
 
@@ -126,10 +128,8 @@ values, JWT локально проверяет pinned RS256 token, а External 
 время выбора. Снимок с циклом или ссылкой на неизвестный идентификатор
 отклоняется при запуске.
 
-Глобальная покрывающая политика должна оставаться действующей. При запуске
-снимок консервативно отклоняется, если любая включённая политика ссылается на
-глобальную покрывающую политику `fast-pii` в `overrides`, даже когда её
-собственное условие не совпало бы с каждым запросом.
+Scoped policy может переопределять global policy по тем же правилам: startup
+не требует сохранения глобального покрытия.
 
 ## Выполнение детекторов и реакции
 
@@ -145,13 +145,29 @@ values, JWT локально проверяет pinned RS256 token, а External 
 - `clean`: `ALLOW` или `BLOCK`, преобразования запрещены;
 - `error`: `ALLOW` или `BLOCK`, преобразования запрещены.
 
-Aggregation создаёт typed irreversible instructions из selected `MASK`
-reactions и `FindingType`; transport-neutral `TextMasker` применяет только
-готовые instructions. Transport-specific ordinary JSON и SSE rewriters применяют
-их к exact JSON string source ranges без повторного detector execution. Request policy с
-non-`ALLOW` или transformation по-прежнему завершает startup с кодом `2`;
-валидные response reactions загружаются. Response detector timeout/error даёт
-fail-closed `503`, не `error` reaction fallback.
+Aggregation создаёт canonical instructions только из selected MASK findings.
+ALLOW findings не расширяют MASK unions. Existing ordering и overlap/adjacency
+union rules общие для request/response; detector не запускается повторно.
+
+REQUEST оценивает все fragments: technical failure/deadline даёт safe `503`
+с `Retry-After: 1`, затем policy BLOCK или structural MASK даёт `403`, иначе
+применяются free-text patches или original replay. Clean ALLOW не отменяет
+решений других fragments. Known non-text gaps сохраняются без изменения.
+
+Structural names, JSON Schema keys/constraints, arguments/custom input,
+grammar и location не переписываются; selected MASK finding блокирует весь
+request. Free-text content/descriptions/titles/examples/filename/reasoning/
+prediction допускают MASK. Полная карта и raw rewrite contract описаны в
+[Chat Completions reference](openai-chat-completions.md).
+
+REQUEST marker не длиннее decoded UTF-8 span: full marker сохраняется, иначе
+слово внутри brackets сокращается справа; budgets 1/2 дают `*`/`**`.
+Например, `1.1.1.1` становится `[IP_MA]`. Canonical finding metadata и полные
+RESPONSE markers не изменяются.
+
+Прежние shadow snapshots с REQUEST `error=ALLOW` несовместимы: обновите их
+на BLOCK явно. Автоматического fallback нет. Response timeout/error сохраняет
+fail-closed `503` независимо от configured error reaction.
 
 ## Проверка и безопасные ошибки
 
@@ -164,8 +180,8 @@ fail-closed `503`, не `error` reaction fallback.
   значение;
 - условие сопоставления, субъект, срок или реакция недопустимы;
 - переопределение ссылается на себя, неизвестно, повторяется или образует цикл;
-- отсутствует действующее глобальное покрытие `REQUEST` через `fast-pii`;
-- в `REQUEST` policy указана enforcement reaction или преобразование.
+- REQUEST clean отличается от ALLOW или error отличается от BLOCK;
+- clean/error содержит transformations, в том числе у disabled policies.
 
 При этом сервер приложения не начинает принимать запросы. В `stderr` не
 выводятся тело политики, исходные значения, учётные данные и путь к файлу; код
@@ -176,11 +192,10 @@ fail-closed `503`, не `error` reaction fallback.
 - горячая перезагрузка политик и плоскость управления;
 - измерения арендатора, приложения, агента, инструмента и ресурса;
 - настраиваемые реакции fail-open, fail-closed и передача оператору сверх
-  текущего теневого поведения;
+  текущего executable REQUEST/RESPONSE contract;
 - среда проверки политик, пользовательский интерфейс и воспроизведение
   исторических трасс;
-- внешний реестр детекторов и подключаемых модулей;
-- изменение или enforcement запросов.
+- внешний реестр детекторов и подключаемых модулей.
 
 Статус целевых требований приведён в
 [карте покрытия требований](requirements-coverage.md).

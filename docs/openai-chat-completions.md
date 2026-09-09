@@ -104,6 +104,32 @@ contract=openai-chat-completions-request@2026-08-26
 объектом или массивом отклоняется как `ambiguous_content`, поскольку может
 скрывать текст, видимый модели.
 
+## Field classification и REQUEST enforcement
+
+Parser фиксирует назначение каждого fragment независимо от его semantic kind
+и написания JSON Pointer. MASK в structural field блокирует весь request:
+имена участников всех шести roles; modern/custom/deprecated tool definitions,
+calls, choices и allowed-tools names; response schema name; schema member
+names и string enum/const/default/pattern; function arguments/custom input;
+custom lark/regex grammar и approximate location fields. Arguments/input
+остаются полной opaque string, включая пустую строку и malformed inner JSON;
+вложенный язык не разбирается ради rewrite.
+
+Free text допускает exact-span MASK: scalar/part message content всех roles,
+refusal, modern/custom/deprecated descriptions, schema title/description/string
+examples, filename, open reasoning text/summary и prediction content.
+Schema rules одинаковы для modern/legacy function parameters и response schema.
+Property с именем `description` или `examples` остаётся structural key, а
+дочерняя annotation является free text. Empty/number/boolean/null/object/array
+values не расширяют закреплённый parser vocabulary.
+
+Technical error/deadline имеет приоритет `503`, затем whole-request `403` при
+policy BLOCK/structural MASK, затем текстовые masks или original ALLOW. Marker
+сокращается до decoded UTF-8 budget selected span без сохранения части PII:
+`1.1.1.1` -> `[IP_MA]`, budgets 1/2 -> `*`/`**`. Full RESPONSE markers сохраняются.
+Все untouched raw bytes, gaps, Unicode, escapes, unknown fields и formatting
+остаются исходными; masked body не превышает original ingress limit.
+
 ## Непроверяемые части
 
 Известное нетекстовое или непрозрачное для поставщика содержимое не превращает
@@ -129,7 +155,8 @@ contract=openai-chat-completions-request@2026-08-26
 - `UNINSPECTABLE`: распознанное содержимое есть, но доступного для проверки
   текста нет.
 
-Во всех трёх случаях успешного разбора сейчас разрешена передача без потерь.
+Каждая coverage допускает ALLOW или free-text MASK при успешном policy outcome.
+Policy BLOCK, structural MASK или technical failure запрещают весь request.
 Наличие непроверяемой части создаёт решение аудита `INSPECTION_GAP`, если нет
 срабатываний; пустой список фрагментов сам по себе не означает `CLEAN`.
 
@@ -153,16 +180,21 @@ detector execution и без stdout audit pair. Исходное тело, ис�
 
 Анализатор читает одно представление только для чтения и строит
 нормализованные атрибуты и фрагменты. Результат разбора не содержит заново
-собранного тела. После теневого решения источник передаётся транспорту через
-одноразовую передачу владения и воспроизводится на вышестоящий сервер без
-изменения байтов. Неизвестные поля вне содержимого, пробельные символы и порядок
+собранного тела. ALLOW и no-policy передают источник транспорту одноразово и воспроизводят
+исходные bytes. MASK использует immutable parser-owned class/raw-token metadata
+и один последовательный проход исходных string literals для validated patches.
+Structural parse и detector не повторяются; whole-body copy и DTO serialization
+отсутствуют. Original quota остаётся занятой до terminal output callback, включая
+последний pending output, cancellation, peer close и shutdown. Неизвестные поля вне содержимого, пробельные символы и порядок
 полей сохраняются.
 
 Шлюз изменяет только транспортную границу:
 
 - схему, сетевое имя, порт, базовый путь вышестоящего сервера и `Host`;
 - заголовки одного соединения (hop-by-hop) и имена из `Connection`;
-- `Content-Length` согласно транспортному слою;
+- `Content-Length` равен validated patched byte length для MASK;
+- MASK удаляет Content-MD5, Digest, Content-Digest и Repr-Digest, сохраняя
+  Want-Content-Digest, Want-Repr-Digest и остальные end-to-end preferences;
 - набор заголовков, использованных для идентификации;
 - итоговые заголовки трассировки и сеанса.
 
@@ -170,7 +202,7 @@ detector execution и без stdout audit pair. Исходное тело, ис�
 
 - API OpenAI Responses, Realtime и Batch;
 - внешний механизм разрешения разговора или системной инструкции;
-- request-side `BLOCK`/`MASK`, `REMOVE` и изменение исходного запроса;
+- `REMOVE`, compressed request bodies и request trailer forwarding;
 - произвольные OpenAI-совместимые конечные точки и резервное распознавание по
   телу запроса.
 

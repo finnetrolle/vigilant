@@ -8,6 +8,10 @@ request payload через встроенный PII-detector, пересылае
 
 **Целевой milestone:** Production PII shadow proxy
 
+Заголовок и исходный milestone фиксируют историческую цель roadmap. Текущий
+request enforcement и следующий work item описаны в разделе
+[актуальной границы](#текущий-roadmap-frontier).
+
 ## Назначение roadmap
 
 Roadmap связывает work items нескольких epics в один delivery path к первому
@@ -373,6 +377,15 @@ horizontal logging subsystem.
 
 ## Текущий roadmap frontier
 
+[VIG-34](issues/issue_34_request_pii_enforcement.md) завершена: request
+ALLOW/MASK/BLOCK, explicit policy selection, non-expanding exact patches и
+lifecycle/privacy matrices подтверждены полными HTTP/process/OCI checks,
+work-item validator и build. [Closure ledger](../docs/request-enforcement-evidence.md)
+содержит точные команды и независимые oracles. Следующий шаг - уточнение
+[VIG-36](issues/issue_36_superseded_requirements_cleanup.md), которая остаётся
+Draft. Историческая shadow-only веха сохраняется как baseline; текущий runtime
+contract описан в [docs/runtime-contract.md](../docs/runtime-contract.md).
+
 Все implementation issues Stage 0 завершены: VIG-09-01..09 и EPIC-09 имеют
 status `Done`, а project work-item validator входит в `check`. VIG-10-01 и
 VIG-10-02 также имеют status `Done`.
@@ -388,7 +401,7 @@ development/test-only mode `DUMMY`. VIG-28 добавил production-capable off
 JWT Bearer extractor с pinned RSA public JWK set и без runtime identity I/O.
 
 Все standalone integration issues Stage 3 закрыты: VIG-11..17 имеют status
-`Done`. Production `MainKt` и OCI image выполняют bounded PII shadow inspection
+`Done`. Исторические production `MainKt` и OCI evidence подтвердили bounded PII shadow inspection
 для Chat Completions request, exact replay, safe aggregate audit и lifecycle
 gates. Configurable session header и W3C trace context сохраняются через
 SERVER, INTERNAL и CLIENT spans; application и OTLP JSON records передаются
@@ -455,7 +468,7 @@ consumers.
 - Disk spill отклонён для MVP в EPIC-20: retained in-memory response source не
   сохраняет raw PII на disk.
 - Hardcoded default policy отклонён: operator обязан явно предоставить
-  validated global coverage policy.
+  validated policy snapshot. Историческое требование global coverage заменено VIG-34; hidden defaults по-прежнему отсутствуют.
 - Прямой OTLP network exporter из Vigilant отклонён: application logs и
   OTLP/JSON telemetry передаются через stdout, а delivery выполняет Collector.
 - Proprietary request correlation header отклонён: configurable header несёт

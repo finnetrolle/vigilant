@@ -9,8 +9,6 @@ import com.linecorp.armeria.common.HttpResponse
 import com.linecorp.armeria.common.HttpStatus
 import com.linecorp.armeria.common.MediaType
 import com.linecorp.armeria.common.RequestHeaders
-import java.nio.file.Files
-import java.nio.file.Path
 import java.time.Duration
 import java.util.concurrent.CompletableFuture
 import kotlin.test.AfterTest
@@ -20,7 +18,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.Tag
 
-/** Production-entry-point evidence for the packaged PII shadow request path. */
+/** Production-entry-point evidence for the packaged PII request enforcement path. */
 @Tag("process-e2e")
 class PiiShadowProxyProcessTest {
     private val fixture = GatewayTestFixture()
@@ -167,7 +165,7 @@ class PiiShadowProxyProcessTest {
             try {
                 val response = process.awaitServing().execute(chatCompletionsRequestWithBody(case.body)).aggregate().join()
 
-                assertEquals(HttpStatus.OK, response.status(), case.name)
+                assertEquals(if (case.errorCode == null) HttpStatus.OK else HttpStatus.SERVICE_UNAVAILABLE, response.status(), case.name)
                 val (started, completed) = awaitAnalysisPair(process)
                 assertEquals(RequestAuditTestContract.STARTED_FIELDS, started.auditFieldNames(), case.name)
                 assertEquals(
@@ -211,6 +209,138 @@ class PiiShadowProxyProcessTest {
             } finally {
                 process.close()
                 gateway = null
+            }
+        }
+    }
+
+    /** Proves installed runtime actions from literal upstream bytes and safe real JSONL outcomes. */
+    @Test
+    @Suppress("LongMethod", "CyclomaticComplexMethod")
+    // Finite matrix keeps each literal oracle beside its setup and terminal observation.
+    fun `installed distribution enforces configured request actions and empty snapshot`() {
+        val captured = java.util.concurrent.LinkedBlockingQueue<ByteArray>()
+        val upstream = fixture.startServer { request ->
+            HttpResponse.of(request.aggregate().thenApply { aggregated ->
+                captured.add(aggregated.content().array())
+                validChatCompletionsResponse()
+            })
+        }
+        val email = chatCompletionsBody("alice@example.com")
+        val ip = chatCompletionsBody("1.1.1.1")
+        val structural = """{"model":"gpt-test","messages":[{"role":"user","name":"alice@example.com","content":""}]}"""
+        listOf(
+            Triple("ALLOW", email, email),
+            Triple("MASK", email, chatCompletionsBody("[EMAIL_MASKED]")),
+            Triple("SHORT_MASK", ip, chatCompletionsBody("[IP_MA]")),
+            Triple("BLOCK", email, null),
+            Triple("STRUCTURAL_BLOCK", structural, null),
+            Triple("EMPTY", email, email),
+        ).forEach { (action, body, expected) ->
+            val config = testPolicyConfiguration { source ->
+                when (action) {
+                    "EMPTY" -> "policies = []"
+                    "BLOCK" -> source.replace("detected { disposition = \"ALLOW\"",
+                        "detected { disposition = \"BLOCK\"")
+                    "MASK", "SHORT_MASK", "STRUCTURAL_BLOCK" -> source.replace(
+                        "detected { disposition = \"ALLOW\", transformations = [] }",
+                        "detected { disposition = \"ALLOW\", transformations = [\"MASK\"] }",
+                    )
+                    else -> source
+                }
+            }
+            val process = GatewayProcessFixture.launchInstalled(fixture.serverUri(upstream),
+                environment = mapOf("VIGILANT_POLITICS_CONFIG" to config)).also { gateway = it }
+            try {
+                val response = process.awaitServing().execute(chatCompletionsRequestWithBody(body)).aggregate().join()
+                assertEquals(if (expected == null) HttpStatus.FORBIDDEN else HttpStatus.OK, response.status(), action)
+                if (expected == null) {
+                    @Suppress("MaxLineLength") // Literal wire bytes are the independent oracle.
+                    assertEquals("""{"error":{"message":"Request blocked: PII detected.","type":"policy_violation","code":"policy_blocked"}}""", response.contentUtf8())
+                    assertEquals(null, response.headers().get("retry-after"))
+                    assertTrue(captured.isEmpty(), action)
+                } else {
+                    assertEquals(expected, captured.poll(5,
+                        java.util.concurrent.TimeUnit.SECONDS)?.toString(Charsets.UTF_8), action)
+                }
+                if (action != "EMPTY") {
+                    val (started, completed) = awaitAnalysisPair(process)
+                    assertEquals(RequestAuditTestContract.STARTED_FIELDS, started.auditFieldNames(), action)
+                    assertEquals(RequestAuditTestContract.SUCCESS_FIELDS, completed.auditFieldNames(), action)
+                    assertEquals("DETECTED", completed.kvp("outcome"), action)
+                    assertEquals(when (action) { "ALLOW" -> "ALLOW"; "BLOCK",
+                        "STRUCTURAL_BLOCK" -> "BLOCK"; else -> "MASK" },
+                        completed.kvp("reaction"), action)
+                    assertEquals("1", completed.kvp("findings.total"), action)
+                    assertEquals(if (action == "SHORT_MASK") "IP_ADDRESS:1" else "EMAIL_ADDRESS:1",
+                        completed.kvp("findings.by_type"), action)
+                }
+            } finally {
+                process.close()
+                if (action == "EMPTY") assertTrue(parseAnalysisEvents(process.output()).isEmpty(),
+                    "empty snapshot emitted inspection audit")
+                assertFalse(process.output().contains("alice@example.com"), action)
+                assertFalse(process.output().contains("1.1.1.1"), action)
+                gateway = null
+            }
+        }
+    }
+
+    /** Holds actual original and patched uploads across the installed process shutdown boundary. */
+    @Test
+    @Suppress("NestedBlockDepth")
+    // Finite matrix keeps each literal oracle beside its setup and terminal observation.
+    fun `installed shutdown cancels active original and patched uploads within drain deadline`() {
+        listOf(false, true).forEach { masked ->
+            val entered = java.util.concurrent.CountDownLatch(1)
+            val release = java.util.concurrent.CountDownLatch(1)
+            val captured = CompletableFuture<String>()
+            val applications = java.util.concurrent.atomic.AtomicInteger()
+            @Suppress("MaxLineLength") // Literal wire bytes are the independent oracle.
+            val prefix = """{"model":"gpt-test","messages":[{"role":"user","content":"alice@example.com"}],"padding":""""
+            @Suppress("MaxLineLength") // Literal wire bytes are the independent oracle.
+            val maskedPrefix = """{"model":"gpt-test","messages":[{"role":"user","content":"[EMAIL_MASKED]"}],"padding":""""
+            val body = prefix + "x".repeat(8_388_608 - prefix.length - 2) + "\"}"
+            RawHttp1TestUpstream("process-shutdown-$masked", writeApplicationResponse = {},
+                observeApplicationRequest = { _, input ->
+                    applications.incrementAndGet()
+                    captured.complete(input.readNBytes(128).toString(Charsets.UTF_8))
+                    entered.countDown()
+                    check(release.await(15, java.util.concurrent.TimeUnit.SECONDS))
+                }, receiveBufferBytes = 1_024,
+            ).use { upstream ->
+                val config = testPolicyConfiguration { source ->
+                    if (masked) source.replace("detected { disposition = \"ALLOW\", transformations = [] }",
+                        "detected { disposition = \"ALLOW\", transformations = [\"MASK\"] }") else source
+                }
+                val process = GatewayProcessFixture.launchInstalled(upstream.uri, environment = mapOf(
+                    "VIGILANT_POLITICS_CONFIG" to config,
+                    "VIGILANT_SHUTDOWN_QUIET_PERIOD" to "100ms",
+                    "VIGILANT_SHUTDOWN_FORCE_TIMEOUT" to "2s",
+                )).also { gateway = it }
+                try {
+                    val client = process.awaitServing()
+                    val response = client.execute(chatCompletionsRequestWithBody(body)).aggregate()
+                    assertTrue(entered.await(5, java.util.concurrent.TimeUnit.SECONDS), "upstream did not hold upload")
+                    val expected = if (masked) maskedPrefix else prefix
+                    assertEquals(expected + "x".repeat(128 - expected.length), captured.join())
+                    val (_, completed) = awaitAnalysisPair(process)
+                    assertEquals(if (masked) "MASK" else "ALLOW", completed.kvp("reaction"))
+                    process.process.destroy()
+                    var lastStatus: HttpStatus? = null
+                    assertTrue(fixture.awaitUntil(Duration.ofSeconds(2)) {
+                        lastStatus = runCatching { client.get("/readyz").aggregate().join().status() }.getOrNull()
+                        lastStatus == HttpStatus.SERVICE_UNAVAILABLE
+                    }, "readiness never closed: $lastStatus")
+                    response.handle { _, _ -> Unit }.get(5, java.util.concurrent.TimeUnit.SECONDS)
+                    val exit = process.awaitExit(Duration.ofSeconds(5))
+                    assertTrue(exit.exitCode in setOf(0, 143), "unexpected shutdown exit ${exit.exitCode}")
+                    assertEquals(1, applications.get(), "shutdown repeated the upstream handoff")
+                    assertEquals(2, parseAnalysisEvents(process.output()).size, "shutdown repeated completed audit")
+                } finally {
+                    release.countDown()
+                    process.close()
+                    gateway = null
+                }
             }
         }
     }
@@ -423,17 +553,8 @@ class PiiShadowProxyProcessTest {
             .toList()
 
     /** Creates a process-owned policy snapshot with one deterministic detector deadline. */
-    private fun policyConfigWithDeadline(deadline: Duration): String {
-        val source = Files.readString(Path.of(TEST_POLITICS_CONFIG_PATH))
-        val configured = source.replace("deadline = 50ms", "deadline = ${deadline.toNanos()}ns")
-        return Files.createTempFile("vigilant-process-politics", ".conf")
-            .also { path ->
-                Files.writeString(path, configured)
-                path.toFile().deleteOnExit()
-            }.toAbsolutePath()
-            .normalize()
-            .toString()
-    }
+    private fun policyConfigWithDeadline(deadline: Duration): String =
+        testPolicyConfiguration { source -> source.replace("deadline = 50ms", "deadline = ${deadline.toNanos()}ns") }
 
     /** One exact expected terminal aggregate produced by the packaged gateway. */
     private data class ProcessAuditOutcomeCase(

@@ -1,9 +1,7 @@
 package io.vigilant.protocol.openai
 
 import com.fasterxml.jackson.core.JsonParseException
-import com.fasterxml.jackson.core.JsonParser
 import com.fasterxml.jackson.core.JsonProcessingException
-import com.fasterxml.jackson.core.JsonToken
 import com.fasterxml.jackson.core.StreamReadFeature
 import com.fasterxml.jackson.databind.DeserializationFeature
 import com.fasterxml.jackson.databind.JsonNode
@@ -66,61 +64,16 @@ object ChatCompletionsResponseParser {
         val parser = MAPPER.factory.createParser(sourceBytes)
         parser.use {
             val first = parser.nextToken() ?: malformed()
-            val root = readJsonNode(parser, first, "", stringTokens)
+            val root = readJsonTree(parser, first, "", MAPPER.nodeFactory, { current, pointer ->
+                stringTokens[pointer] = RawJsonStringToken(current.currentTokenLocation().byteOffset)
+                MAPPER.nodeFactory.textNode(current.text)
+            }, ::malformed)
             if (parser.nextToken() != null) {
                 malformed()
             }
             return parseJsonRoot(root, sourceBytes, stringTokens)
         }
     }
-
-    /** Builds one JSON tree while recording the raw start of every decoded string value. */
-    private fun readJsonNode(
-        parser: JsonParser,
-        token: JsonToken,
-        pointer: String,
-        stringTokens: MutableMap<String, RawJsonStringToken>,
-    ): JsonNode =
-        when (token) {
-            JsonToken.START_OBJECT -> {
-                val objectNode = MAPPER.nodeFactory.objectNode()
-                while (parser.nextToken() != JsonToken.END_OBJECT) {
-                    if (parser.currentToken() != JsonToken.FIELD_NAME) malformed()
-                    val field = parser.currentName()
-                    val valueToken = parser.nextToken() ?: malformed()
-                    objectNode.set<JsonNode>(
-                        field,
-                        readJsonNode(parser, valueToken, "$pointer/${field.toJsonPointerSegment()}", stringTokens),
-                    )
-                }
-                objectNode
-            }
-
-            JsonToken.START_ARRAY -> {
-                val arrayNode = MAPPER.nodeFactory.arrayNode()
-                var index = 0
-                while (parser.nextToken() != JsonToken.END_ARRAY) {
-                    arrayNode.add(readJsonNode(parser, parser.currentToken(), "$pointer/$index", stringTokens))
-                    index++
-                }
-                arrayNode
-            }
-
-            JsonToken.VALUE_STRING -> {
-                stringTokens[pointer] = RawJsonStringToken(parser.currentTokenLocation().byteOffset)
-                MAPPER.nodeFactory.textNode(parser.text)
-            }
-
-            JsonToken.VALUE_NUMBER_INT -> MAPPER.nodeFactory.numberNode(parser.bigIntegerValue)
-            JsonToken.VALUE_NUMBER_FLOAT -> MAPPER.nodeFactory.numberNode(parser.decimalValue)
-            JsonToken.VALUE_TRUE -> MAPPER.nodeFactory.booleanNode(true)
-            JsonToken.VALUE_FALSE -> MAPPER.nodeFactory.booleanNode(false)
-            JsonToken.VALUE_NULL -> MAPPER.nodeFactory.nullNode()
-            else -> malformed()
-        }
-
-    /** Escapes one JSON Pointer path segment without changing parser field semantics. */
-    private fun String.toJsonPointerSegment(): String = replace("~", "~0").replace("/", "~1")
 
     /** Validates and normalizes one ordinary JSON response object. */
     private fun parseJsonRoot(
@@ -427,7 +380,10 @@ object ChatCompletionsResponseParser {
         val stringTokens = LinkedHashMap<String, RawJsonStringToken>()
         MAPPER.factory.createParser(payload.bytes).use { parser ->
             val first = parser.nextToken() ?: malformed()
-            val root = readJsonNode(parser, first, "", stringTokens)
+            val root = readJsonTree(parser, first, "", MAPPER.nodeFactory, { current, pointer ->
+                stringTokens[pointer] = RawJsonStringToken(current.currentTokenLocation().byteOffset)
+                MAPPER.nodeFactory.textNode(current.text)
+            }, ::malformed)
             if (parser.nextToken() != null) malformed()
             return ParsedSsePayload(root, payload, stringTokens)
         }

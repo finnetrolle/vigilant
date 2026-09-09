@@ -194,7 +194,7 @@ internal abstract class GatewayE2eTestSupport {
     )
 
     /**
-     * Starts the production shadow service with real policy components and bounded executors.
+     * Starts production request enforcement with real policy components and bounded executors.
      *
      * @param responseContexts optional response-phase contexts observed through the public handoff.
      * @param serviceContexts optional request scopes used for lifecycle control and terminal-release assertions.
@@ -205,9 +205,11 @@ internal abstract class GatewayE2eTestSupport {
      * @param inspectionExecutor optional deterministic executor supplied by lifecycle tests.
      * @param responseSourceCreated optional owner-state observer invoked for each retained source.
      * @param responseOutputObserved optional server-boundary observer invoked for disclosed headers or body.
+     * @param requestRewrite optional protocol planner collaborator for all-or-nothing request failure tests.
      * @param responseRewrite optional all-or-nothing response rewriter used by failure-mapping tests.
      * @param responseSseRewrite optional SSE rewriter used by source-map failure-mapping tests.
      * @param requestTransform optional server-side request replacement for transport-failure tests.
+     * @param detectorBindings optional test-owned detector contributions for independent policy outcome fixtures.
      * @param configureServer optional Armeria settings for lifecycle scenarios.
      */
     @Suppress("LongMethod", "LongParameterList")
@@ -227,6 +229,13 @@ internal abstract class GatewayE2eTestSupport {
         inspectionExecutor: ExecutorService? = null,
         responseSourceCreated: ((RetainedResponseSource) -> Unit)? = null,
         responseOutputObserved: (() -> Unit)? = null,
+        requestRewrite: (
+            (
+                CompleteByteSource,
+                io.vigilant.protocol.openai.NormalizedChatCompletionsRequest,
+                Collection<io.vigilant.protocol.openai.RequestFragmentMaskingPlan>,
+            ) -> List<io.vigilant.source.RequestSourcePatch>
+        )? = null,
         responseRewrite: (
             (
                 CompleteByteSource,
@@ -242,6 +251,7 @@ internal abstract class GatewayE2eTestSupport {
             ) -> ResponseRewriteResult
         )? = null,
         requestTransform: ((HttpRequest) -> HttpRequest)? = null,
+        detectorBindings: Map<DetectorId, Detector>? = null,
         configureServer: ServerBuilder.() -> Unit = {},
     ): com.linecorp.armeria.server.Server {
         val requestExecutor =
@@ -254,7 +264,7 @@ internal abstract class GatewayE2eTestSupport {
                 detectorExecutionCoordinator =
                     DetectorExecutionCoordinator(
                         DetectorExecutor(
-                            mapOf(
+                            detectorBindings ?: mapOf(
                                 FastPiiPolicyAdapter.ID to
                                     (detector ?: FastPiiPolicyAdapter(WindowedFastPiiExecutor(cpuExecutor))),
                             ),
@@ -270,7 +280,8 @@ internal abstract class GatewayE2eTestSupport {
                 bypassProxyService = BypassProxyService(upstreamUri, isolatedUpstreamClient()),
                 requestSourceQuota = quota,
                 protocol = protocol,
-                workflow = ShadowInspectionWorkflow(protocol, policyEngine, auditLogger),
+                workflow = ShadowInspectionWorkflow(protocol, policyEngine, auditLogger,
+                    requestRewrite ?: io.vigilant.protocol.openai.RequestRewritePlanner()::prepare),
                 inspectionExecutor = requestExecutor,
                 identityExtractor = identityExtractor,
                 responseAnalysisLifecycle = responseAnalysisLifecycle,
@@ -497,12 +508,14 @@ internal abstract class GatewayE2eTestSupport {
      * @param subject identity subject selected by the policy.
      * @param id stable policy identifier.
      * @param version stable policy version.
+     * @param detected explicitly selected request detection reaction.
      */
     protected fun shadowPolicy(
         deadline: Duration,
         subject: PolicySubject = PolicySubject(SubjectType.ANY, SubjectId("*")),
         id: String = "shadow",
         version: String = "1",
+        detected: Reaction = Reaction(Disposition.ALLOW, emptyList()),
     ): Policy {
         val allow = Reaction(Disposition.ALLOW, emptyList())
         return Policy(
@@ -517,7 +530,7 @@ internal abstract class GatewayE2eTestSupport {
                 ),
             detectors = listOf(DetectorId("fast-pii")),
             deadline = deadline,
-            reactions = PolicyReactions(allow, allow, allow),
+            reactions = PolicyReactions(detected, allow, Reaction(Disposition.BLOCK, emptyList())),
             overrides = emptyList(),
         )
     }

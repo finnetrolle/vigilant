@@ -4,8 +4,9 @@
 **Epic:** [EPIC-20](../../epics/epic_20_atomic_in_memory_response_analysis.md)
 **Ветка:** Response enforcement > transport-neutral masking
 **Зависит от:** нет
-**Блокирует:** [VIG-20-02](issue_20_02_response_inspection_enforcement.md) и
-завершённый [VIG-20-05](issue_20_05_sse_response_enforcement.md)
+**Блокирует:** [VIG-20-02](issue_20_02_response_inspection_enforcement.md),
+завершённый [VIG-20-05](issue_20_05_sse_response_enforcement.md) и
+[VIG-34](../issue_34_request_pii_enforcement.md)
 **Оценка:** 2-3 инженерных дня; confidence High
 
 ## Цель
@@ -52,6 +53,11 @@ JSON locations.
   second transformation path.
 
 ## Известный контекст
+
+VIG-34 является новым request caller canonical masking instructions. Он
+вводит request-only shortening marker после canonical validation и не меняет
+полные markers текущего response runtime. Это successor contract; прошлые
+Done/evidence и scope этой issue сохраняются.
 
 До этой issue `ReactionPlan` хранил `TransformationOperation` with
 transformation kind and UTF-8 span, но не хранил FindingType/replacement.

@@ -48,4 +48,22 @@ class InspectionCancellationTest {
         assertTrue(completion.isCancelled, "precompleted cancellation did not reach the response completion")
         assertEquals(1, ownerCloseCount.get())
     }
+    /** Cancellation after both handles are published reaches them and closes the owner exactly once. */
+    @Test
+    fun `cancellation after publication closes owner and both handles once`() {
+        val requestCancelled = CompletableFuture<Void>()
+        val ownerCloseCount = AtomicInteger()
+        val cancellation = InspectionCancellation(requestCancelled) { ownerCloseCount.incrementAndGet() }
+        val task = FutureTask<Unit> {}
+        val completion = CompletableFuture<HttpResponse>()
+        cancellation.install(task, completion)
+        assertEquals(0, ownerCloseCount.get())
+        assertTrue(!task.isCancelled && !completion.isCancelled)
+        requestCancelled.complete(null)
+        requestCancelled.complete(null)
+        assertTrue(task.isCancelled)
+        assertTrue(completion.isCancelled)
+        assertEquals(1, ownerCloseCount.get())
+    }
+
 }

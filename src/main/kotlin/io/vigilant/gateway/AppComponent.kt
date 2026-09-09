@@ -199,7 +199,7 @@ interface AppComponent {
         fun meter(sdkMeterProvider: SdkMeterProvider): Meter =
             sdkMeterProvider.get("io.vigilant.gateway")
 
-        /** Wraps the shadow proxy with request-scoped tracing and correlation. */
+        /** Wraps the enforcement proxy with request-scoped tracing and correlation. */
         @Provides
         @SingleIn(AppScope::class)
         fun tracingService(

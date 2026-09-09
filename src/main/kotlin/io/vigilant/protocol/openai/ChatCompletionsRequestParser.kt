@@ -23,6 +23,7 @@ object ChatCompletionsRequestParser {
      * @param descriptor explicit operation descriptor selected before body parsing.
      * @return immutable normalized request or typed fail-closed result.
      */
+    @Suppress("NestedBlockDepth") // Nested use scopes keep parser/input ownership explicit through tree construction.
     fun parse(
         source: CompleteByteSource,
         descriptor: OpenAiOperationDescriptor,
@@ -33,9 +34,18 @@ object ChatCompletionsRequestParser {
 
         return try {
             checkCancellation()
-            val root = source.openStream().use(MAPPER::readTree)
+            val root = source.openStream().use { input ->
+                MAPPER.factory.createParser(input).use { parser ->
+                    val first = parser.nextToken() ?: malformed()
+                    val node = readJsonTree(parser, first, "", MAPPER.nodeFactory, { current, _ ->
+                        LocatedRequestText(current.text, current.currentTokenLocation().byteOffset)
+                    }, ::malformed)
+                    if (parser.nextToken() != null) malformed()
+                    node
+                }
+            }
             checkCancellation()
-            parseRoot(root)
+            parseRoot(root, source.sourceIdentity)
         } catch (_: StreamConstraintsException) {
             failure(ChatCompletionsParseFailureCode.UNSUPPORTED_SCHEMA)
         } catch (parseFailure: JsonParseException) {
@@ -53,8 +63,8 @@ object ChatCompletionsRequestParser {
         }
     }
 
-    /** Validates and normalizes one complete JSON object. */
-    private fun parseRoot(root: JsonNode?): ChatCompletionsParseResult {
+    /** Normalizes one JSON object and binds raw metadata to its immutable source identity. */
+    private fun parseRoot(root: JsonNode?, sourceIdentity: Any): ChatCompletionsParseResult {
         if (root !is ObjectNode) {
             return failure(ChatCompletionsParseFailureCode.MALFORMED_MESSAGE)
         }
@@ -83,6 +93,8 @@ object ChatCompletionsRequestParser {
             NormalizedChatCompletionsRequest(
                 attributes = NormalizedProtocolAttributes(model),
                 fragments = collector.fragments,
+                sources = collector.sources,
+                sourceIdentity = sourceIdentity,
                 inspectionGaps = collector.inspectionGaps,
                 coverage =
                     InspectionCoverage.derive(
@@ -98,6 +110,9 @@ object ChatCompletionsRequestParser {
     private class FragmentCollector {
         /** Successful fragments in original semantic value order. */
         val fragments = ArrayList<TextFragment>()
+
+        /** Immutable field associations collected with the corresponding source fragments. */
+        val sources = ArrayList<RequestFragmentSource>()
 
         /** Recognized non-text content in original semantic value order. */
         val inspectionGaps = ArrayList<InspectionGap>()
@@ -169,7 +184,7 @@ object ChatCompletionsRequestParser {
             }
             val choice = value as? ObjectNode ?: malformed()
             choice.get(NAME_FIELD)?.let { name ->
-                addText(name, FragmentSemanticKind.LABEL, null, "/function_call/name")
+                addStructuralText(name, FragmentSemanticKind.LABEL, null, "/function_call/name")
             } ?: malformed()
         }
 
@@ -195,7 +210,7 @@ object ChatCompletionsRequestParser {
             val approximate = location.get(APPROXIMATE_FIELD) as? ObjectNode ?: malformed()
             approximate.properties().forEach { (field, fieldValue) ->
                 if (field in APPROXIMATE_LOCATION_TEXT_FIELDS) {
-                    addText(
+                    addStructuralText(
                         fieldValue,
                         FragmentSemanticKind.TOOL_ARGUMENT,
                         null,
@@ -246,7 +261,7 @@ object ChatCompletionsRequestParser {
                     jsonSchema.properties().forEach { (field, fieldValue) ->
                         when (field) {
                             NAME_FIELD ->
-                                addText(
+                                addStructuralText(
                                     fieldValue,
                                     FragmentSemanticKind.LABEL,
                                     null,
@@ -275,7 +290,7 @@ object ChatCompletionsRequestParser {
                 val locator = "/messages/$messageIndex/${field.escapePointer()}"
                 when (field) {
                     CONTENT_FIELD -> collectScalarContent(value, role, locator)
-                    NAME_FIELD -> addText(value, FragmentSemanticKind.LABEL, role, locator)
+                    NAME_FIELD -> addStructuralText(value, FragmentSemanticKind.LABEL, role, locator)
                     TOOL_CALLS_FIELD -> collectToolCalls(value, messageIndex)
                     AUDIO_FIELD -> addGap(value, InspectionGapKind.OPAQUE_AUDIO_REFERENCE, locator, ID_FIELD)
                     FUNCTION_CALL_FIELD -> collectMessageFunctionCall(value, locator, role)
@@ -406,16 +421,17 @@ object ChatCompletionsRequestParser {
                     FUNCTION_DISCRIMINATOR -> {
                         val function = call.get(FUNCTION_FIELD) as? ObjectNode ?: malformed()
                         function.requiredText(NAME_FIELD)
-                        function.requiredText(ARGUMENTS_FIELD)
+                        function.requiredString(ARGUMENTS_FIELD)
                         function.properties().forEach { (field, fieldValue) ->
                             val locator =
                                 "/messages/$messageIndex/tool_calls/$callIndex/function/${field.escapePointer()}"
                             when (field) {
                                 NAME_FIELD ->
-                                    addText(fieldValue, FragmentSemanticKind.LABEL, MessageRole.ASSISTANT, locator)
+                                    addStructuralText(fieldValue, FragmentSemanticKind.LABEL,
+                                        MessageRole.ASSISTANT, locator)
 
                                 ARGUMENTS_FIELD ->
-                                    addText(
+                                    addStructuralText(
                                         fieldValue,
                                         FragmentSemanticKind.TOOL_ARGUMENT,
                                         MessageRole.ASSISTANT,
@@ -442,12 +458,14 @@ object ChatCompletionsRequestParser {
             locator: String,
         ) {
             custom.requiredText(NAME_FIELD)
-            custom.requiredText(INPUT_FIELD)
+            custom.requiredString(INPUT_FIELD)
             custom.properties().forEach { (field, value) ->
                 when (field) {
-                    NAME_FIELD -> addText(value, FragmentSemanticKind.LABEL, MessageRole.ASSISTANT, "$locator/name")
+                    NAME_FIELD -> addStructuralText(value, FragmentSemanticKind.LABEL, MessageRole.ASSISTANT,
+                        "$locator/name")
                     INPUT_FIELD ->
-                        addText(value, FragmentSemanticKind.TOOL_ARGUMENT, MessageRole.ASSISTANT, "$locator/input")
+                        addStructuralText(value, FragmentSemanticKind.TOOL_ARGUMENT, MessageRole.ASSISTANT,
+                            "$locator/input")
                 }
             }
         }
@@ -463,12 +481,12 @@ object ChatCompletionsRequestParser {
             }
             val functionCall = value as? ObjectNode ?: malformed()
             functionCall.requiredText(NAME_FIELD)
-            functionCall.requiredText(ARGUMENTS_FIELD)
+            functionCall.requiredString(ARGUMENTS_FIELD)
             functionCall.properties().forEach { (field, fieldValue) ->
                 when (field) {
-                    NAME_FIELD -> addText(fieldValue, FragmentSemanticKind.LABEL, role, "$locator/name")
+                    NAME_FIELD -> addStructuralText(fieldValue, FragmentSemanticKind.LABEL, role, "$locator/name")
                     ARGUMENTS_FIELD ->
-                        addText(fieldValue, FragmentSemanticKind.TOOL_ARGUMENT, role, "$locator/arguments")
+                        addStructuralText(fieldValue, FragmentSemanticKind.TOOL_ARGUMENT, role, "$locator/arguments")
                 }
             }
         }
@@ -515,7 +533,7 @@ object ChatCompletionsRequestParser {
             function.requiredText(NAME_FIELD)
             function.properties().forEach { (field, value) ->
                 when (field) {
-                    NAME_FIELD -> addText(value, FragmentSemanticKind.LABEL, null, "$locator/name")
+                    NAME_FIELD -> addStructuralText(value, FragmentSemanticKind.LABEL, null, "$locator/name")
                     DESCRIPTION_FIELD ->
                         addText(value, FragmentSemanticKind.TOOL_DESCRIPTION, null, "$locator/description")
 
@@ -532,7 +550,7 @@ object ChatCompletionsRequestParser {
             custom.requiredText(NAME_FIELD)
             custom.properties().forEach { (field, value) ->
                 when (field) {
-                    NAME_FIELD -> addText(value, FragmentSemanticKind.LABEL, null, "$locator/name")
+                    NAME_FIELD -> addStructuralText(value, FragmentSemanticKind.LABEL, null, "$locator/name")
                     DESCRIPTION_FIELD ->
                         addText(value, FragmentSemanticKind.TOOL_DESCRIPTION, null, "$locator/description")
 
@@ -556,7 +574,7 @@ object ChatCompletionsRequestParser {
                 else -> ambiguous()
             }
             grammar.get(DEFINITION_FIELD)?.let { definition ->
-                addText(definition, FragmentSemanticKind.SCHEMA_TEXT, null, "$locator/grammar/definition")
+                addStructuralText(definition, FragmentSemanticKind.SCHEMA_TEXT, null, "$locator/grammar/definition")
             } ?: malformed()
         }
 
@@ -568,7 +586,7 @@ object ChatCompletionsRequestParser {
         ) {
             val named = parent.get(field) as? ObjectNode ?: malformed()
             named.requiredText(NAME_FIELD)
-            addText(
+            addStructuralText(
                 named.get(NAME_FIELD) ?: malformed(),
                 FragmentSemanticKind.LABEL,
                 null,
@@ -592,7 +610,7 @@ object ChatCompletionsRequestParser {
             schema: JsonNode,
             locator: String,
         ) {
-            JsonSchemaWalker(::addText, ::addTextValue).collect(schema, locator)
+            JsonSchemaWalker(::addText, ::addStructuralText, ::addTextValue).collect(schema, locator)
         }
 
         /** Adds one non-empty decoded text field with its next ordinal. */
@@ -605,7 +623,15 @@ object ChatCompletionsRequestParser {
             if (!value.isTextual) {
                 malformed()
             }
-            addDecodedText(value.textValue(), kind, role, locator)
+            addDecodedText(value.textValue(), kind, role, locator, RequestFieldClass.FREE_TEXT,
+                (value as? LocatedRequestText)?.rawTokenStart ?: malformed())
+        }
+
+        /** Adds a recognized structural value without exposing a permissive rewrite coordinate. */
+        private fun addStructuralText(value: JsonNode, kind: FragmentSemanticKind, role: MessageRole?,
+            locator: String) {
+            if (!value.isTextual) malformed()
+            addDecodedText(value.textValue(), kind, role, locator, RequestFieldClass.STRUCTURAL, null)
         }
 
         /** Adds a user-defined schema or tool label already decoded by the JSON parser. */
@@ -613,14 +639,17 @@ object ChatCompletionsRequestParser {
             text: String,
             kind: FragmentSemanticKind,
             locator: String,
-        ) = addDecodedText(text, kind, null, locator)
+        ) = addDecodedText(text, kind, null, locator, RequestFieldClass.STRUCTURAL, null)
 
         /** Adds one decoded non-empty fragment through the shared budget and provenance path. */
+        @Suppress("LongParameterList") // Semantic metadata and the optional raw coordinate describe one fragment.
         private fun addDecodedText(
             text: String,
             kind: FragmentSemanticKind,
             role: MessageRole?,
             locator: String,
+            fieldClass: RequestFieldClass,
+            rawTokenStart: Long?,
         ) {
             if (text.isEmpty()) {
                 return
@@ -628,6 +657,7 @@ object ChatCompletionsRequestParser {
             if (fragments.size >= MAX_FRAGMENT_COUNT) {
                 unsupported()
             }
+            sources += RequestFragmentSource(fragments.size, ProtocolLocator(locator), fieldClass, rawTokenStart)
             fragments +=
                 TextFragment(
                     text = text,
@@ -659,6 +689,7 @@ object ChatCompletionsRequestParser {
     @Suppress("TooManyFunctions")
     private class JsonSchemaWalker(
         private val addText: (JsonNode, FragmentSemanticKind, MessageRole?, String) -> Unit,
+        private val addStructuralText: (JsonNode, FragmentSemanticKind, MessageRole?, String) -> Unit,
         private val addTextValue: (String, FragmentSemanticKind, String) -> Unit,
     ) {
         private lateinit var schemaRoot: JsonNode
@@ -686,8 +717,10 @@ object ChatCompletionsRequestParser {
                 checkCancellation()
                 val keywordLocator = "$locator/${keyword.escapePointer()}"
                 when (keyword) {
-                    in SCHEMA_TEXT_KEYWORDS -> collectSchemaText(value, keywordLocator)
-                    in SCHEMA_TEXT_ARRAY_KEYWORDS -> collectSchemaTextArray(value, keywordLocator)
+                    in SCHEMA_TEXT_KEYWORDS -> collectSchemaText(value, keywordLocator,
+                        keyword in setOf("title", "description"))
+                    in SCHEMA_TEXT_ARRAY_KEYWORDS -> collectSchemaTextArray(value, keywordLocator,
+                        keyword == "examples")
                     in SCHEMA_NAMED_CONTAINERS -> collectNamedSchemaContainer(value, keywordLocator)
                     in SCHEMA_MAP_CONTAINERS -> collectSchemaMap(value, keywordLocator)
                     in SCHEMA_SINGLE_CONTAINERS -> collectSchema(value, keywordLocator)
@@ -704,9 +737,10 @@ object ChatCompletionsRequestParser {
         private fun collectSchemaText(
             value: JsonNode,
             locator: String,
+            freeText: Boolean,
         ) {
             if (value.isTextual) {
-                addText(value, FragmentSemanticKind.SCHEMA_TEXT, null, locator)
+                (if (freeText) addText else addStructuralText)(value, FragmentSemanticKind.SCHEMA_TEXT, null, locator)
             }
         }
 
@@ -714,11 +748,13 @@ object ChatCompletionsRequestParser {
         private fun collectSchemaTextArray(
             value: JsonNode,
             locator: String,
+            freeText: Boolean,
         ) {
             val values = value as? ArrayNode ?: malformed()
             values.forEachIndexed { index, item ->
                 if (item.isTextual) {
-                    addText(item, FragmentSemanticKind.SCHEMA_TEXT, null, "$locator/$index")
+                    (if (freeText) addText else addStructuralText)(item, FragmentSemanticKind.SCHEMA_TEXT, null,
+                        "$locator/$index")
                 }
             }
         }
@@ -845,6 +881,10 @@ object ChatCompletionsRequestParser {
             contract == CHAT_COMPLETIONS_CONTRACT
     }
 
+    /** Requires a complete argument string, including an empty inspectable value, without inner parsing. */
+    private fun ObjectNode.requiredString(field: String): String =
+        get(field)?.takeIf(JsonNode::isTextual)?.textValue() ?: malformed()
+
     /** Returns a required textual object property or a malformed outcome. */
     private fun ObjectNode.requiredText(field: String): String {
         val value = get(field)
@@ -867,7 +907,7 @@ object ChatCompletionsRequestParser {
         }
 
     /** Escapes a property for the adapter-owned JSON Pointer locator. */
-    private fun String.escapePointer(): String = replace("~", "~0").replace("/", "~1")
+    private fun String.escapePointer(): String = toJsonPointerSegment()
 
     /** Throws a safe expected malformed-message control result. */
     private fun malformed(): Nothing = throw ExpectedParseFailure(ChatCompletionsParseFailureCode.MALFORMED_MESSAGE)
@@ -896,6 +936,10 @@ object ChatCompletionsRequestParser {
     private class ExpectedParseFailure(
         val code: ChatCompletionsParseFailureCode,
     ) : RuntimeException(null, null, false, false)
+
+    /** JSON tree string carrying only its parser-owned raw token start alongside decoded text. */
+    private class LocatedRequestText(text: String, val rawTokenStart: Long) :
+        com.fasterxml.jackson.databind.node.TextNode(text)
 
     private val MAPPER =
         ObjectMapper(

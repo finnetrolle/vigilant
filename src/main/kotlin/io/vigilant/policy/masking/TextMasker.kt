@@ -37,11 +37,7 @@ class TextMasker {
         if (instructions.isEmpty()) {
             return source
         }
-        val utf8Index = Utf8CharacterIndex(source)
-        instructions.forEach { instruction ->
-            utf8Index.validate(instruction)
-            validateMarker(instruction.marker)
-        }
+        val utf8Index = validatedIndex(source, instructions)
         return buildString {
             var copiedThrough = 0
             instructions.forEach { instruction ->
@@ -54,6 +50,21 @@ class TextMasker {
             append(source, copiedThrough, source.length)
         }
     }
+    /** Validates span bounds and full marker syntax without allocating transformed text. */
+    fun validate(source: String, instructions: Collection<MaskingInstruction>) {
+        validatedIndex(source, instructions)
+    }
+
+    /** Applies the same span and full-marker validation to request rendering and response masking. */
+    private fun validatedIndex(source: String, instructions: Collection<MaskingInstruction>): Utf8CharacterIndex {
+        val index = Utf8CharacterIndex(source)
+        instructions.forEach { instruction ->
+            index.validate(instruction)
+            validateMarker(instruction.marker)
+        }
+        return index
+    }
+
 }
 
 /** Validates the canonical syntax that keeps policy-selected replacements irreversible and safe. */

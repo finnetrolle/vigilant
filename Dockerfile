@@ -4,6 +4,7 @@ WORKDIR /workspace
 
 COPY gradlew build.gradle.kts settings.gradle.kts ./
 COPY gradle ./gradle
+COPY buildSrc ./buildSrc
 COPY src ./src
 
 RUN ./gradlew --no-daemon ociArtifact \

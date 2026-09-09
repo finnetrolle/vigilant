@@ -3,6 +3,7 @@ title Проверка запроса и retained response protocol gate
 autonumber
 
 actor "Клиент" as Client
+participant "MetricsService" as Metrics
 participant "TracingService" as Tracing
 participant "TrafficAdmissionService" as Admission
 participant "PiiShadowProxyService" as Proxy
@@ -15,6 +16,8 @@ participant "Trusted identity Bridge" as Bridge
 participant "BoundedRequestSource" as Source
 participant "ShadowInspectionWorkflow" as Workflow
 participant "ChatCompletionsRequestParser" as Parser
+participant "RequestRewritePlanner" as Rewriter
+participant "ReplayReadyRequest" as Ready
 participant "PolicyEngine" as Engine
 participant "Logback AsyncAppender\nneverBlock=true" as Audit
 participant "BypassProxyService" as Transport
@@ -26,9 +29,10 @@ participant "ResponseInspectionWorkflow" as ResponseWorkflow
 participant "JSON source-map rewriter" as ResponseRewriter
 participant "ReplayReadyResponse" as ResponseReplay
 
-Client -> Tracing : HTTP-запрос
-Tracing -> Admission : итоговый контекст сеанса и трассы
-Admission -> Proxy : допущенный запрос
+Client -> Admission : HTTP-запрос
+Admission -> Metrics : допущенный запрос
+Metrics -> Tracing : status/active metrics
+Tracing -> Proxy : итоговый контекст сеанса и трассы
 Proxy -> Proxy : проверить метод, путь и медиатип
 
 alt дескриптор не поддерживается
@@ -56,7 +60,7 @@ else дескриптор поддерживается
     note right of Cache
       Only final caller cancellation aborts Bridge.
       Close drops entries, in-flight state and hasher.
-    end
+    end note
   else Dummy или JWT
     Identity -> Identity : configured identity или\noffline RS256 + pinned JWK + claims
   end
@@ -77,16 +81,51 @@ else дескриптор поддерживается
       Engine --> Workflow : callback перед detector execution
       Workflow -> Audit : policy.analysis_started
       Workflow -> Engine : проверить все независимые fragments
-      Engine --> Workflow : terminal shadow outcome
-      Workflow -> Audit : policy.analysis_completed
+      Engine --> Workflow : complete decisions / technical failure
+      alt technical failure
+        Workflow -> Audit : completed ERROR без reaction
+        Workflow -> Source : закрыть owner и освободить quota
+        Workflow --> Proxy : Reject(Inspection)
+      else policy BLOCK или structural MASK
+        Workflow -> Audit : completed reaction=BLOCK
+        Workflow -> Source : закрыть owner и освободить quota
+        Workflow --> Proxy : Reject(Blocked)
+      else ALLOW или free-text MASK
+        alt MASK
+          Workflow -> Rewriter : validate raw tokens + canonical instructions
+          Rewriter --> Workflow : non-expanding compact patches или failure
+          opt валидация patches успешна
+            Workflow -> Ready : подготовить owner + patches
+            Ready --> Workflow : ready replay или failure
+          end
+        else ALLOW
+          Workflow -> Ready : подготовить original replay owner
+          Ready --> Workflow : ready replay или SafeSourceFailure
+        end
+        alt MASK: валидация или подготовка replay завершилась отказом
+          Workflow -> Audit : completed ERROR, INSPECTION_FAILED\nбез reaction
+          Workflow -> Source : закрыть owner и освободить quota
+          Workflow --> Proxy : Reject(Inspection)
+        else ALLOW: original replay недоступен
+          Workflow -> Audit : completed ERROR, исходный source code\nбез reaction
+          Workflow -> Source : закрыть owner и освободить quota
+          Workflow --> Proxy : Reject(Source)
+        else replay готов
+          Workflow -> Audit : completed reaction=ALLOW/MASK
+          Workflow --> Proxy : Forward(ready replay)
+        end
+      end
       note right of Audit
         Queue delivery и stdout write
         не ожидаются request path.
       end note
-      Workflow --> Proxy : ReplayReadyRequest
     end
-    Proxy -> Transport : одноразовая передача точного воспроизведения
-    Transport -> Upstream : исходные bytes и end-to-end headers
+    opt Reject
+      Proxy --> Client : stable HTTP error через rejectionResponse\nsourceError для Reject(Source)\n403 policy BLOCK; 503 inspection failure\nбез upstream
+    end
+    opt Forward и handoff claim принят до cancellation/shutdown
+    Proxy -> Transport : одноразовая передача original/patched replay
+    Transport -> Upstream : original/patched bytes и end-to-end headers
     Upstream --> Transport : status, headers и поток body
     Transport --> Proxy : streaming HttpResponse
     Proxy -> ResponseHandler : передать upstream response
@@ -123,6 +162,7 @@ else дескриптор поддерживается
       ResponseWorkflow -> Audit : RESPONSE analysis_completed
       ResponseReplay --> ResponseHandler : one-shot transport claim
       ResponseHandler --> Client : final status/headers/body\nпо client demand
+    end
     end
   end
 end

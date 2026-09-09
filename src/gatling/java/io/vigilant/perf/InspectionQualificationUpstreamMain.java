@@ -9,7 +9,8 @@ import java.util.concurrent.ConcurrentMap;
 
 /** Separate-process digest-checking upstream with payload-free request-count control evidence. */
 public final class InspectionQualificationUpstreamMain {
-    static final String RESPONSE_BODY = "qualification-ok";
+    /** Valid terminal Chat Completions response shared by current packaged smoke consumers. */
+    static final String RESPONSE_BODY = "{\"id\":\"chatcmpl-test\",\"object\":\"chat.completion\",\"model\":\"gpt-test\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"qualification-ok\"},\"finish_reason\":\"stop\"}]}";
     private static final String SESSION_HEADER = "x-session-id";
 
     /** Prevents construction of the process entry-point utility. */
@@ -43,7 +44,7 @@ public final class InspectionQualificationUpstreamMain {
                     if (!actualDigest.equals(expectedDigest)) {
                         return HttpResponse.of(HttpStatus.CONFLICT);
                     }
-                    return HttpResponse.of(HttpStatus.OK, MediaType.PLAIN_TEXT_UTF_8, RESPONSE_BODY);
+                    return HttpResponse.of(HttpStatus.OK, MediaType.JSON_UTF_8, RESPONSE_BODY);
                 })
             ))
             .build();

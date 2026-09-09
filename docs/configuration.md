@@ -188,18 +188,16 @@ container runtime и deployment.
 Минимальный снимок приведён в
 [politics.conf.example](../politics.conf.example). Полная строгая структура
 HOCON, сопоставление, одновременные переопределения и правила проверки описаны
-в [руководстве по политикам](policies.md). Для текущего этапа теневого режима
-он обязан содержать хотя бы одну действующую включённую глобальную политику
-`REQUEST`:
+в [руководстве по политикам](policies.md). Файл обязателен, но явный
+`policies = []` допустим. Disabled/unmatched policies не запускают detector;
+global coverage и implicit default отсутствуют.
 
-- `url=*`;
-- `model=*`;
-- анонимный субъект `*`;
-- детектор `fast-pii`;
-- значение `ALLOW` без преобразований для всех реакций.
-
-Пустой, отключённый, полностью переопределённый снимок или снимок с
-принудительными реакциями отклоняется до запуска сервера.
+REQUEST detected допускает ALLOW, ALLOW+MASK или BLOCK. Clean требует ALLOW,
+error требует BLOCK, оба без transformations, включая disabled/overridden
+policies. Прежний REQUEST error=ALLOW отклоняется с safe exit code `2`:
+обновите mounted files явно. Response semantics не меняются. Новых mandatory
+settings нет. Request MASK использует original source quota до terminal
+output callback; shortening исключает рост body из-за marker.
 
 ## Ошибки startup
 

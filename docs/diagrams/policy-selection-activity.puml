@@ -9,21 +9,24 @@ start
 :Однократно загрузить неизменяемый politics.conf;
 :Строго разобрать известные поля HOCON;
 :Проверить идентификаторы, детекторы, сроки, реакции и граф переопределений;
-if (Есть глобальное включённое покрытие REQUEST через fast-pii?) then (да)
-  if (Все реакции равны ALLOW и не содержат преобразований?) then (да)
-    :Сопоставить включённые политики по URL, модели, фазе и субъекту;
-    :Отсортировать совпавшие политики по идентификатору;
-    :Одновременно собрать явные переопределения;
-    :Удалить переопределённые совпадения;
-    :Устранить повторные запуски детекторов;
-    :Проверить независимые фрагменты со сроком каждой политики;
-    :Построить детерминированное объяснение и план реакций;
-    :Вернуть теневое решение ALLOW;
+if (REQUEST clean=ALLOW и error=BLOCK без transformations?) then (да)
+  :Сопоставить enabled policies по URL, model, phase и subject;
+  :Canonical order и simultaneous overrides;
+  if (Applied policies пусты?) then (да)
+    :Original replay без detector/audit;
   else (нет)
-    :Отклонить запуск с кодом 2;
+    :Один detector invocation на independent fragment;
+    :Все fragments и per-policy deadlines;
+    if (Technical failure?) then (да)
+      :503 до upstream;
+    elseif (Policy BLOCK или structural MASK?) then (да)
+      :403 до upstream;
+    else (нет)
+      :Validated non-expanding free-text MASK или original ALLOW;
+    endif
   endif
 else (нет)
-  :Отклонить запуск с кодом 2;
+  :Отклонить startup с кодом 2;
 endif
 stop
 @enduml

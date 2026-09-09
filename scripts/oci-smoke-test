@@ -42,9 +42,29 @@ else
     ./gradlew --no-daemon compileGatlingJava installDist
 fi
 smoke_require_available_non_ephemeral_port "$UPSTREAM_PORT" "Armeria smoke upstream"
-cp politics.conf.example "$TMP_DIR/politics.conf"
-chmod 0444 "$TMP_DIR/politics.conf"
-smoke_write_detected_request "$TMP_DIR/request.json" "oci-secret@example.com"
+# Each mounted snapshot and expected upstream representation is test-owned.
+python3 - "$TMP_DIR" <<'PYCASES'
+import pathlib
+import sys
+root = pathlib.Path(sys.argv[1])
+source = pathlib.Path("politics.conf.example").read_text()
+for case in ("ALLOW", "MASK", "BLOCK", "STRUCTURAL_BLOCK", "OLD_CONFIG"):
+    config = source
+    if case in ("MASK", "STRUCTURAL_BLOCK"):
+        config = config.replace('detected { disposition = "ALLOW", transformations = [] }',
+                                'detected { disposition = "ALLOW", transformations = ["MASK"] }')
+    elif case == "BLOCK":
+        config = config.replace('detected { disposition = "ALLOW"', 'detected { disposition = "BLOCK"')
+    elif case == "OLD_CONFIG":
+        config = config.replace('error { disposition = "BLOCK"', 'error { disposition = "ALLOW"')
+    (root / (case + ".conf")).write_text(config)
+    (root / (case + ".conf")).chmod(0o444)
+(root / "ALLOW.json").write_text('{ "model":"gpt-test", "messages":[{"role":"user","content":"contact oci-secret@example.com"}], "unknown":{"keep":true} }')
+(root / "MASK.json").write_text('{ "model":"gpt-test", "messages":[{"role":"user","content":"1.1.1.1"}], "unknown":{"keep":true} }')
+(root / "MASK-expected.json").write_text('{ "model":"gpt-test", "messages":[{"role":"user","content":"[IP_MA]"}], "unknown":{"keep":true} }')
+(root / "BLOCK.json").write_bytes((root / "ALLOW.json").read_bytes())
+(root / "STRUCTURAL_BLOCK.json").write_text('{"model":"gpt-test","messages":[{"role":"user","name":"oci-secret@example.com","content":""}]}')
+PYCASES
 
 docker build --tag "$IMAGE_TAG" .
 smoke_start_armeria_upstream "$PROJECT_DIR" "$UPSTREAM_PORT" "$TMP_DIR/upstream.log"
@@ -66,44 +86,86 @@ if docker image inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$I
 fi
 docker run --rm --entrypoint /bin/sh "$IMAGE_TAG" -c 'test ! -e /var/lib/vigilant/audit'
 
-CONTAINER_ID="$(
-    docker run --detach \
-        --name "$CONTAINER_NAME" \
-        --add-host host.docker.internal:host-gateway \
-        --env "VIGILANT_UPSTREAM_URL=http://host.docker.internal:$UPSTREAM_PORT" \
-        --env VIGILANT_ENVIRONMENT=test \
-        --env VIGILANT_IDENTITY_MODE=DUMMY \
-        --env VIGILANT_IDENTITY_DUMMY_USER=oci-user \
-        --env VIGILANT_OTLP_ENABLED=false \
-        --env VIGILANT_POLITICS_CONFIG=/etc/vigilant/politics.conf \
-        --mount "type=bind,src=$TMP_DIR/politics.conf,dst=/etc/vigilant/politics.conf,readonly" \
-        --publish 127.0.0.1::8080 \
-        "$IMAGE_TAG"
-)"
-GATEWAY_PORT="$(docker port "$CONTAINER_ID" 8080/tcp | sed -E 's/.*:([0-9]+)$/\1/' | head -n 1)"
+for CASE in ALLOW MASK BLOCK STRUCTURAL_BLOCK OLD_CONFIG; do
+    CONTAINER_ID="$(
+        docker run --detach \
+            --name "$CONTAINER_NAME-$CASE" \
+            --add-host host.docker.internal:host-gateway \
+            --env "VIGILANT_UPSTREAM_URL=http://host.docker.internal:$UPSTREAM_PORT" \
+            --env VIGILANT_ENVIRONMENT=test \
+            --env VIGILANT_IDENTITY_MODE=DUMMY \
+            --env VIGILANT_IDENTITY_DUMMY_USER=oci-user \
+            --env VIGILANT_OTLP_ENABLED=false \
+            --env VIGILANT_POLITICS_CONFIG=/etc/vigilant/politics.conf \
+            --mount "type=bind,src=$TMP_DIR/$CASE.conf,dst=/etc/vigilant/politics.conf,readonly" \
+            --publish 127.0.0.1::8080 \
+            "$IMAGE_TAG"
+    )"
+    if [[ "$CASE" == "OLD_CONFIG" ]]; then
+        # Bound the expected startup rejection without a new process launcher.
+        for _ in {1..80}; do
+            [[ "$(docker inspect --format '{{.State.Running}}' "$CONTAINER_ID")" == "false" ]] && break
+            sleep 0.25
+        done
+        [[ "$(docker inspect --format '{{.State.Running}}' "$CONTAINER_ID")" == "false" ]]
+        [[ "$(docker inspect --format '{{.State.ExitCode}}' "$CONTAINER_ID")" == "2" ]]
+        refresh_container_log
+        python3 - "$TMP_DIR/container.log" <<'PYREJECT'
+import pathlib
+import sys
+text = pathlib.Path(sys.argv[1]).read_text()
+assert "REQUEST reactions.error requires BLOCK without transformations" in text
+assert "/etc/vigilant/politics.conf" not in text
+PYREJECT
+    else
+        GATEWAY_PORT="$(docker port "$CONTAINER_ID" 8080/tcp | sed -E 's/.*:([0-9]+)$/\1/' | head -n 1)"
+        smoke_await_http "" "http://127.0.0.1:$GATEWAY_PORT/healthz" "" "OCI $CASE health"
+        smoke_await_http "" "http://127.0.0.1:$GATEWAY_PORT/readyz" "" "OCI $CASE readiness"
+        REACTION=ALLOW
+        TYPE=EMAIL_ADDRESS
+        SENTINEL=oci-secret@example.com
+        if [[ "$CASE" == "ALLOW" || "$CASE" == "MASK" ]]; then
+            EXPECTED="$TMP_DIR/$CASE.json"
+            if [[ "$CASE" == "MASK" ]]; then
+                EXPECTED="$TMP_DIR/MASK-expected.json"
+                REACTION=MASK
+                TYPE=IP_ADDRESS
+                SENTINEL=1.1.1.1
+            fi
+            smoke_proxy_exact_request "http://127.0.0.1:$GATEWAY_PORT" \
+                "$TMP_DIR/$CASE.json" "$TMP_DIR/response.json" \
+                "oci-dummy-token" "oci-$CASE" "OCI $CASE" "$EXPECTED"
+            EXPECTED_COUNT=1
+        else
+            REACTION=BLOCK
+            STATUS="$(curl --silent --show-error --connect-timeout "$SMOKE_CONNECT_TIMEOUT_SECONDS" \
+                --max-time "$SMOKE_REQUEST_TIMEOUT_SECONDS" --request POST \
+                --header 'content-type: application/json' --header 'authorization: Bearer oci-dummy-token' \
+                --header "x-session-id: oci-$CASE" --data-binary "@$TMP_DIR/$CASE.json" \
+                --dump-header "$TMP_DIR/response.headers" --output "$TMP_DIR/response.json" \
+                --write-out '%{http_code}' "http://127.0.0.1:$GATEWAY_PORT/v1/chat/completions")"
+            [[ "$STATUS" == "403" ]]
+            python3 - "$TMP_DIR" <<'PYBLOCK'
+import pathlib
+import sys
+root = pathlib.Path(sys.argv[1])
+assert (root / "response.json").read_text() == '{"error":{"message":"Request blocked: PII detected.","type":"policy_violation","code":"policy_blocked"}}'
+assert "retry-after:" not in (root / "response.headers").read_text().lower()
+PYBLOCK
+            EXPECTED_COUNT=0
+        fi
+        ACTUAL_COUNT="$(curl --fail --silent --show-error --max-time "$SMOKE_REQUEST_TIMEOUT_SECONDS" \
+            "http://127.0.0.1:$UPSTREAM_PORT/qualification/count/oci-$CASE")"
+        [[ "$ACTUAL_COUNT" == "$EXPECTED_COUNT" ]]
+        smoke_await_stdout_audit "$TMP_DIR/container.log" "$SENTINEL" "OCI $CASE" \
+            refresh_container_log "$REACTION" "$TYPE"
+        docker stop --timeout 35 "$CONTAINER_ID" >/dev/null
+        STOP_EXIT_CODE="$(docker inspect --format '{{.State.ExitCode}}' "$CONTAINER_ID")"
+        [[ "$STOP_EXIT_CODE" == "0" || "$STOP_EXIT_CODE" == "143" ]]
+    fi
+    docker rm "$CONTAINER_ID" >/dev/null
+    CONTAINER_ID=""
+    echo "OCI $CASE passed"
+done
 
-smoke_await_http "" "http://127.0.0.1:$GATEWAY_PORT/healthz" "" "OCI gateway health"
-smoke_await_http "" "http://127.0.0.1:$GATEWAY_PORT/readyz" "" "OCI gateway readiness"
-smoke_proxy_exact_request \
-    "http://127.0.0.1:$GATEWAY_PORT" \
-    "$TMP_DIR/request.json" \
-    "$TMP_DIR/response.json" \
-    "oci-dummy-token" \
-    "oci-smoke" \
-    "proxied OCI"
-smoke_await_stdout_audit \
-    "$TMP_DIR/container.log" \
-    "oci-secret@example.com" \
-    "OCI gateway" \
-    refresh_container_log
-
-docker stop --timeout 35 "$CONTAINER_ID" >/dev/null
-STOP_EXIT_CODE="$(docker inspect --format '{{.State.ExitCode}}' "$CONTAINER_ID")"
-if [[ "$STOP_EXIT_CODE" != "0" && "$STOP_EXIT_CODE" != "143" ]]; then
-    echo "gateway stopped with unexpected exit code $STOP_EXIT_CODE" >&2
-    exit 1
-fi
-docker rm "$CONTAINER_ID" >/dev/null
-CONTAINER_ID=""
-
-echo "OCI smoke test passed: stateless startup, readiness, exact proxy handoff, stdout audit, and shutdown verified"
+echo "OCI smoke test passed: configured ALLOW, shortened MASK, policy BLOCK, structural BLOCK, old-config rejection, stateless startup and shutdown"

@@ -4,7 +4,7 @@
 **Epic:** [EPIC-06](../../epics/epic_06_llm_message_parsing.md)  
 **Ветка:** OpenAI Chat Completions > JSON request  
 **Зависит от:** [VIG-06-01](issue_06_01_protocol_contract.md)  
-**Блокирует:** [VIG-03-07](../epic_03/issue_03_07_anonymous_request_context.md), PII shadow request tracer bullet  
+**Блокирует:** [VIG-03-07](../epic_03/issue_03_07_anonymous_request_context.md), PII shadow request tracer bullet, [VIG-34](../issue_34_request_pii_enforcement.md)
 **Оценка:** 3-5 инженерных дней  
 **Уверенность:** Medium
 

@@ -70,14 +70,15 @@ Terminal event дополнительно
 содержит `outcome=CLEAN|DETECTED|INSPECTION_GAP|ERROR`, `coverage`,
 `fragments.inspected`, `findings.total`, canonical `findings.by_type` и
 `findings.by_evidence_strength`, а также non-negative `analysis.duration_ms`.
-Successful request shadow analysis содержит `reaction=ALLOW`; ordinary и SSE
-response paths публикуют final `reaction=ALLOW|MASK|BLOCK`. ERROR не содержит reaction и
+REQUEST и ordinary/SSE RESPONSE публикуют фактическую `reaction=ALLOW|MASK|BLOCK`. ERROR не содержит reaction и
 публикует только stable `error.code`. Response outcome сохраняет precedence
 `DETECTED` > `INSPECTION_GAP` > `CLEAN` независимо от partial coverage.
 
 Unsupported/malformed request или response, identity/context/source failure, empty policy
 selection и cancellation до detector execution не публикуют пару. Cancellation
-после start best-effort публикует terminal ERROR. Ни один event не содержит
+во время analysis best-effort публикует terminal ERROR с уже завершёнными
+fragment counts и known parser coverage. Cancellation после validated ready
+completion не создаёт вторую completion attempt. Ни один event не содержит
 payload, PII values/spans, path/query, headers, credentials, identity,
 user/groups, session, raw exception, generated event ID или raw inbound
 propagation values. Policy/detector references остаются stdout-only.
@@ -144,12 +145,12 @@ upstream.
 Effective session ID и SERVER `traceparent` возвращаются клиенту в тех же
 настроенных headers. Upstream получает effective session ID и `traceparent`
 CLIENT span также под тем же настроенным именем. Валидный `tracestate`
-сохраняется. Поэтому shadow proxy не меняет формат tracing контракта, но
+сохраняется. Request enforcement не меняет формат tracing контракта и
 корректно обновляет span ID на каждом hop.
 
 ### Span model
 
-Один поддержанный запрос прокси создаёт SERVER span и три непосредственных
+Успешный ALLOW/MASK exchange создаёт SERVER span и три непосредственных
 дочерних span: INTERNAL `vigilant.request.inspect`, HTTP CLIENT span вышестоящего
 запроса и INTERNAL `vigilant.response.inspect` после retained response ingest.
 В External mode создатель cache miss дополнительно владеет дочерним CLIENT span
@@ -162,7 +163,7 @@ Bridge spans или links. Shared span сохраняет parent инициат�
 
 Оба INTERNAL span и upstream CLIENT являются прямыми children SERVER span. External
 identity CLIENT является child request inspection span. Request inspection
-завершается после принятия решения и создания upstream response exchange;
+завершается на terminal request workflow;
 CLIENT span живёт до завершения upstream exchange, response inspection span — до final
 response outcome. Основные SERVER, request/response INTERNAL и upstream CLIENT
 spans одного HTTP request несут его trace ID и attribute `session.id`; shared
@@ -185,6 +186,9 @@ Request-scoped events получают в MDC:
 - `session_id_generated`, `trace_context_generated` и
   `trace_context_replaced`.
 
+Audit MDC исключает session и raw propagation, сохраняя standard trace/span/parent
+identifiers. Обычные operational logs сохраняют разрешённые correlation values
+выше; эти raw header strings не являются новыми audit fields или metric labels.
 Для audit event current span равен INTERNAL inspection span, для upstream
 failure event он равен CLIENT span, для request completion event он равен
 SERVER span. Другие HTTP headers в MDC не копируются.
@@ -208,6 +212,13 @@ Gateway создаёт следующие OpenTelemetry instruments:
 | `vigilant.identity.external.cache.requests` | counter | `{request}` | `identity.mode=EXTERNAL`, `cache.result=hit\|miss` |
 | `vigilant.identity.external.cache.coalesced` | counter | `{request}` | `identity.mode=EXTERNAL` |
 | `vigilant.identity.external.cache.removals` | counter | `{entry}` | `identity.mode=EXTERNAL`, `cache.removal.reason=expired\|size` |
+
+Request policy/structural BLOCK учитывается как 4xx, technical refusal как 5xx.
+Оба не создают upstream CLIENT span и measurement в `vigilant.proxy.upstream.duration`.
+ALLOW/MASK с upstream 200 дают 2xx и один CLIENT span. Active-request gauge
+возвращается к baseline после owning terminal callback, включая cancellation.
+Новых policy labels или instruments нет; technical request inspection span
+имеет ERROR без raw exception event, policy BLOCK не записывается как exception.
 
 Каждый lookup открытого cache считает ровно один hit/miss. Join считается
 miss и coalesced: три callers cold key дают miss=3, coalesced=2, один Bridge.

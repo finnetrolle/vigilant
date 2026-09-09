@@ -1,0 +1,272 @@
+@startuml
+!pragma layout smetana
+title Основные классы исполняемой системы Vigilant
+
+top to bottom direction
+skinparam linetype ortho
+skinparam packageStyle rectangle
+skinparam classAttributeIconSize 0
+skinparam shadowing false
+skinparam ArrowColor #52606d
+skinparam ClassBorderColor #52606d
+skinparam ClassBackgroundColor #f8fafc
+skinparam InterfaceBackgroundColor #fff7ed
+skinparam PackageBorderColor #94a3b8
+skinparam PackageBackgroundColor #ffffff
+hide empty fields
+hide empty methods
+
+package "Gateway и orchestration\nio.vigilant.gateway.*" as Gateway {
+  interface AppComponent <<Metro DependencyGraph>>
+
+  class TrafficAdmissionService <<HttpService>> {
+    +serve(ctx, request): HttpResponse
+  }
+
+  class MetricsService <<HttpService>> {
+    +serve(ctx, request): HttpResponse
+  }
+
+  class TracingService <<HttpService>> {
+    +serve(ctx, request): HttpResponse
+  }
+
+  class PiiShadowProxyService <<HttpService>> {
+    +serve(ctx, request): HttpResponse
+  }
+
+  class ShadowInspectionWorkflow {
+    +execute(owner, request, identity, ctx, span): ShadowInspectionOutcome
+  }
+
+  class BypassProxyService <<HttpService>> {
+    +serve(ctx, request): HttpResponse
+    ~exchange(ctx, request): HttpResponse
+  }
+
+  class RetainedResponseHandler {
+    +retain(ctx, upstreamResponse): HttpResponse
+  }
+
+  class ResponseInspectionWorkflow {
+    +execute(source, descriptor, headers, trailers, ctx, span): ResponseInspectionOutcome
+  }
+
+  class ReplayReadyRequest <<AutoCloseable>> {
+    +transferTo(forward): T
+    +close()
+  }
+
+  class ReplayReadyResponse <<AutoCloseable>> {
+    +transferTo(forward): T
+    +close()
+  }
+
+  class OutboundClientResources <<AutoCloseable>> {
+    +externalIdentityLookup: ExternalIdentityLookup
+    +close()
+  }
+
+  class InspectionResources <<AutoCloseable>> {
+    +requestSourceQuota: RequestSourceQuota
+    +requestExecutor: ExecutorService
+    +fastPiiDetector: Detector
+    +close()
+  }
+
+  class ShadowAuditLogger
+}
+
+package "Identity\nio.vigilant.gateway.identity" as Identity {
+  interface BearerIdentityExtractor <<fun interface>> {
+    +extract(headers): CompletableFuture
+  }
+
+  class DummyIdentityExtractor
+  class OfflineJwtIdentityExtractor
+  class ExternalIdentityExtractor
+
+  interface ExternalIdentityLookup <<fun interface>> {
+    +lookup(token): CompletableFuture
+  }
+
+  class CachingExternalIdentityLookup <<AutoCloseable>> {
+    +lookup(token): CompletableFuture
+    +close()
+  }
+
+  class ExternalIdentityCacheKeyHasher {
+    +keyFor(token): String
+  }
+
+  class BridgeIdentityClient <<AutoCloseable>> {
+    +lookup(token): CompletableFuture
+    +close()
+  }
+}
+
+package "Источники и ownership\nio.vigilant.source" as Sources {
+  class RequestSourcePatch <<immutable>>
+
+  class RequestSourceQuota {
+    +open(contentLength): RequestSourceOpenResult
+  }
+
+  class BoundedRequestSourceOwner <<AutoCloseable>> {
+    +ingest(publisher): CompletableFuture
+    +acquireView(): RequestSourceViewResult
+    +replay(): RequestSourceReplayResult
+    +preparePatchedReplay(patches): RequestSourceReplayResult
+    +close()
+  }
+
+  class RetainedResponseSource <<AutoCloseable>> {
+    +ingest(body): CompletableFuture
+    +acquireView(): RetainedResponseView
+    +replay(): ResponseSourceReplayResult
+    +close()
+  }
+}
+
+package "Policy engine\nio.vigilant.policy.*" as Policy {
+  class PolicyEngine {
+    +evaluate(context, payload, beforeDetectorExecution): PolicyDecision
+  }
+
+  interface PolicyProvider <<fun interface>> {
+    +getPolicies(): List<Policy>
+  }
+
+  class DummyPolicyProvider
+  class PolicySelector {
+    +select(policies, context): PolicySelection
+  }
+
+  class DetectorExecutionCoordinator {
+    +execute(appliedPolicies, payload): DetectorExecutionResults
+  }
+
+  class DetectorExecutor {
+    +execute(detectorId, payload): DetectorResult
+  }
+
+  class RequestMaskingFormatter
+
+  class ReactionAggregator {
+    +aggregate(policyResults): ReactionPlan
+  }
+
+  interface Detector <<fun interface>> {
+    +detect(payload): DetectionResult
+  }
+
+  class FastPiiPolicyAdapter
+  class PolicyContext <<immutable>>
+  class PolicyDecision <<immutable>>
+}
+
+package "OpenAI protocol\nio.vigilant.protocol.openai" as Protocol {
+  class PiiShadowProtocol {
+    +isSupported(request): Boolean
+    +parse(owner): NormalizedChatCompletionsRequest
+    +assembleContext(request, normalized, identity): PolicyContext
+  }
+
+  object ChatCompletionsRequestParser
+  object ChatCompletionsResponseParser
+  class RequestRewritePlanner
+  class RequestFragmentSource <<immutable>>
+  class JsonResponseRewriter
+  class SseResponseRewriter
+}
+
+package "PII и windowing\nio.vigilant.detectors.pii / windowing" as Pii {
+  class WindowedFastPiiExecutor {
+    +inspect(fragment, enabledTypes): Future
+  }
+
+  interface PiiDetector {
+    +detect(payload, stopOnFirst, enabledTypes): List<PiiFinding>
+  }
+
+  class FastPiiDetector
+}
+
+class WebClient <<Armeria external>>
+
+TrafficAdmissionService --> MetricsService : delegate
+MetricsService --> TracingService : delegate
+TracingService --> PiiShadowProxyService : delegate
+
+AppComponent ..> TrafficAdmissionService : assembles
+AppComponent ..> PiiShadowProxyService : assembles
+AppComponent ..> PolicyEngine : assembles
+AppComponent ..> InspectionResources : owns
+
+PiiShadowProxyService --> BearerIdentityExtractor : identity до body demand
+PiiShadowProxyService --> RequestSourceQuota : opens owner
+PiiShadowProxyService --> ShadowInspectionWorkflow : request inspection
+PiiShadowProxyService --> BypassProxyService : original/patched request handoff
+PiiShadowProxyService --> RetainedResponseHandler : retained response
+
+ShadowInspectionWorkflow --> PiiShadowProtocol : parse + context
+ShadowInspectionWorkflow --> PolicyEngine : evaluate REQUEST
+ShadowInspectionWorkflow --> ShadowAuditLogger : best-effort audit
+ShadowInspectionWorkflow --> RequestRewritePlanner : selected free-text MASK
+RequestRewritePlanner --> RequestMaskingFormatter : validate + shorten
+RequestRewritePlanner ..> RequestSourcePatch : prepares
+ChatCompletionsRequestParser ..> RequestFragmentSource : field class + raw token
+BoundedRequestSourceOwner *-- RequestSourcePatch : retained plan until terminal callback
+ShadowInspectionWorkflow ..> ReplayReadyRequest : creates validated Forward
+
+BypassProxyService --> WebClient : upstream exchange
+RetainedResponseHandler *-- RetainedResponseSource : creates and owns
+RetainedResponseHandler --> ResponseInspectionWorkflow : complete source
+ResponseInspectionWorkflow --> PolicyEngine : evaluate RESPONSE
+ResponseInspectionWorkflow --> ChatCompletionsResponseParser : parse + source map
+ResponseInspectionWorkflow --> JsonResponseRewriter : MASK JSON
+ResponseInspectionWorkflow --> SseResponseRewriter : MASK SSE
+ResponseInspectionWorkflow --> ShadowAuditLogger : best-effort audit
+ResponseInspectionWorkflow ..> ReplayReadyResponse : creates on Forward
+
+RequestSourceQuota *-- BoundedRequestSourceOwner : opens
+ReplayReadyRequest o-- BoundedRequestSourceOwner : owns until handoff
+ReplayReadyResponse o-- RetainedResponseSource : owns until terminal replay
+
+DummyIdentityExtractor ..|> BearerIdentityExtractor
+OfflineJwtIdentityExtractor ..|> BearerIdentityExtractor
+ExternalIdentityExtractor ..|> BearerIdentityExtractor
+ExternalIdentityExtractor --> ExternalIdentityLookup : delegates
+CachingExternalIdentityLookup ..|> ExternalIdentityLookup
+CachingExternalIdentityLookup --> ExternalIdentityLookup : delegate, cold miss only
+CachingExternalIdentityLookup *-- ExternalIdentityCacheKeyHasher : process-local secret
+OutboundClientResources *-- CachingExternalIdentityLookup : EXTERNAL only; close first
+OutboundClientResources *-- BridgeIdentityClient : close second
+BridgeIdentityClient ..|> ExternalIdentityLookup
+
+PolicyEngine --> PolicyProvider : snapshot
+PolicyEngine --> PolicySelector : select
+PolicyEngine --> DetectorExecutionCoordinator : execute
+PolicyEngine --> ReactionAggregator : aggregate
+PolicyEngine ..> PolicyContext : input
+PolicyEngine ..> PolicyDecision : output
+DummyPolicyProvider ..|> PolicyProvider
+DetectorExecutionCoordinator --> DetectorExecutor
+DetectorExecutor --> Detector : registry
+
+FastPiiPolicyAdapter ..|> Detector
+FastPiiPolicyAdapter --> WindowedFastPiiExecutor
+WindowedFastPiiExecutor --> PiiDetector
+FastPiiDetector ..|> PiiDetector
+PiiShadowProtocol --> ChatCompletionsRequestParser
+
+InspectionResources *-- RequestSourceQuota
+InspectionResources *-- FastPiiPolicyAdapter
+
+note bottom
+Диаграмма показывает основные production-классы и их устойчивые связи.
+DTO, sealed result-типы, private lifecycle helpers и recognizer-реализации опущены,
+чтобы сохранить читаемость и не подменять обзор автоматически сгенерированным графом.
+end note
+
+@enduml

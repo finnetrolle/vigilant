@@ -209,12 +209,20 @@ internal fun BufferedOutputStream.writeUtf8Http1Chunk(content: String) {
  *
  * @param diagnosticName safe suffix used to identify fixture failures.
  * @param writeApplicationResponse callback that writes the complete application response.
+ * @param observeApplicationRequest optional bounded body observation before the response callback.
+ * @param receiveBufferBytes optional socket receive bound for deterministic held-upload tests.
  */
 internal class RawHttp1TestUpstream(
     diagnosticName: String,
     private val writeApplicationResponse: (BufferedOutputStream) -> Unit,
+    private val observeApplicationRequest: ((String, BufferedInputStream) -> Unit)? = null,
+    private val receiveBufferBytes: Int? = null,
 ) : AutoCloseable {
     private val endpoint = BoundRawTestEndpoint("raw-http1-$diagnosticName", ::handleConnection)
+
+    /** Preserves the established trailing response callback for existing raw response fixtures. */
+    constructor(diagnosticName: String, writeApplicationResponse: (BufferedOutputStream) -> Unit) :
+        this(diagnosticName, writeApplicationResponse, null, null)
 
     /** Creates a raw upstream that writes one complete ASCII application response. */
     constructor(diagnosticName: String, applicationResponse: String) :
@@ -232,6 +240,7 @@ internal class RawHttp1TestUpstream(
     /** Handles an HTTP/1.1 probe followed by zero or more application requests. */
     private fun handleConnection(socket: Socket, isClosed: () -> Boolean) {
         socket.tcpNoDelay = true
+        receiveBufferBytes?.let { socket.receiveBufferSize = it }
         val input = BufferedInputStream(socket.getInputStream())
         val output = BufferedOutputStream(socket.getOutputStream())
         var continueReading = true
@@ -245,6 +254,7 @@ internal class RawHttp1TestUpstream(
                     require(requestLine.endsWith(" HTTP/1.1")) {
                         "unexpected request-line shape"
                     }
+                    observeApplicationRequest?.invoke(requestHead, input)
                     writeApplicationResponse(output)
                     continueReading = false
                 }

@@ -18,25 +18,25 @@ out-of-scope requirement to the actual runtime status and owning documents.
 
 The project has moved beyond bypass-only v0 and completed its first production
 guardrail increment: bounded request-side PII inspection for OpenAI Chat
-Completions in shadow mode. The v0 proxy remains the transport foundation, but
+Completions with configured ALLOW, MASK and BLOCK. The v0 proxy remains the transport foundation, but
 the production request path now retains a bounded complete request source,
 derives a lossless normalized inspection view, evaluates the immutable startup
-policy snapshot with `fast-pii`, emits a safe aggregate decision, and replays
-the original body upstream byte-for-byte. The low-level bypass transport keeps
+policy snapshot with `fast-pii`, emits a safe aggregate decision, and either replays original bytes, applies validated
+non-expanding free-text source patches, or rejects before upstream handoff. The low-level bypass transport keeps
 responses streaming, while the guardrail-enabled Chat Completions path retains
 the complete upstream response in memory, validates its protocol terminal
 state, and only then either replays the exact original response, replays an
 exact source-patched masked representation, or rejects without upstream
 disclosure.
 
-The current startup contract keeps request policies shadow-only: every request
-reaction is `ALLOW` without transformations. Ordinary JSON and SSE responses
-are retained through protocol validation and final policy evaluation, publish a
-safe response audit pair, and then apply `ALLOW`, `MASK`, or `BLOCK`. `REMOVE`
-is not supported. Do not add request enforcement, `REMOVE`, new protocol
-routes, new identity modes or authentication protocols, disk spill, plugin workers,
-or other runtime behavior unless a dedicated implementation-ready issue
-explicitly requires it.
+The startup policy file remains mandatory, but an explicit empty snapshot is
+valid and no global coverage policy is required. REQUEST detected reactions
+allow ALLOW, MASK or BLOCK; clean requires ALLOW and error requires BLOCK,
+both without transformations, including disabled policies. A structural MASK
+blocks the whole request. Technical failure or deadline takes priority over
+policy BLOCK and returns safe 503. Ordinary JSON and SSE response semantics
+remain unchanged. REMOVE, new routes, identity modes, disk spill and plugin
+workers require a dedicated implementation-ready issue.
 
 ## Commands
 
@@ -133,13 +133,13 @@ Key gateway and policy files under `src/main/kotlin/io/vigilant/`:
 - `gateway/proxy/PiiShadowProxyService.kt` - thin production HTTP inspection boundary. It validates the supported Chat Completions descriptor, ingests into a quota-controlled request source, schedules complete-source workflow execution, maps typed rejects to stable responses, and performs the one-shot handoff to `BypassProxyService` and `RetainedResponseHandler` after best-effort terminal request audit submission without durable reservation or acknowledgement.
 - `gateway/proxy/RetainedResponseHandler.kt` / `source/RetainedResponseSource.kt` - response-retention boundary for the guardrail route. It holds upstream status, headers, trailers and body until complete protocol validation and final response-policy enforcement, then transfers one exact or masked replay or returns a stable VIG-29 error; the source owns in-memory segments and clears them on every terminal path without response quota or disk spill.
 - `gateway/proxy/ResponseInspectionWorkflow.kt` / `protocol/openai/JsonResponseRewriter.kt` / `protocol/openai/SseResponseRewriter.kt` - shared ordinary JSON/SSE response-policy orchestration and transport-specific exact-source rewriting. The response parser creates immutable source coordinates in its single parse pass; SSE spans may cross delta events without reserializing event objects.
-- `gateway/proxy/ShadowInspectionWorkflow.kt` / `gateway/proxy/ReplayReadyRequest.kt` - gateway-specific complete-source application workflow and one-shot transport ownership boundary. The workflow parses one normalized view, assembles context, evaluates fragments, publishes one safe started/completed pair through the existing non-blocking logger, and returns typed `Forward` or `Reject`. `ReplayReadyRequest` retains owner responsibility until transport accepts exact replay, then terminal replay owns cleanup.
+- `gateway/proxy/ShadowInspectionWorkflow.kt` / `gateway/proxy/ReplayReadyRequest.kt` - gateway-specific complete-source application workflow and one-shot transport ownership boundary. The workflow parses one normalized view, assembles context, evaluates fragments, publishes one safe started/completed pair through the existing non-blocking logger, and returns typed `Forward` or `Reject`. `ReplayReadyRequest` retains owner responsibility until transport accepts original or patched replay, then terminal replay owns cleanup.
 - `gateway/proxy/ShadowAuditLogger.kt` - safe request and response analysis lifecycle events published best-effort through the existing non-blocking Logback stdout pipeline. The application owns no audit persistence or delivery subsystem.
 - `gateway/identity/DummyIdentityExtractor.kt` / `gateway/identity/OfflineJwtIdentityExtractor.kt` / `gateway/identity/ExternalIdentityExtractor.kt` / `gateway/identity/BridgeIdentityClient.kt` / `context/PolicyContextHandoff.kt` - common async single-Bearer boundary with startup-selected Dummy, offline RS256 JWT, or trusted Bridge External lookup. External uses `CachingExternalIdentityLookup` with Caffeine write TTL/maximumSize and a separate process-local HMAC `ExternalIdentityCacheKeyHasher`. Completed hits bypass Bridge; bounded shared misses preserve its exact one-attempt HTTP, original whole-exchange timeout, immediate admission, safe metrics and initiating CLIENT span. Each caller has independent cancellation; the last cancellation aborts shared work. Identity extraction and each continuation run on the existing blocking-safe request executor under the caller context. Raw tokens are never retained, and accepted Authorization is preserved upstream.
 - `gateway/proxy/OutboundClientResources.kt` - application owner of the sole Armeria `ClientFactory`, the upstream client and, only in External mode, a distinct Bridge client, cache decorator and hasher. Shutdown attempts decorator, Bridge and shared factory cleanup in that order, preserving failures through `runAllCleanupActions`.
-- `source/BoundedRequestSource.kt` - process-wide owner/byte/segment quota plus one-request lifecycle. It receives the request with backpressure, exposes one sequential parser view and one demand-driven exact replay lease, and releases every reservation on completion or cancellation.
+- `source/BoundedRequestSource.kt` - process-wide owner/byte/segment quota plus one-request lifecycle. It receives the request with backpressure, exposes one sequential parser view and one demand-driven original or patched replay lease, and releases every reservation on completion or cancellation.
 - `protocol/openai/ChatCompletionsRequestParser.kt` - schema-tolerant parser for model-visible Chat Completions content. It preserves unknown fields by never rebuilding the original body, records recognized non-text inspection gaps, and fails closed for malformed or ambiguous content-bearing shapes.
-- `policy/engine/PolicyEngine.kt` / `policy/selection/PolicySelector.kt` / `policy/execution/DetectorExecutionCoordinator.kt` - deterministic policy matching, simultaneous overrides, deduplicated detector execution, per-policy deadlines, fail-fast blocking semantics in the domain layer, and complete decision explanations. Startup validation keeps request reactions shadow-only while allowing response `ALLOW`, `MASK`, and `BLOCK`.
+- `policy/engine/PolicyEngine.kt` / `policy/selection/PolicySelector.kt` / `policy/execution/DetectorExecutionCoordinator.kt` - deterministic policy matching, simultaneous overrides, deduplicated detector execution, per-policy deadlines, fail-fast blocking semantics in the domain layer, and complete decision explanations. Executable REQUEST validation requires clean ALLOW/error BLOCK and accepts detected ALLOW/MASK/BLOCK; response validation remains unchanged.
 - `detectors/pii/fast/FastPiiDetector.kt` / `windowing/WindowedInspectionExecutor.kt` / `windowing/WindowedFastPiiExecutor.kt` - built-in deterministic detector, PII-free UTF-8-safe generic windowing core, and the thin Fast PII contract adapter. CPU work runs on the bounded pool owned by `InspectionResources`.
 - `gateway/proxy/BypassProxyService.kt` - transport stage after inspection. Rewrites request headers (upstream scheme/authority/path and hop-by-hop stripping), strips hop-by-hop response headers, preserves exact request replay and streaming responses, and maps upstream failures to stable proxy errors.
 - `gateway/config/AppConfig.kt` - config loading via Hoplite: optional HOCON file (`VIGILANT_CONFIG`, else `./vigilant.conf`, else `/etc/vigilant/vigilant.conf`) with `VIGILANT_*` env overrides on top (env > file > defaults), then strict post-decode validation. Unit-tested directly without a running server.
@@ -327,9 +327,9 @@ For guardrail-enabled work after bypass-only v0, the OpenAI-compatible protocol 
 - Do not silently coerce non-conformant request shapes. Use an explicit, versioned compatibility adapter when Vigilant intentionally accepts a format that the selected upstream does not accept directly.
 - Forward only end-to-end headers. Vigilant remains responsible for upstream authentication and for rewriting `Host`, `Content-Length`, and hop-by-hop headers.
 
-This principle is implemented by the current request-side shadow inspection
+This principle is implemented by the current request-side enforcement
 path. Keep the normalized inspection view separate from the quota-controlled
-original source, and always replay the original bytes for an allowed request.
+original source, and replay original bytes for ALLOW and validated exact source patches for MASK.
 
 ## Constraints to preserve when editing
 

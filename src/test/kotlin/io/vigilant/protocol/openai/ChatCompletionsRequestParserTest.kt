@@ -12,6 +12,69 @@ import kotlin.test.assertTrue
 /** Public conformance tests for the pinned Chat Completions JSON request parser. */
 @Suppress("LargeClass", "MaxLineLength")
 class ChatCompletionsRequestParserTest {
+    /** Parser-owned classification distinguishes structural names from free text with the same semantic kinds. */
+    @Test
+    fun `request classification binds free text raw tokens and structural schema keys`() {
+        val body = """{"model":"m","messages":[{"role":"user","name":"identity","content":[{"type":"file","file":{"file_id":"opaque","filename":"brief"}}]}],"response_format":{"type":"json_schema","json_schema":{"name":"schema","schema":{"properties":{"description":{"const":"constraint","description":"annotation"}}}}}}"""
+        val parsed = assertIs<ChatCompletionsParseResult.Success>(ChatCompletionsRequestParser.parse(
+            CompleteByteSource.copyOf(body.toByteArray()), OpenAiOperationDescriptor.CHAT_COMPLETIONS_REQUEST,
+        )).request
+        assertEquals(listOf("identity", "brief", "schema", "description", "constraint", "annotation"), parsed.fragments.map { it.text })
+        assertEquals(listOf(RequestFieldClass.STRUCTURAL, RequestFieldClass.FREE_TEXT, RequestFieldClass.STRUCTURAL,
+            RequestFieldClass.STRUCTURAL, RequestFieldClass.STRUCTURAL, RequestFieldClass.FREE_TEXT), parsed.sources.map { it.fieldClass })
+        assertEquals(listOf(0, 1, 2, 3, 4, 5), parsed.sources.map { it.fragmentOrdinal })
+        assertEquals(body.indexOf("\"brief\"").toLong(), parsed.sources[1].rawTokenStart)
+        assertEquals(body.indexOf("\"annotation\"").toLong(), parsed.sources[5].rawTokenStart)
+        assertEquals(null, parsed.sources[3].rawTokenStart)
+    }
+
+    /** Test-owned named field fixtures retain exact classes and locators on the public parse result. */
+    @Test
+    fun `complete named field classification parser matrix`() {
+        RequestEnforcementFieldCases.all().forEach { case ->
+            val request = assertIs<ChatCompletionsParseResult.Success>(ChatCompletionsRequestParser.parse(
+                CompleteByteSource.copyOf(case.body.toByteArray()), OpenAiOperationDescriptor.CHAT_COMPLETIONS_REQUEST,
+            ), case.name).request
+            assertEquals(case.fragments, request.fragments.size, case.name)
+            val source = request.sources.single { it.locator.value == case.locator }
+            assertEquals(if (case.structural) RequestFieldClass.STRUCTURAL else RequestFieldClass.FREE_TEXT, source.fieldClass, case.name)
+            assertEquals(case.structural, source.rawTokenStart == null, case.name)
+        }
+    }
+
+    /** Every recognized schema container preserves structural constraints and free-text annotations. */
+    @Test
+    fun `schema container classification contrasts preserve pinned vocabulary`() {
+        val node = """{"const":"constraint","description":"annotation"}"""
+        val schemas = linkedMapOf(
+            "properties" to """{"properties":{"key":$node}}""",
+            "patternProperties" to """{"patternProperties":{"key":$node}}""",
+            "dependentSchemas" to """{"dependentSchemas":{"key":$node}}""",
+            "defs" to """{"${'$'}defs":{"key":$node}}""",
+            "definitions" to """{"definitions":{"key":$node}}""",
+            "dependencies" to """{"dependencies":{"key":$node}}""",
+        )
+        listOf("items", "contains", "additionalProperties", "not", "if", "then", "else", "propertyNames")
+            .forEach { schemas[it] = """{"$it":$node}""" }
+        listOf("prefixItems", "allOf", "anyOf", "oneOf")
+            .forEach { schemas[it] = """{"$it":[$node]}""" }
+        schemas.forEach { (container, schema) ->
+            listOf(
+                """"tools":[{"type":"function","function":{"name":"tool","parameters":$schema}}]""",
+                """"functions":[{"name":"tool","parameters":$schema}]""",
+                """"response_format":{"type":"json_schema","json_schema":{"name":"schema","schema":$schema}}""",
+            ).forEach { root ->
+            val body = """{"model":"m","messages":[{"role":"user","content":""}],$root}"""
+            val request = assertIs<ChatCompletionsParseResult.Success>(ChatCompletionsRequestParser.parse(
+                CompleteByteSource.copyOf(body.toByteArray()), OpenAiOperationDescriptor.CHAT_COMPLETIONS_REQUEST,
+            ), container).request
+            val classes = request.fragments.zip(request.sources).filter { (fragment, _) -> fragment.text in setOf("constraint", "annotation") }
+                .map { (_, source) -> source.fieldClass }
+            assertEquals(listOf(RequestFieldClass.STRUCTURAL, RequestFieldClass.FREE_TEXT), classes, "$container $root")
+            }
+        }
+    }
+
     /** A text request produces exact attributes and ordered decoded fragments without metadata leakage. */
     @Test
     fun `text request produces normalized model and ordered semantic fragments`() {

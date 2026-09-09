@@ -1,6 +1,8 @@
 package io.vigilant.gateway.proxy
 
 import io.vigilant.source.RequestSourceQuota
+import io.vigilant.source.RequestSourceLimits
+import io.vigilant.source.RequestSourcePatch
 import io.vigilant.source.RequestSourceState
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
@@ -16,7 +18,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
-/** Ownership-contract tests for one-shot exact request replay transfer. */
+/** Ownership-contract tests for one-shot original and patched request replay transfer. */
 class ReplayReadyRequestTest {
     /** Successful transfer preserves exact bytes and releases quota only on replay completion. */
     @Test
@@ -182,6 +184,121 @@ class ReplayReadyRequestTest {
         }
     }
 
+    /** Ready and transferred lifecycle outcomes use changed patched bytes as well as exact originals. */
+    @Test
+    @Suppress("CyclomaticComplexMethod", "NestedBlockDepth", "LongMethod")
+    // Finite matrix keeps each literal oracle beside its setup and terminal observation.
+    fun `original and patched ready lifecycle matrix retains one terminal owner`() {
+        listOf(false, true).forEach { masked ->
+            listOf("READY_CLOSE", "HANDOFF_THROW", "SUCCESS", "CANCEL_AFTER_OUTPUT", "DOUBLE_TRANSFER",
+                "OWNER_CLOSE").forEach { terminal ->
+                val quota = RequestSourceQuota(RequestSourceLimits(12, 12, 1, 3))
+                val owner = completeOwner(quota, "abcdefghijkl".toByteArray())
+                val ready = if (masked) ReplayReadyRequest.masked(owner, listOf(RequestSourcePatch(2, 10,
+                    "X".toByteArray())))
+                    else ReplayReadyRequest.create(owner)
+                assertEquals(if (masked) 5L else null, ready.maskedContentLength)
+                val callbacks = AtomicInteger()
+                val subscriber = HoldingReplaySubscriber()
+                when (terminal) {
+                    "READY_CLOSE" -> {
+                        ready.close(); ready.close()
+                        assertFailsWith<IllegalStateException> { ready.transferTo { callbacks.incrementAndGet() } }
+                        assertEquals(0, callbacks.get())
+                    }
+                    "HANDOFF_THROW" -> {
+                        val sentinel = IllegalStateException("handoff failed")
+                        val failure = assertFailsWith<IllegalStateException> {
+                            ready.transferTo<Unit> { callbacks.incrementAndGet(); throw sentinel }
+                        }
+                        assertTrue(failure === sentinel)
+                        assertEquals(1, callbacks.get())
+                    }
+                    else -> {
+                        ready.transferTo { publisher -> callbacks.incrementAndGet(); publisher.subscribe(subscriber) }
+                        ready.close()
+                        assertEquals(12L, quota.retainedBytes)
+                        subscriber.requestOne()
+                        assertEquals(if (masked) "abXk" else "abcd", subscriber.bytes().toString(Charsets.UTF_8))
+                        assertEquals(12L, quota.retainedBytes)
+                        assertEquals(1, quota.activeOwners)
+                        when (terminal) {
+                            "CANCEL_AFTER_OUTPUT" -> subscriber.cancel()
+                            "OWNER_CLOSE" -> owner.close()
+                            "DOUBLE_TRANSFER" -> {
+                                assertFailsWith<IllegalStateException> {
+                                    ready.transferTo { callbacks.incrementAndGet() }
+                                }
+                                assertEquals(1, callbacks.get())
+                                assertEquals(12L, quota.retainedBytes)
+                            }
+                        }
+                        subscriber.requestAll()
+                        if (terminal != "CANCEL_AFTER_OUTPUT") subscriber.awaitCompletion()
+                        val expected = if (terminal in listOf("CANCEL_AFTER_OUTPUT", "OWNER_CLOSE")) {
+                            if (masked) "abXk" else "abcd"
+                        } else if (masked) "abXkl" else "abcdefghijkl"
+                        assertEquals(expected, subscriber.bytes().toString(Charsets.UTF_8))
+                    }
+                }
+                ready.close(); owner.close()
+                assertFailsWith<IllegalStateException> { ready.transferTo { callbacks.incrementAndGet() } }
+                assertEquals(RequestSourceState.CLOSED, owner.state)
+                assertEquals(0, quota.activeOwners)
+                assertEquals(0L, quota.retainedBytes)
+                assertEquals(0, quota.retainedSegments)
+            }
+        }
+    }
+
+    /** Both contender orders hold a visible boundary before close competes with the single transport claim. */
+    @Test
+    @Suppress("NestedBlockDepth")
+    // Finite matrix keeps each literal oracle beside its setup and terminal observation.
+    fun `original and patched transfer races hold both contender orders`() {
+        listOf(false, true).forEach { masked ->
+            listOf(false, true).forEach { transferFirst ->
+                val quota = RequestSourceQuota(RequestSourceLimits(12, 12, 1, 3))
+                val owner = completeOwner(quota, "abcdefghijkl".toByteArray())
+                val ready = if (masked) ReplayReadyRequest.masked(owner, listOf(RequestSourcePatch(2, 10,
+                    "X".toByteArray())))
+                    else ReplayReadyRequest.create(owner)
+                val entered = CountDownLatch(1)
+                val release = CountDownLatch(1)
+                val subscriber = HoldingReplaySubscriber()
+                val callbacks = AtomicInteger()
+                Executors.newSingleThreadExecutor().use { executor ->
+                    val transfer = executor.submit<Boolean> {
+                        if (!transferFirst) { entered.countDown(); check(release.await(5, TimeUnit.SECONDS)) }
+                        try {
+                            ready.transferTo { publisher ->
+                                callbacks.incrementAndGet()
+                                publisher.subscribe(subscriber)
+                                if (transferFirst) { entered.countDown(); check(release.await(5, TimeUnit.SECONDS)) }
+                            }
+                            true
+                        } catch (_: IllegalStateException) { false }
+                    }
+                    try {
+                        assertTrue(entered.await(5, TimeUnit.SECONDS))
+                        ready.close()
+                        assertEquals(if (transferFirst) 12L else 0L, quota.retainedBytes)
+                        assertFailsWith<IllegalStateException> { ready.transferTo { callbacks.incrementAndGet() } }
+                    } finally { release.countDown() }
+                    assertEquals(transferFirst, transfer.get(5, TimeUnit.SECONDS))
+                }
+                assertEquals(if (transferFirst) 1 else 0, callbacks.get())
+                if (transferFirst) {
+                    subscriber.requestAll(); subscriber.awaitCompletion()
+                    assertEquals(if (masked) "abXkl" else "abcdefghijkl", subscriber.bytes().toString(Charsets.UTF_8))
+                }
+                assertEquals(0, quota.activeOwners)
+                assertEquals(0L, quota.retainedBytes)
+                assertEquals(0, quota.retainedSegments)
+            }
+        }
+    }
+
     /** Subscriber that holds replay demand until the test has observed transferred ownership. */
     private class HoldingReplaySubscriber : Flow.Subscriber<ByteBuffer> {
         private val output = ByteArrayOutputStream()
@@ -212,6 +329,9 @@ class ReplayReadyRequestTest {
         override fun onComplete() {
             completed.countDown()
         }
+
+        /** Requests one bounded output chunk for exact prefix and retained-owner observations. */
+        fun requestOne() { subscription.request(1) }
 
         /** Starts unbounded replay only after ownership assertions are complete. */
         fun requestAll() {

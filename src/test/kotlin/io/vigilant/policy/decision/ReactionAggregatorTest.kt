@@ -248,6 +248,22 @@ class ReactionAggregatorTest {
         }
     }
 
+    /** ALLOW-only findings cannot extend, join, or replace a selected MASK union in either input order. */
+    @Test
+    fun `allow findings never expand selected mask unions`() {
+        val selected = policyResult("mask", "selected", listOf(Finding(FindingType("EMAIL_ADDRESS"), Utf8Span(4,
+            8), null)),
+            Reaction(Disposition.ALLOW, listOf(Transformation.MASK)))
+        listOf(Utf8Span(0, 12), Utf8Span(2, 6), Utf8Span(8, 10), Utf8Span(12, 16)).forEach { ignored ->
+            val allowed = policyResult("allow", "allowed", listOf(Finding(FindingType("PAYMENT_CARD"), ignored, null)),
+                Reaction(Disposition.ALLOW, emptyList()))
+            listOf(listOf(selected, allowed), listOf(allowed, selected)).forEach { outcomes ->
+                assertEquals(listOf(MaskingInstruction(Utf8Span(4, 8), "[EMAIL_MASKED]")),
+                    ReactionAggregator().aggregate(outcomes).maskingInstructions)
+            }
+        }
+    }
+
     /** Creates one detected policy result that applies [reaction] to [findings]. */
     private fun policyResult(
         policyId: String,

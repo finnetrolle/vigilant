@@ -29,6 +29,12 @@ response contracts.
 - `docs/requirements-coverage.md` как активная карта current MVP.
 - Identity documentation после решения VIG-35.
 - Response terminology после VIG-20-04.
+- Policy/request terminology после [VIG-34](issue_34_request_pii_enforcement.md):
+  завершённая реализация отменила global coverage и shadow-only REQUEST
+  reactions, сохранила полную current policy schema и добавила exact request
+  enforcement. Current request docs/UML и
+  [implementation evidence](../../docs/request-enforcement-evidence.md)
+  обновлены в VIG-34; VIG-36 владеет последующей общей исторической очисткой.
 
 ## Результат завершённой зависимости VIG-32-02
 

@@ -66,7 +66,8 @@ class BypassProxyService(
      * Starts one gateway-owned upstream exchange without binding its response to client output.
      *
      * Request routing, tracing and canonical response-header filtering are shared by streaming
-     * bypass and retained guardrail paths. Transport failures remain exceptional so each caller
+     * bypass and retained guardrail paths. The handoff also enables upstream latency observation.
+     * Transport failures remain exceptional so each caller
      * can choose its stable pre-disclosure mapping.
      */
     internal fun exchange(
@@ -83,6 +84,7 @@ class BypassProxyService(
                 propagateTraceContext(rewritten, traceContext, clientSpan)
             }
         }
+        ctx.setAttr(ProxyRequestOutcome.UPSTREAM_STARTED, true)
         val upstreamResponse = upstream.execute(outbound)
             .mapHeaders { headers ->
                 clientSpan?.setAttribute(HTTP_RESPONSE_STATUS_CODE, headers.status().code().toLong())

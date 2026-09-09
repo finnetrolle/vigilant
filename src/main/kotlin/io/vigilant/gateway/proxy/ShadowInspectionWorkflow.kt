@@ -6,12 +6,19 @@ import io.opentelemetry.api.trace.Span
 import io.vigilant.context.PolicyContextHandoff
 import io.vigilant.context.PolicyContextHandoffResult
 import io.vigilant.gateway.identity.IdentityExtractionResult
+import io.vigilant.policy.domain.Disposition
 import io.vigilant.policy.domain.PolicyContext
 import io.vigilant.policy.domain.PolicyDecision
 import io.vigilant.policy.engine.PolicyEngine
 import io.vigilant.policy.selection.PolicySelection
 import io.vigilant.protocol.openai.ChatCompletionsParseFailureCode
+import io.vigilant.protocol.openai.CompleteByteSource
+import io.vigilant.source.RequestSourcePatch
 import io.vigilant.protocol.openai.NormalizedChatCompletionsRequest
+import io.vigilant.protocol.openai.RequestFieldClass
+import io.vigilant.protocol.openai.RequestFragmentMaskingPlan
+import io.vigilant.protocol.openai.RequestRewritePlanner
+import io.vigilant.source.RequestSourceViewResult
 import io.vigilant.source.BoundedRequestSourceOwner
 import io.vigilant.source.RequestSourceOutcomeCode
 import java.time.Duration
@@ -34,6 +41,9 @@ internal sealed interface ShadowInspectionOutcome {
 
 /** Expected safe failures produced by complete-source inspection. */
 internal sealed interface ShadowInspectionRejection {
+    /** A selected request policy prohibits upstream disclosure of detected PII. */
+    data object Blocked : ShadowInspectionRejection
+
     /** Supported request could not be normalized safely. */
     data class Parser(
         /** Existing stable Chat Completions parser failure. */
@@ -54,16 +64,20 @@ internal sealed interface ShadowInspectionRejection {
 }
 
 /**
- * Gateway-specific application service for one complete request-side shadow inspection.
+ * Gateway application service enforcing one complete request before upstream handoff.
  *
  * @property protocol existing descriptor-specific parser and context producer.
  * @property policyEngine existing policy selection and detector orchestration boundary.
  * @property auditLogger best-effort request-analysis lifecycle publisher.
+ * @property rewriteRequest protocol-owned all-or-nothing raw patch preparation.
  */
 internal class ShadowInspectionWorkflow(
     private val protocol: PiiShadowProtocol,
     private val policyEngine: PolicyEngine,
     private val auditLogger: ShadowAuditLogger,
+    private val rewriteRequest: (
+        CompleteByteSource, NormalizedChatCompletionsRequest, Collection<RequestFragmentMaskingPlan>,
+    ) -> List<RequestSourcePatch> = RequestRewritePlanner()::prepare,
 ) {
     /**
      * Accepts one complete source and returns a typed forwarding or rejection result.
@@ -78,7 +92,9 @@ internal class ShadowInspectionWorkflow(
      * @param serviceContext owning Armeria request scope for handoff and correlation.
      * @param inspectionSpan current INTERNAL inspection span, which remains caller-owned.
      */
-    @Suppress("LongMethod", "LongParameterList")
+    @Suppress(
+        "LongMethod", "LongParameterList", "CyclomaticComplexMethod", "ReturnCount", "ThrowsCount",
+    ) // Ordered rejects and one finally block keep source ownership visible across all typed outcomes.
     fun execute(
         owner: BoundedRequestSourceOwner,
         request: HttpRequest,
@@ -91,15 +107,40 @@ internal class ShadowInspectionWorkflow(
         val lifecycle = RequestAnalysisLifecycle(serviceContext, inspectionSpan, auditLogger)
         return try {
             val normalizedRequest = protocol.parse(owner)
+            lifecycle.normalizedRequest = normalizedRequest
             val context = protocol.assembleContext(request, normalizedRequest, identity.identity)
             when (val handoff = PolicyContextHandoff.storeRequest(serviceContext, context)) {
                 is PolicyContextHandoffResult.Success -> Unit
                 is PolicyContextHandoffResult.Failure ->
                     throw SafeContextFailure(ShadowInspectionError.ContextHandoff(handoff.code))
             }
-            val decisions = evaluateFragments(context, normalizedRequest, lifecycle::start)
-            replayReady = ReplayReadyRequest.create(owner)
-            lifecycle.complete(normalizedRequest, decisions)
+            val decisions = evaluateFragments(context, normalizedRequest, lifecycle)
+            if (decisions.hasDetectorError()) {
+                lifecycle.complete(normalizedRequest, decisions)
+                return ShadowInspectionOutcome.Reject(
+                    ShadowInspectionRejection.Inspection(ShadowInspectionError.InspectionFailed),
+                )
+            }
+            val structuralMask = normalizedRequest.sources.any { source ->
+                source.fieldClass == RequestFieldClass.STRUCTURAL &&
+                    decisions[source.fragmentOrdinal].reactionPlan.maskingInstructions.isNotEmpty()
+            }
+            if (structuralMask || decisions.any { it.reactionPlan.disposition == Disposition.BLOCK }) {
+                lifecycle.complete(normalizedRequest, decisions, "BLOCK")
+                return ShadowInspectionOutcome.Reject(ShadowInspectionRejection.Blocked)
+            }
+            val plans = normalizedRequest.fragments.zip(decisions).mapNotNull { (fragment, decision) ->
+                decision.reactionPlan.maskingInstructions.takeIf { it.isNotEmpty() }?.let { instructions ->
+                    RequestFragmentMaskingPlan(fragment.provenance.ordinal, fragment.provenance.locator, instructions)
+                }
+            }
+            replayReady = if (plans.isEmpty()) ReplayReadyRequest.create(owner) else {
+                val view = (owner.acquireView() as? RequestSourceViewResult.Available)?.view
+                    ?: throw SafeContextFailure(ShadowInspectionError.InspectionFailed)
+                val patches = view.use { rewriteRequest(it, normalizedRequest, plans) }
+                ReplayReadyRequest.masked(owner, patches)
+            }
+            lifecycle.complete(normalizedRequest, decisions, if (plans.isEmpty()) "ALLOW" else "MASK")
             replayOwnershipTransferred = true
             ShadowInspectionOutcome.Forward(replayReady)
         } catch (failure: SafeParseFailure) {
@@ -108,6 +149,7 @@ internal class ShadowInspectionWorkflow(
             lifecycle.fail(failure.code.name)
             ShadowInspectionOutcome.Reject(ShadowInspectionRejection.Source(failure.code))
         } catch (failure: SafeContextFailure) {
+            lifecycle.fail("INSPECTION_FAILED")
             ShadowInspectionOutcome.Reject(ShadowInspectionRejection.Inspection(failure.error))
         } catch (cancelled: CancellationException) {
             lifecycle.fail("ANALYSIS_CANCELLED")
@@ -126,12 +168,13 @@ internal class ShadowInspectionWorkflow(
     private fun evaluateFragments(
         context: PolicyContext,
         normalizedRequest: NormalizedChatCompletionsRequest,
-        beforeDetectorExecution: (PolicySelection) -> Unit,
+        lifecycle: RequestAnalysisLifecycle,
     ): List<PolicyDecision> {
         val payloads = normalizedRequest.fragments.map { fragment -> fragment.text }.ifEmpty { listOf("") }
-        return payloads.map { payload ->
-            runSuspending { policyEngine.evaluate(context, payload, beforeDetectorExecution) }
+        payloads.forEach { payload ->
+            lifecycle.decisions += runSuspending { policyEngine.evaluate(context, payload, lifecycle::start) }
         }
+        return lifecycle.decisions
     }
 }
 
@@ -147,6 +190,12 @@ private class RequestAnalysisLifecycle(
     private val inspectionSpan: Span?,
     private val auditLogger: ShadowAuditLogger,
 ) {
+    /** Parser coverage retained even when a later fragment is cancelled. */
+    var normalizedRequest: NormalizedChatCompletionsRequest? = null
+
+    /** Only completed fragment decisions, in canonical source order. */
+    val decisions = ArrayList<PolicyDecision>()
+
     /** First policy selection whose detector work started this request analysis. */
     private var selection: PolicySelection? = null
 
@@ -168,6 +217,7 @@ private class RequestAnalysisLifecycle(
     fun complete(
         normalizedRequest: NormalizedChatCompletionsRequest,
         decisions: List<PolicyDecision>,
+        reaction: String = "ALLOW",
     ) {
         if (selection == null || completed) return
         completed = true
@@ -178,6 +228,7 @@ private class RequestAnalysisLifecycle(
                 decisions,
                 elapsed(),
                 inspectionSpan,
+                reaction,
             )
         }
     }
@@ -188,7 +239,8 @@ private class RequestAnalysisLifecycle(
         if (completed) return
         completed = true
         runCatching {
-            auditLogger.emitFailed(serviceContext, selected, elapsed(), errorCode, inspectionSpan)
+            auditLogger.emitFailed(serviceContext, selected, elapsed(), errorCode, inspectionSpan,
+                normalizedRequest, decisions)
         }
     }
 

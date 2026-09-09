@@ -93,29 +93,26 @@ class MainTest {
         assertFalse(result.stderr.contains(secret), "stderr must not expose policy values")
     }
 
-    /** Verifies the process refuses to start when mandatory Fast PII coverage is absent. */
+    /** Rejects each obsolete or unsafe executable REQUEST reaction through the real entry point. */
     @Test
-    fun `missing global shadow coverage exits with code 2`() {
-        val emptyPolicyFile =
-            Files.createTempFile("vigilant-empty-politics", ".conf").also { path ->
-                path.writeText("policies = []")
+    fun `request reaction migration rejects old error allow and clean block safely`() {
+        listOf("error" to "ALLOW", "clean" to "BLOCK").forEach { (branch, disposition) ->
+            val original = if (branch == "error") "BLOCK" else "ALLOW"
+            val config = testPolicyConfiguration { source ->
+                source.replace("$branch { disposition = \"$original\"", "$branch { disposition = \"$disposition\"")
             }
-
-        val result =
-            runGateway(
-                mapOf(
-                    "VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081",
-                    "VIGILANT_POLITICS_CONFIG" to emptyPolicyFile.toString(),
-                ),
+            val result = runGateway(mapOf(
+                "VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081",
+                "VIGILANT_POLITICS_CONFIG" to config,
+            ))
+            assertEquals(2, result.exitCode, branch)
+            val expected = if (branch == "error") "BLOCK" else "ALLOW"
+            assertTrue(
+                result.stderr.contains("REQUEST reactions.$branch requires $expected without transformations"),
+                result.stderr,
             )
-
-        assertEquals(2, result.exitCode)
-        assertTrue(
-            result.stderr.contains(
-                "Policy configuration must contain an enabled global REQUEST policy for detector 'fast-pii'",
-            ),
-        )
-        assertFalse(result.stderr.contains(emptyPolicyFile.toString()))
+            assertFalse(result.stderr.contains(config))
+        }
     }
 
     /** CFG-06..08 and CFG-12..14: Every quantified invalid startup variant exits safely with code 2. */

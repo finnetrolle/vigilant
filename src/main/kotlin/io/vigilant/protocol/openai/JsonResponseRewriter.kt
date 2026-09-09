@@ -201,7 +201,7 @@ private fun decodeJsonStringAtCandidate(
 
 /** Decodes one escaped or direct UTF-8 code point from JSON string content. */
 @Suppress("ReturnCount")
-private fun decodeJsonUnit(source: ByteArray, start: Int): DecodedJsonUnit? {
+internal fun decodeJsonUnit(source: ByteArray, start: Int): DecodedJsonUnit? {
     val first = source[start].toInt() and BYTE_MASK
     if (first == BACKSLASH) return decodeJsonEscape(source, start)
     if (first < SPACE) return null
@@ -292,7 +292,7 @@ private fun utf8SequenceLength(first: Int): Int? =
     }
 
 /** One decoded code point and its exclusive raw source end. */
-private data class DecodedJsonUnit(
+internal data class DecodedJsonUnit(
     /** Unicode scalar value. */
     val codePoint: Int,
     /** Exclusive absolute raw offset. */

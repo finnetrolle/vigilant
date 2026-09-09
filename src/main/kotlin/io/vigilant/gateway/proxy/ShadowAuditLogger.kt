@@ -49,6 +49,7 @@ internal class ShadowAuditLogger {
         decisions: List<PolicyDecision>,
         duration: Duration,
         inspectionSpan: Span?,
+        reaction: String = "ALLOW",
     ) {
         val findings = decisions.findings()
         val outcome =
@@ -69,7 +70,7 @@ internal class ShadowAuditLogger {
                     findings = findings,
                     duration = duration,
                     errorCode = if (outcome == AnalysisOutcome.ERROR) decisions.auditErrorCode() else null,
-                    reaction = if (outcome == AnalysisOutcome.ERROR) null else "ALLOW",
+                    reaction = if (outcome == AnalysisOutcome.ERROR) null else reaction,
                 ),
             phase = PolicyPhase.REQUEST,
             inspectionSpan = inspectionSpan,
@@ -83,16 +84,18 @@ internal class ShadowAuditLogger {
         duration: Duration,
         errorCode: String,
         inspectionSpan: Span?,
+        normalizedRequest: NormalizedChatCompletionsRequest? = null,
+        decisions: List<PolicyDecision> = emptyList(),
     ) {
         emitCompleted(
             ctx = ctx,
             completion =
                 AnalysisCompletion(
                     outcome = AnalysisOutcome.ERROR,
-                    coverage = InspectionCoverage.UNINSPECTABLE,
+                    coverage = normalizedRequest?.coverage ?: InspectionCoverage.UNINSPECTABLE,
                     policies = selection.applied.map { policy -> policy.reference },
-                    inspectedFragments = 0,
-                    findings = emptyList(),
+                    inspectedFragments = minOf(decisions.size, normalizedRequest?.fragments?.size ?: 0),
+                    findings = decisions.findings(),
                     duration = duration,
                     errorCode = errorCode,
                     reaction = null,
@@ -325,7 +328,7 @@ private fun List<PolicyDecision>.findings(): List<Finding> =
     }
 
 /** Returns whether any actual detector outcome was an explicit error. */
-private fun List<PolicyDecision>.hasDetectorError(): Boolean =
+internal fun List<PolicyDecision>.hasDetectorError(): Boolean =
     any { decision ->
         decision.detectorResults.any { result -> result.result is DetectionResult.Error } ||
             decision.policyResults.any { policyResult ->

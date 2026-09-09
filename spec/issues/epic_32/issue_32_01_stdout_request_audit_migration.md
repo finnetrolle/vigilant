@@ -8,6 +8,10 @@
 **Оценка:** 3-5 инженерных дней
 **Уверенность:** Medium
 
+## Текущий successor
+
+[VIG-34](../issue_34_request_pii_enforcement.md) сохраняет exact stdout schema и best-effort delivery, расширяя successful REQUEST reaction до фактической ALLOW/MASK/BLOCK. Technical failure даёт 503 и ERROR без reaction. Ниже сохранены исторические Done и evidence прежнего shadow increment; текущий request contract принадлежит VIG-34.
+
 ## Результат
 
 Один supported Chat Completions request, для которого после parse, context и

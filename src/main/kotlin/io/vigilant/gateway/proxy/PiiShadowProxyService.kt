@@ -28,7 +28,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 /**
- * OpenAI Chat Completions request-shadow and retained-response enforcement boundary.
+ * OpenAI Chat Completions request and retained-response enforcement boundary.
  *
  * The complete request body is retained by [requestSourceQuota] before this adapter
  * delegates typed orchestration to [workflow]. Identity is extracted before body demand;
@@ -239,7 +239,6 @@ class PiiShadowProxyService internal constructor(
         response.whenComplete { _, failure ->
             if (failure != null && !failure.isCancellation()) {
                 inspectionSpan?.setStatus(StatusCode.ERROR)
-                inspectionSpan?.recordException(failure)
             }
             inspectionSpan?.end()
         }
@@ -281,6 +280,8 @@ class PiiShadowProxyService internal constructor(
      * Delegates complete-source inspection and maps its typed result to HTTP or transport handoff.
      * A forwarding result must atomically claim transport ownership before cancellation does, and
      * cannot start a new upstream response-analysis phase after server shutdown has begun.
+     * Technical inspection refusals mark ERROR without recording private exception details;
+     * a policy BLOCK remains a normal policy outcome.
      */
     private fun processCompleteSource(
         ctx: ServiceRequestContext,
@@ -298,7 +299,12 @@ class PiiShadowProxyService internal constructor(
                     outcome.replay.close()
                     throw CancellationException("Request ended before upstream handoff")
                 }
-            is ShadowInspectionOutcome.Reject -> rejectionResponse(outcome.error)
+            is ShadowInspectionOutcome.Reject -> {
+                if (outcome.error is ShadowInspectionRejection.Inspection) {
+                    inspectionSpan?.setStatus(StatusCode.ERROR)
+                }
+                rejectionResponse(outcome.error)
+            }
         }
 
     /** Transfers one ready request replay, then retains and validates the complete upstream response. */
@@ -311,7 +317,7 @@ class PiiShadowProxyService internal constructor(
             ready.transferTo { publisher ->
                 retainedResponseHandler.retain(
                     ctx,
-                    bypassProxyService.exchange(ctx, replayRequest(request, publisher)),
+                    bypassProxyService.exchange(ctx, replayRequest(request, publisher, ready.maskedContentLength)),
                 )
             }
         }
@@ -319,6 +325,7 @@ class PiiShadowProxyService internal constructor(
     /** Maps only expected complete-source workflow rejections to existing stable responses. */
     private fun rejectionResponse(rejection: ShadowInspectionRejection): HttpResponse =
         when (rejection) {
+            ShadowInspectionRejection.Blocked -> OpenAiErrorResponses.of(OpenAiErrorOutcome.REQUEST_BLOCKED)
             is ShadowInspectionRejection.Parser ->
                 stableProxyError(HttpStatus.BAD_REQUEST, rejection.code.name.lowercase())
 

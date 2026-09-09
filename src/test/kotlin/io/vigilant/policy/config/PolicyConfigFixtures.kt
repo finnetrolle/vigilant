@@ -50,14 +50,14 @@ internal fun completePolicyConfig(policyId: String = "default-request-pii"): Str
     ]
     """.trimIndent()
 
-/** Returns one valid production shadow coverage configuration. */
+/** Returns the canonical explicit REQUEST policy with detected/clean ALLOW and error BLOCK. */
 internal fun shadowPolicyConfig(policyId: String = "default-request-pii"): String =
     canonicalShadowPolicyConfig.replace(
         "id = \"$DEFAULT_SHADOW_POLICY_ID\"",
         "id = \"$policyId\"",
     )
 
-/** Returns one policy object suitable for composing multi-policy shadow fixtures. */
+/** Returns one canonical policy object suitable for composing explicit startup snapshots. */
 internal fun shadowPolicyEntry(
     policyId: String,
     overrides: List<String> = emptyList(),

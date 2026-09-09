@@ -26,7 +26,7 @@ final class InspectionQualificationReport {
             - Gateway heap limit: %d MiB; direct-memory limit: %d MiB.
             - Source limits: per request %d bytes; global retained %d bytes; owners %d; segments per request %d.
             - Policy: `config/qualification/politics-resource.conf`, `fast-pii`, 30 second
-              per-fragment deadline, shadow-only `ALLOW` reactions.
+              per-fragment deadline, detected/clean `ALLOW`, technical error `BLOCK` reactions.
             - Warm-up: Repeated full-profile warm-up cycles establish the baseline only after five consecutive
               post-workload forced-GC observations remain inside a 16 MiB heap/RSS window; the component-wise
               window maxima define the published baseline and warm-up outcomes are excluded from the measured matrix.

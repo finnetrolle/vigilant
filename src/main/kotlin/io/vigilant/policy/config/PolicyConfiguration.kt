@@ -2,10 +2,8 @@ package io.vigilant.policy.config
 
 import io.vigilant.policy.domain.DetectorId
 import io.vigilant.policy.domain.Disposition
-import io.vigilant.policy.domain.FAST_PII_DETECTOR_ID
 import io.vigilant.policy.domain.Policy
 import io.vigilant.policy.domain.PolicyPhase
-import io.vigilant.policy.domain.SubjectType
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
@@ -33,38 +31,20 @@ internal fun loadPolicySnapshot(
     }
     val parsedPolicies = PolicyConfigParser().parse(readPolicyConfig(configPath))
     val policies = PolicyValidator().validate(parsedPolicies, availableDetectorIds)
-    val coveragePolicies = policies.filter(Policy::providesGlobalFastPiiRequestCoverage)
-    require(coveragePolicies.isNotEmpty()) {
-        "Policy configuration must contain an enabled global REQUEST policy for detector " +
-            "'${FAST_PII_DETECTOR_ID.value}'"
-    }
-    val overriddenByEnabledPolicies =
-        policies.filter(Policy::enabled).flatMap(Policy::overrides).toSet()
-    require(coveragePolicies.any { policy -> policy.reference.id !in overriddenByEnabledPolicies }) {
-        "Global Fast PII coverage policy must not be overridden"
-    }
-    require(policies.all(Policy::hasRuntimeAllowedReactions)) {
-        "Request policies require ALLOW reactions without transformations"
+    policies.filter { it.match.phase == PolicyPhase.REQUEST }.forEach { policy ->
+        require(
+            policy.reactions.clean.disposition == Disposition.ALLOW && policy.reactions.clean.transformations.isEmpty(),
+        ) {
+            "REQUEST reactions.clean requires ALLOW without transformations"
+        }
+        require(
+            policy.reactions.error.disposition == Disposition.BLOCK && policy.reactions.error.transformations.isEmpty(),
+        ) {
+            "REQUEST reactions.error requires BLOCK without transformations"
+        }
     }
     return policies
 }
-
-/** Returns whether this enabled policy covers every anonymous request with Fast PII. */
-private fun Policy.providesGlobalFastPiiRequestCoverage(): Boolean =
-    enabled &&
-        match.url == "*" &&
-        match.model == "*" &&
-        match.phase == PolicyPhase.REQUEST &&
-        match.subject.type == SubjectType.ANY &&
-        match.subject.id.value == "*" &&
-        FAST_PII_DETECTOR_ID in detectors
-
-/** Allows existing enforcement reactions only for response phase; requests remain shadow-only. */
-private fun Policy.hasRuntimeAllowedReactions(): Boolean =
-    match.phase == PolicyPhase.RESPONSE ||
-        listOf(reactions.detected, reactions.clean, reactions.error).all { reaction ->
-            reaction.disposition == Disposition.ALLOW && reaction.transformations.isEmpty()
-        }
 
 /** Reads [configPath] while converting filesystem details into a stable safe startup error. */
 private fun readPolicyConfig(configPath: Path): String =

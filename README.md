@@ -5,7 +5,7 @@ Vigilant - OpenAI-совместимый guardrails gateway для платфо�
 формирует безопасный audit event, не раскрывая содержимое запроса.
 
 > Статус: pre-release, версия `0.1.0-SNAPSHOT`. Первый production milestone
-> request-side PII inspection в shadow mode и ordinary/SSE response enforcement закрыты. Измерения и safety evidence
+> request-side PII enforcement и ordinary/SSE response enforcement реализованы. Исторические shadow-измерения и safety evidence
 > опубликованы в [inspection-load report](docs/inspection-load-result.md), а
 > следующий frontier перечислен в [roadmap](spec/ROADMAP.md#текущий-roadmap-frontier).
 
@@ -14,9 +14,11 @@ Vigilant - OpenAI-совместимый guardrails gateway для платфо�
 - `POST /v1/chat/completions` с `Content-Type: application/json`.
 - Bounded приём request body и детерминированная проверка встроенным
   `fast-pii` detector по `politics.conf`.
-- Request-side shadow decision: найденный PII фиксируется как `DETECTED`,
-  но request disposition остаётся `ALLOW`.
-- Byte-identical replay исходного body и сохранение неизвестных полей.
+- Request `ALLOW` передаёт исходные bytes, `MASK` patch-ит выбранные free-text spans,
+  `BLOCK` запрещает весь request до upstream. Structural `MASK` также даёт `403`.
+- Request marker сокращается до UTF-8 budget находки; остальные raw JSON bytes
+  сохраняются. Detector error/deadline даёт safe `503`, выше policy `BLOCK`.
+- Явный `policies = []` допустим; без applied policy detector и audit не запускаются.
 - Startup-selectable Dummy, offline JWT или External Bearer identity с
   normalized user/groups, unchanged upstream Authorization и
   request-to-response context handoff.
@@ -31,8 +33,7 @@ Vigilant - OpenAI-совместимый guardrails gateway для платфо�
 - JSONL-логи, correlation/trace ID, OTLP traces и metrics, health/readiness
   endpoints и non-root OCI image.
 
-Пока не поддерживаются OpenAI Responses API, request-side `BLOCK`/`MASK`,
-`REMOVE`, identity lookup cache,
+Пока не поддерживаются OpenAI Responses API, `REMOVE`, identity lookup cache,
 request-body или response-body disk spill,
 Kubernetes/Helm и ML/NER detector. Полные границы первого инкремента зафиксированы в
 [roadmap](spec/ROADMAP.md#не-входит-в-первый-production-increment).
@@ -71,16 +72,21 @@ curl --fail-with-body http://127.0.0.1:8080/v1/chat/completions \
 
 Vigilant проверит видимый модели текст, best-effort запишет безопасную пару
 `policy.analysis_started`/`policy.analysis_completed` в stdout и отправит
-исходный JSON вышестоящему серверу без пересериализации. В теневом режиме
-найденный адрес электронной почты не блокирует запрос.
+исходный JSON вышестоящему серверу без пересериализации: sample явно выбирает
+`detected=ALLOW`. Для masking задайте `detected { disposition = "ALLOW",
+transformations = ["MASK"] }`; для блокировки `disposition = "BLOCK"` с пустым
+списком transformations. REQUEST `clean` требует ALLOW, `error` требует BLOCK.
+Прежние policy files с `error=ALLOW` нужно обновить явно, иначе startup завершится с кодом `2`.
+Матрицы поведения, lifecycle и process/OCI checks зафиксированы в
+[evidence VIG-34](docs/request-enforcement-evidence.md).
 
 ## Как проходит запрос
 
 Для поддержанного запроса выполняются извлечение настроенного идентификатора,
 ограниченный приём данных, разбор протокола и вычисление политик. Вокруг реально
 начатого detector execution публикуется best-effort stdout pair, после чего
-исходный источник одноразово передаётся транспорту во владение и
-воспроизводится без изменения байтов. Logging delivery не участвует в traffic
+валидированный original или patched source одноразово передаётся транспорту
+во владение. BLOCK и technical refusal завершаются до handoff. Logging delivery не участвует в traffic
 outcome или upstream handoff.
 
 - [Диаграмма последовательности обработки запроса UML 2.0](docs/diagrams/request-inspection-sequence.puml)
@@ -228,5 +234,5 @@ CI на каждый push в `main` и pull request запускает `build`. 
 
 Нормативная область хранится в `spec/`. README предназначен для быстрого входа
 в проект и не заменяет требования, статусы задач или план развития. Достигнутый
-этап теневой проверки PII не означает, что реализована вся целевая область
+этап request/response PII enforcement не означает, что реализована вся целевая область
 `MVP-01..21`; точное покрытие приведено в карте требований выше.

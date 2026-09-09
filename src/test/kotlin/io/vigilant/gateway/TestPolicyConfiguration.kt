@@ -3,7 +3,7 @@ package io.vigilant.gateway
 import java.nio.file.Files
 import java.nio.file.Path
 
-/** Absolute path of the canonical production shadow policy used by gateway subprocess tests. */
+/** Absolute path of the canonical production request policy used by gateway subprocess tests. */
 internal val TEST_POLITICS_CONFIG_PATH: String =
     Path.of("politics.conf.example")
         .toAbsolutePath()
@@ -36,3 +36,11 @@ internal fun ProcessBuilder.withTestRuntimeConfiguration(
             }
         }
     }
+
+/** Writes a private immutable process snapshot derived from the canonical startup sample. */
+internal fun testPolicyConfiguration(configure: (String) -> String): String =
+    Files.createTempFile("vigilant-process-politics", ".conf")
+        .also { path ->
+            Files.writeString(path, configure(Files.readString(Path.of(TEST_POLITICS_CONFIG_PATH))))
+            path.toFile().deleteOnExit()
+        }.toAbsolutePath().normalize().toString()

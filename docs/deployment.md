@@ -19,7 +19,9 @@ application JAR, runtime dependencies и start scripts. Для локально�
 ~~~
 
 Перед запуском необходимо настроить upstream и предоставить валидный
-`politics.conf`. Полный список настроек находится в
+`politics.conf`. Явный `policies = []` разрешён; старые REQUEST policies с
+`error=ALLOW` нужно заменить на `error=BLOCK` до запуска. Sample сохраняет
+`detected=ALLOW`; MASK/BLOCK выбираются администратором. Полный список настроек находится в
 [configuration reference](configuration.md).
 
 После `installDist` повторяемый smoke-test запускает generated start script с
@@ -95,7 +97,10 @@ Orchestrator probes:
 
 `SIGTERM` запускает JVM shutdown hook. Readiness переключается на `503`, новые
 proxy exchanges запрещаются, active exchanges получают bounded drain, затем
-закрываются inspection, upstream и OpenTelemetry resources.
+закрываются inspection, upstream и OpenTelemetry resources. Prepared request
+не начинает новый handoff после shutdown admission. Active ALLOW/MASK upload
+удерживает original reservations до terminal callback, затем освобождается;
+уже отправленный upstream prefix не повторяется и не заменяется fallback.
 
 Default graceful shutdown force timeout равен 30 seconds. Container stop
 timeout 35 seconds сохраняет этот budget и снижает риск последующего
@@ -133,7 +138,9 @@ Collector должен разделять записи по top-level `resourceS
 - отсутствие persistent audit directory, image volume и audit environment;
 - `/healthz` и `/readyz`;
 - реальный PII Chat Completions request;
-- byte-identical request replay;
+- configured ALLOW byte-identical replay и shortened IP MASK с exact expected upstream digest;
+- policy BLOCK и structural MASK/BLOCK: exact 403 и upstream counter zero;
+- old REQUEST error=ALLOW: safe startup rejection с exit code 2;
 - safe JSONL stdout request-audit pair;
 - graceful SIGTERM shutdown.
 

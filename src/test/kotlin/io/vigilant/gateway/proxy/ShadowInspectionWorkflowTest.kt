@@ -57,7 +57,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
-/** Typed complete-source behavior tests for the shadow inspection workflow. */
+/** Typed complete-source behavior tests for the request inspection workflow. */
 @Suppress("LargeClass")
 class ShadowInspectionWorkflowTest {
     private val fixture = GatewayTestFixture()
@@ -245,9 +245,9 @@ class ShadowInspectionWorkflowTest {
         assertTrue(events.none { event -> event.isAnalysisEvent() })
     }
 
-    /** Detector error and policy deadline remain Forward with aggregate ERROR decisions. */
+    /** Detector error and policy deadline return the same safe typed rejection and release the source. */
     @Test
-    fun `detector error and deadline remain forward outcomes`() {
+    fun `detector error and deadline reject without replay ownership`() {
         val detectorId = DetectorId("workflow-detector")
         val cases =
             listOf(
@@ -287,8 +287,15 @@ class ShadowInspectionWorkflowTest {
                     inspectionSpan = null,
                 )
 
-            assertIs<ShadowInspectionOutcome.Forward>(outcome).replay.close()
+            val rejection = assertIs<ShadowInspectionOutcome.Reject>(outcome)
+            assertEquals(
+                ShadowInspectionRejection.Inspection(ShadowInspectionError.InspectionFailed),
+                rejection.error,
+            )
+            assertEquals(RequestSourceState.CLOSED, owner.state)
             assertEquals(0, quota.activeOwners)
+            assertEquals(0L, quota.retainedBytes)
+            assertEquals(0, quota.retainedSegments)
         }
     }
 
@@ -535,7 +542,7 @@ class ShadowInspectionWorkflowTest {
                 .build(),
         )
 
-    /** Creates a policy engine whose valid empty snapshot evaluates to shadow ALLOW. */
+    /** Creates a policy engine whose explicit empty snapshot evaluates to original-byte ALLOW. */
     private fun emptyPolicyEngine(): PolicyEngine =
         PolicyEngine(
             policyProvider = PolicyProvider { emptyList() },
@@ -544,7 +551,7 @@ class ShadowInspectionWorkflowTest {
             reactionAggregator = ReactionAggregator(),
         )
 
-    /** Creates one global ALLOW policy engine for detector outcome scenarios. */
+    /** Creates one selected REQUEST policy with detected/clean ALLOW and technical error BLOCK. */
     private fun policyEngine(
         detectorId: DetectorId,
         detector: Detector,
@@ -564,7 +571,7 @@ class ShadowInspectionWorkflowTest {
                     ),
                 detectors = listOf(detectorId),
                 deadline = deadline,
-                reactions = PolicyReactions(allow, allow, allow),
+                reactions = PolicyReactions(allow, allow, Reaction(Disposition.BLOCK, emptyList())),
                 overrides = emptyList(),
             )
         return PolicyEngine(

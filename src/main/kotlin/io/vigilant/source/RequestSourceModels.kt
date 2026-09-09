@@ -119,6 +119,8 @@ sealed interface RequestSourceReplayResult {
     data class Available(
         /** Publisher whose completion or cancellation closes the owner. */
         val publisher: Flow.Publisher<ByteBuffer>,
+        /** Exact output byte count validated before any replay demand. */
+        val contentLength: Long = 0,
     ) : RequestSourceReplayResult
 
     /** Stable state failure. */
@@ -126,4 +128,31 @@ sealed interface RequestSourceReplayResult {
         /** Stable safe outcome. */
         val code: RequestSourceOutcomeCode,
     ) : RequestSourceReplayResult
+}
+
+/** Immutable source-neutral replacement bytes that may be shared by multiple compact patches. */
+class RequestSourceReplacement(bytes: ByteArray) {
+    private val bytes = bytes.copyOf()
+
+    /** Exact replacement byte count without exposing mutable storage. */
+    val size: Int get() = bytes.size
+
+    /** Copies a bounded replacement slice into the replay-owned scratch buffer. */
+    internal fun copyInto(target: ByteArray, targetOffset: Int, start: Int, end: Int) {
+        bytes.copyInto(target, targetOffset, start, end)
+    }
+}
+
+/** Immutable source-neutral replacement of one raw byte range. */
+class RequestSourcePatch(
+    /** Inclusive original-source byte offset. */
+    val start: Long,
+    /** Exclusive original-source byte offset. */
+    val end: Long,
+    /** Immutable replacement storage, shareable across ranges and never exposed as mutable bytes. */
+    val replacement: RequestSourceReplacement,
+) {
+    /** Snapshots caller bytes once when no shared immutable representation is already available. */
+    constructor(start: Long, end: Long, replacement: ByteArray) : this(start, end,
+        RequestSourceReplacement(replacement))
 }

@@ -12,7 +12,7 @@
 - [Конфигурация](configuration.md) - все настройки приложения и правила их
   проверки.
 - [Политики](policies.md) - формат `politics.conf`, сопоставление политик и
-  ограничения теневого режима.
+  REQUEST enforcement и startup migration.
 - [Контракт запросов Chat Completions](openai-chat-completions.md) -
   проверяемые поля и причины отклонения запросов.
 - [Обнаружение PII](pii-detection.md) - поддерживаемые типы, срабатывания,
@@ -34,6 +34,8 @@
 - [Покрытие требований](requirements-coverage.md) - связь всех требований MVP,
   NFR, Stage 1 и требований вне области продукта с текущей реализацией и
   документацией.
+- [Evidence request enforcement](request-enforcement-evidence.md) - критерии
+  VIG-34, независимые byte/lifecycle oracles и точные команды RED/GREEN.
 - [UML-диаграммы](diagrams/README.md) - исходники диаграмм компонентов,
   последовательностей, состояний и деятельности в нотации UML 2.0 и формате
   PlantUML.
