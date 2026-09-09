@@ -4,10 +4,21 @@
 - **Тип:** Issue
 - **Статус:** Ready for implementation
 - **Приоритет:** High
-- **Зависит от:** [VIG-38](issue_38_risk_based_scope_lock.md)
+- **Зависит от:** нет
+- **Выполненные предпосылки:** [risk-based readiness](../WORK_ITEMS.md#risk-based-readiness) и [issue template/context sources](../ISSUE_TEMPLATE.md#context-sources).
 - **Блокирует:** [VIG-40](issue_40_reusable_verification_evidence.md)
 - **Оценка:** 3-5 инженерных дней
 - **Уверенность:** Medium
+
+## Context sources
+
+- `spec/ISSUE_TEMPLATE.md#context-sources`
+- `docs/development.md#завершение-work-item`
+- `docs/development.md#agent-papercuts`
+
+## Papercut tags
+
+- `tooling`
 
 ## Результат
 
@@ -45,8 +56,8 @@ tag или anchor.
 ## Источники и владение
 
 - Active work-item graph и status остаются в `spec/WORK_ITEMS.md` и issue files.
-- Issue template из VIG-38 владеет явными context-source anchors и optional
-  papercut tags.
+- [Issue template](../ISSUE_TEMPLATE.md#context-sources) владеет явными
+  context-source anchors и optional papercut tags.
 - `CLAUDE.md` владеет только стабильными project invariants и project-specific
   overrides.
 - Подробные команды и воспроизводимые процедуры остаются в
