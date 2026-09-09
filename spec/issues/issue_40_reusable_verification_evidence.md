@@ -4,10 +4,21 @@
 - **Тип:** Issue
 - **Статус:** Ready for implementation
 - **Приоритет:** High
-- **Зависит от:** [VIG-39](issue_39_compact_task_context.md)
+- **Зависит от:** нет
+- **Выполненные предпосылки:** [task packet и маршрутизация context](../../docs/task-context.md#contract).
 - **Блокирует:** нет
 - **Оценка:** 3-5 инженерных дней
 - **Уверенность:** Medium
+
+## Context sources
+
+- `docs/development.md#устойчивый-запуск-проверок`
+- `docs/development.md#локальные-pipeline-scripts`
+- `docs/agent-workflow.md#finish-the-consistency-pass-before-verification`
+
+## Papercut tags
+
+- `tooling`
 
 ## Результат
 
