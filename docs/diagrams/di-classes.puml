@@ -1,0 +1,142 @@
+@startuml vigilant-di-classes
+!pragma layout smetana
+title Vigilant: классы и зависимости DI
+top to bottom direction
+skinparam backgroundColor #F7F9FC
+skinparam shadowing false
+skinparam roundcorner 10
+skinparam defaultFontName SansSerif
+skinparam defaultFontSize 13
+skinparam ArrowColor #536680
+skinparam ArrowFontColor #40546D
+skinparam class {
+  BackgroundColor #FFFFFF
+  BorderColor #ADC1D8
+  FontColor #152C46
+}
+hide empty members
+hide circle
+
+interface AppComponent <<DependencyGraph(AppScope)>> {
+  +server: Server
+  +readinessService: ReadinessService
+  +outboundClientResources: OutboundClientResources
+  +inspectionResources: InspectionResources
+  +sdkTracerProvider: SdkTracerProvider
+  +sdkMeterProvider: SdkMeterProvider
+  +policyProvider: PolicyProvider
+}
+
+package "Вход и HTTP-декораторы" {
+  class Server <<Provides>>
+  class LivenessService <<Inject>>
+  class ReadinessService <<Inject>>
+  class TrafficAdmissionService <<Inject>>
+  class MetricsService <<Provides>>
+  class TracingService <<Provides>>
+}
+
+package "Инспекция и транспорт" {
+  class PiiShadowProxyService <<Provides>>
+  class BypassProxyService <<Inject>>
+  class ResponseAnalysisLifecycle <<Inject>>
+  class InspectionResources <<Inject>>
+  class OutboundClientResources <<Inject>>
+  interface WebClient <<Provides>>
+  class URI <<Provides>>
+}
+
+package "Конфигурация и telemetry" {
+  class AppConfig <<Provides>>
+  class SdkTracerProvider <<Provides>>
+  interface Tracer <<Provides>>
+  class SdkMeterProvider <<Provides>>
+  interface Meter <<Provides>>
+}
+
+package "Политики и identity" {
+  class PolicyEngine <<Provides>>
+  interface PolicyProvider <<Provides>>
+  interface BearerIdentityExtractor <<Provides>>
+}
+
+package "Реализации, создаваемые в фабриках" {
+  class DummyPolicyProvider
+  class DummyIdentityExtractor
+  class OfflineJwtIdentityExtractor
+  class ExternalIdentityExtractor
+}
+
+DummyPolicyProvider ..|> PolicyProvider
+DummyIdentityExtractor ..|> BearerIdentityExtractor
+OfflineJwtIdentityExtractor ..|> BearerIdentityExtractor
+ExternalIdentityExtractor ..|> BearerIdentityExtractor
+
+BearerIdentityExtractor ..> AppConfig : appConfig
+BearerIdentityExtractor ..> OutboundClientResources : outboundClientResources
+URI ..> AppConfig : appConfig
+WebClient ..> OutboundClientResources : outboundClientResources
+PolicyEngine ..> PolicyProvider : policyProvider
+PolicyEngine ..> InspectionResources : inspectionResources
+PiiShadowProxyService ..> AppConfig : appConfig
+PiiShadowProxyService ..> BypassProxyService : bypassProxyService
+PiiShadowProxyService ..> InspectionResources : inspectionResources
+PiiShadowProxyService ..> PolicyEngine : policyEngine
+PiiShadowProxyService ..> BearerIdentityExtractor : identityExtractor
+PiiShadowProxyService ..> ResponseAnalysisLifecycle : responseAnalysisLifecycle
+SdkTracerProvider ..> AppConfig : appConfig
+Tracer ..> SdkTracerProvider : sdkTracerProvider
+SdkMeterProvider ..> AppConfig : appConfig
+Meter ..> SdkMeterProvider : sdkMeterProvider
+TracingService ..> PiiShadowProxyService : piiShadowProxyService
+TracingService ..> Tracer : tracer
+TracingService ..> AppConfig : appConfig
+MetricsService ..> TracingService : tracingService
+MetricsService ..> Meter : meter
+Server ..> AppConfig : appConfig
+Server ..> LivenessService : livenessService
+Server ..> ReadinessService : readinessService
+Server ..> TrafficAdmissionService : trafficAdmissionService
+Server ..> ResponseAnalysisLifecycle : responseAnalysisLifecycle
+TrafficAdmissionService --> MetricsService : delegate
+TrafficAdmissionService --> ReadinessService : readinessService
+BypassProxyService --> URI : upstreamUri
+BypassProxyService --> WebClient : upstream
+InspectionResources --> AppConfig : appConfig
+OutboundClientResources --> AppConfig : appConfig
+OutboundClientResources --> Meter : meter
+OutboundClientResources --> Tracer : tracer
+
+AppComponent ..> Server : предоставляет
+AppComponent ..> PolicyProvider : предоставляет
+
+note bottom of AppComponent
+  Metro: createGraph<AppComponent>() в Main.kt.
+  Все 21 биндинг: @SingleIn(AppScope::class).
+  14 фабрик @Provides находятся в companion object.
+  7 классов создаются через @Inject.
+end note
+
+note bottom of BearerIdentityExtractor
+  appConfig.identity выбирает одну реализацию:
+  DUMMY / JWT / EXTERNAL.
+  External lookup используется только в EXTERNAL.
+end note
+
+note bottom of PiiShadowProxyService
+  Стрелки @Provides показывают входы фабрики,
+  а не обязательно поля конструктора класса.
+  PolicyEngine передаётся во вложенные workflows.
+  InspectionResources отдаёт квоту и executor.
+end note
+
+legend left
+  |= Обозначение |= Значение |
+  | <<Provides>> | Биндинг из фабрики AppComponent |
+  | <<Inject>> | Конструктор, вызываемый Metro |
+  | Сплошная стрелка | Параметр @Inject-конструктора |
+  | Пунктирная стрелка | Параметр @Provides-фабрики |
+  | Пустой треугольник | Реализация интерфейса |
+  | Область | Все DI-биндинги и их входы; внутренние helper-объекты опущены |
+endlegend
+@enduml
