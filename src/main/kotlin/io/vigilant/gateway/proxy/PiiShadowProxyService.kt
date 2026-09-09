@@ -23,6 +23,7 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Future
+import java.util.concurrent.FutureTask
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
@@ -65,7 +66,11 @@ class PiiShadowProxyService internal constructor(
         return extractIdentity(ctx, request, inspectionSpan)
     }
 
-    /** Starts async identity extraction on the blocking-safe executor before body demand. */
+    /**
+     * Starts identity extraction and resumes each caller on the existing inspection executor.
+     * Shared lookup completion may run under another request's context, so the continuation
+     * enters this request's context only after dispatch; cancellation owns each queued task.
+     */
     private fun extractIdentity(
         ctx: ServiceRequestContext,
         request: HttpRequest,
@@ -75,18 +80,18 @@ class PiiShadowProxyService internal constructor(
         val cancellation = IdentityExtractionCancellation(ctx.whenRequestCancelling(), completion) {
             inspectionSpan?.end()
         }
-        try {
-            val task = inspectionExecutor.submit {
-                val extractionContext =
-                    inspectionSpan?.let { span -> Context.root().with(span) } ?: Context.current()
-                val extraction =
-                    ctx.push().use {
-                        extractionContext.makeCurrent().use {
-                            identityExtractor.extract(request.headers())
-                        }
+        scheduleIdentityTask(cancellation, completion, inspectionSpan) {
+            val extractionContext =
+                inspectionSpan?.let { span -> Context.root().with(span) } ?: Context.current()
+            val extraction =
+                ctx.push().use {
+                    extractionContext.makeCurrent().use {
+                        identityExtractor.extract(request.headers())
+                    }
                 }
-                cancellation.installExtraction(extraction)
-                extraction.whenComplete { result, failure ->
+            cancellation.installExtraction(extraction)
+            extraction.whenComplete { result, failure ->
+                scheduleIdentityTask(cancellation, completion, inspectionSpan) {
                     completeIdentityExtraction(
                         result = result,
                         failure = failure,
@@ -98,7 +103,21 @@ class PiiShadowProxyService internal constructor(
                     }
                 }
             }
-            cancellation.installTask(task)
+        }
+        return HttpResponse.of(completion)
+    }
+
+    /** Publishes a cancellable task before dispatch and maps executor rejection to the existing error. */
+    private fun scheduleIdentityTask(
+        cancellation: IdentityExtractionCancellation,
+        completion: CompletableFuture<HttpResponse>,
+        inspectionSpan: Span?,
+        action: () -> Unit,
+    ) {
+        val task = FutureTask { action() }
+        cancellation.installTask(task)
+        try {
+            inspectionExecutor.execute(task)
         } catch (_: java.util.concurrent.RejectedExecutionException) {
             if (cancellation.claimResult()) {
                 inspectionSpan?.setStatus(StatusCode.ERROR)
@@ -106,7 +125,6 @@ class PiiShadowProxyService internal constructor(
                 completion.complete(OpenAiErrorResponses.of(OpenAiErrorOutcome.REQUEST_INSPECTION_UNAVAILABLE))
             }
         }
-        return HttpResponse.of(completion)
     }
 
     /** Publishes the sole identity terminal result after it wins the claim against cancellation. */

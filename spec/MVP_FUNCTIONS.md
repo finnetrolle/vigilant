@@ -59,8 +59,9 @@ External Identity Extractor получает пользователя и groups 
 upstream byte-for-byte. Vigilant временно использует его только для lookup и
 никогда не помещает token в audit, logs, metrics, traces или errors.
 
-Результат lookup кэшируется отдельной bounded capability. Cache miss, timeout
-или failure identity lookup не дают обойти policy: request получает `503`.
+Результат lookup кэшируется отдельной bounded capability. Cache miss ожидает
+новый Bridge lookup; timeout или failure lookup возвращает `503`, не позволяя
+обойти policy или использовать stale identity.
 Детали extractor и cache принадлежат [VIG-30](issues/issue_30_external_identity_extractor.md)
 и [VIG-31](issues/issue_31_identity_lookup_cache.md).
 

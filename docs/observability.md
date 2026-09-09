@@ -152,8 +152,10 @@ CLIENT span также под тем же настроенным именем. �
 Один поддержанный запрос прокси создаёт SERVER span и три непосредственных
 дочерних span: INTERNAL `vigilant.request.inspect`, HTTP CLIENT span вышестоящего
 запроса и INTERNAL `vigilant.response.inspect` после retained response ingest.
-В External mode request inspection дополнительно владеет дочерним CLIENT span
-`vigilant.identity.external.lookup`. Полное
+В External mode создатель cache miss дополнительно владеет дочерним CLIENT span
+`vigilant.identity.external.lookup`. Ready hit и joined requests не создают
+Bridge spans или links. Shared span сохраняет parent инициатора, даже если
+инициатор отменён при оставшихся callers, и живёт до shared terminal event. Полное
 происхождение и момент передачи контекста показаны
 на диаграмме последовательности UML 2.0
 [tracing-sequence.puml](diagrams/tracing-sequence.puml).
@@ -162,8 +164,9 @@ CLIENT span также под тем же настроенным именем. �
 identity CLIENT является child request inspection span. Request inspection
 завершается после принятия решения и создания upstream response exchange;
 CLIENT span живёт до завершения upstream exchange, response inspection span — до final
-response outcome. Все четыре span несут один
-trace ID и attribute `session.id`.
+response outcome. Основные SERVER, request/response INTERNAL и upstream CLIENT
+spans одного HTTP request несут его trace ID и attribute `session.id`; shared
+identity CLIENT сохраняет trace ID создателя lookup и finite identity attributes.
 
 SERVER span также содержит method, path без query, status,
 `upstream.duration_ms`, `gateway.duration_ms`, а также flags
@@ -202,6 +205,17 @@ Gateway создаёт следующие OpenTelemetry instruments:
 | `vigilant.proxy.gateway.duration` | histogram | `s` | нет |
 | `vigilant.identity.external.lookups` | counter | `{lookup}` | `identity.mode=EXTERNAL`, `identity.outcome`, optional `http.response.status_class` |
 | `vigilant.identity.external.lookup.duration` | histogram | `s` | те же finite attributes |
+| `vigilant.identity.external.cache.requests` | counter | `{request}` | `identity.mode=EXTERNAL`, `cache.result=hit\|miss` |
+| `vigilant.identity.external.cache.coalesced` | counter | `{request}` | `identity.mode=EXTERNAL` |
+| `vigilant.identity.external.cache.removals` | counter | `{entry}` | `identity.mode=EXTERNAL`, `cache.removal.reason=expired\|size` |
+
+Каждый lookup открытого cache считает ровно один hit/miss. Join считается
+miss и coalesced: три callers cold key дают miss=3, coalesced=2, один Bridge.
+Waiter overload считается miss без coalesced и Bridge call. Removals отражают
+фактическое expiry/size удаление после library maintenance; failure, cancellation,
+replacement и explicit close не считаются removal. Telemetry failure не меняет
+identity outcome. Token, digest, HMAC secret и user/groups исключены из всех
+logs, audit, metrics, traces и errors, per-user dimensions отсутствуют.
 
 Метрики не содержат payload, headers, query, identity или tenant dimensions.
 Proxy overhead не вычисляется на production traffic: его измеряет отдельный

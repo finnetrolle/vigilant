@@ -522,11 +522,12 @@ internal abstract class GatewayE2eTestSupport {
         )
     }
 
-    /** Creates one enabled response policy with the supplied detected reaction. */
+    /** Creates one enabled response policy with the supplied detected reaction and exact identity subject. */
     protected fun responsePolicy(
         id: String,
         detected: Reaction,
         deadline: Duration = Duration.ofSeconds(2),
+        subject: PolicySubject = PolicySubject(SubjectType.ANY, SubjectId("*")),
     ): Policy {
         val allow = Reaction(Disposition.ALLOW, emptyList())
         return Policy(
@@ -537,7 +538,7 @@ internal abstract class GatewayE2eTestSupport {
                     url = "*",
                     model = "*",
                     phase = PolicyPhase.RESPONSE,
-                    subject = PolicySubject(SubjectType.ANY, SubjectId("*")),
+                    subject = subject,
                 ),
             detectors = listOf(DetectorId("fast-pii")),
             deadline = deadline,

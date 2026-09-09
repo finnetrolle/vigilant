@@ -42,6 +42,7 @@ import io.vigilant.gateway.chatCompletionsBody
 import io.vigilant.gateway.chatCompletionsRequest
 import io.vigilant.gateway.chatCompletionsRequestWithBody
 import io.vigilant.gateway.closeAllResources
+import io.vigilant.gateway.renderForSecretScan
 import io.vigilant.gateway.TEST_DUMMY_AUTHORIZATION
 import io.vigilant.gateway.INVALID_UPSTREAM_RESPONSE_BODY
 import io.vigilant.gateway.VALID_CHAT_COMPLETIONS_RESPONSE_BODY
@@ -54,6 +55,9 @@ import io.vigilant.gateway.config.DummyIdentitySettings
 import io.vigilant.gateway.config.ExternalIdentitySettings
 import io.vigilant.gateway.identity.BearerIdentityExtractor
 import io.vigilant.gateway.identity.BridgeIdentityClient
+import io.vigilant.gateway.identity.CachingExternalIdentityLookup
+import io.vigilant.gateway.identity.ExternalIdentityCacheKeyHasher
+import io.vigilant.gateway.identity.CapturingTimeoutScheduler
 import io.vigilant.gateway.identity.DummyIdentityExtractor
 import io.vigilant.gateway.identity.ExternalIdentityExtractor
 import io.vigilant.gateway.identity.ExternalIdentityLookup
@@ -125,6 +129,10 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.Executor
+import java.util.concurrent.ScheduledExecutorService
+import io.opentelemetry.api.trace.Tracer
 import kotlin.concurrent.thread
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -141,6 +149,1283 @@ import org.slf4j.LoggerFactory
 /** Real HTTP E2E tests for Dummy, JWT, and External identity with tracing, metrics, and shutdown. */
 @Suppress("LargeClass")
 internal class GatewayIdentityE2eTest : GatewayE2eTestSupport() {
+    /** Captures all application, audit, and library logging surfaces once for privacy scenarios. */
+    private val cachePrivacyEvents by lazy { fixture.attachAppenderTo("ROOT") }
+
+    /**
+     * Continuation admission and cancellation remain owned when shared completion returns to the
+     * existing executor.
+     */
+    @TestFactory
+    @Suppress("LongMethod") // Keeps each causal acceptance scenario and its independent observations together.
+    fun `identity continuation rejection and queued cancellation precede body demand`():
+        List<DynamicTest> =
+        listOf(false, true).map { reject ->
+            DynamicTest.dynamicTest("identity-continuation-reject=$reject") {
+                val spanOffset = spans.size
+                val release = CountDownLatch(1)
+                val executor =
+                    java.util.concurrent.ThreadPoolExecutor(
+                        1,
+                        1,
+                        0,
+                        TimeUnit.SECONDS,
+                        java.util.concurrent.LinkedBlockingQueue(),
+                    )
+                closeables += AutoCloseable {
+                    release.countDown()
+                    executor.shutdownNow()
+                }
+                val extraction =
+                    CompletableFuture<io.vigilant.gateway.identity.IdentityExtractionResult>()
+                val reached = CountDownLatch(1)
+                val demand = AtomicBoolean()
+                val upstreamCalls = AtomicInteger()
+                val upstream = fixture.startServer {
+                    upstreamCalls.incrementAndGet()
+                    validChatCompletionsResponse()
+                }
+                val gateway =
+                    startShadowGateway(
+                        fixture.serverUri(upstream),
+                        inspectionExecutor = executor,
+                        identityExtractor =
+                            BearerIdentityExtractor {
+                                reached.countDown()
+                                extraction
+                            },
+                        requestBodyDemandObserved = demand,
+                    )
+                val response =
+                    isolatedGatewayClient(fixture.serverUri(gateway))
+                        .execute(chatCompletionsRequest("queued-continuation"))
+                val result = response.aggregate()
+                assertTrue(reached.await(2, TimeUnit.SECONDS))
+                executor.submit {}.get(2, TimeUnit.SECONDS)
+                if (reject) {
+                    executor.shutdown()
+                    assertTrue(executor.awaitTermination(2, TimeUnit.SECONDS))
+                } else {
+                    val blocked = CountDownLatch(1)
+                    executor.submit {
+                        blocked.countDown()
+                        assertTrue(release.await(5, TimeUnit.SECONDS))
+                    }
+                    assertTrue(blocked.await(2, TimeUnit.SECONDS))
+                }
+                extraction.complete(
+                    io.vigilant.gateway.identity.IdentityExtractionResult.Success(
+                        io.vigilant.context.NormalizedIdentity("test-user", emptySet())
+                    )
+                )
+                if (reject) assertRequestInspectionUnavailable(result.get(3, TimeUnit.SECONDS))
+                else {
+                    val queued = executor.queue.single() as java.util.concurrent.Future<*>
+                    assertFalse(queued.isDone)
+                    response.abort()
+                    assertTrue(
+                        fixture.awaitUntil(Duration.ofSeconds(2)) { queued.isCancelled },
+                        "cancel must reach the queued continuation",
+                    )
+                    release.countDown()
+                    executor.submit {}.get(2, TimeUnit.SECONDS)
+                    assertTrue(result.isCompletedExceptionally)
+                }
+                assertTrue(
+                    fixture.awaitUntil(Duration.ofSeconds(2)) {
+                        spans.drop(spanOffset).any { it.name == "vigilant.request.inspect" }
+                    },
+                    "inspection span must close after continuation rejection/cancellation",
+                )
+                assertFalse(demand.get())
+                assertEquals(0, upstreamCalls.get())
+            }
+        }
+
+    /**
+     * Cancellation and owner shutdown cannot expose retained identities, active token digests, or
+     * the process secret.
+     */
+    @TestFactory
+    @Suppress("LongMethod")
+    fun `cache cancellation and shutdown keep every observation surface private`():
+        List<DynamicTest> =
+        listOf(false, true).map { shutdown ->
+            DynamicTest.dynamicTest("cache-privacy-shutdown=$shutdown") {
+                val eventsStart = cachePrivacyEvents.size
+                val spansStart = spans.size
+                val reader = TestMetricReader()
+                val meters =
+                    SdkMeterProvider.builder()
+                        .registerMetricReader(reader)
+                        .build()
+                        .also(closeables::add)
+                val tracers =
+                    SdkTracerProvider.builder()
+                        .addSpanProcessor(SimpleSpanProcessor.builder(spanExporter).build())
+                        .build()
+                        .also(closeables::add)
+                val secret = "cache-secret-0123456789abcdefghi"
+                val token = "terminal-token-$shutdown-87cd"
+                val user = "terminal-user-$shutdown-24de"
+                val group = "terminal-group-$shutdown-13ef"
+                val hasher = ExternalIdentityCacheKeyHasher { secret.toByteArray().copyInto(it) }
+                val digests = listOf(token, "$token-active").map(hasher::keyFor)
+                val calls = AtomicInteger()
+                val cancellations = AtomicInteger()
+                val reached = CountDownLatch(1)
+                val bridge =
+                    fixture.startServer(
+                        HttpService { ctx, request ->
+                            calls.incrementAndGet()
+                            if (request.headers().get("authorization") == "Bearer $token") {
+                                HttpResponse.of(
+                                    HttpStatus.OK,
+                                    MediaType.JSON,
+                                    """{"user":"$user","groups":["$group"]}""",
+                                )
+                            } else {
+                                ctx.whenRequestCancelling().thenRun {
+                                    cancellations.incrementAndGet()
+                                }
+                                reached.countDown()
+                                HttpResponse.streaming()
+                            }
+                        }
+                    )
+                val upstreamCalls = AtomicInteger()
+                val upstream = fixture.startServer {
+                    upstreamCalls.incrementAndGet()
+                    validChatCompletionsResponse()
+                }
+                val demand = AtomicBoolean()
+                val cache =
+                    newCachedExternalLookup(
+                        URI("${fixture.serverUri(bridge)}/identity"),
+                        meter = meters.get("private-terminal"),
+                        tracer = tracers.get("private-terminal"),
+                        hasher = hasher,
+                    )
+                val gateway =
+                    startShadowGateway(
+                        fixture.serverUri(upstream),
+                        identityExtractor = ExternalIdentityExtractor(cache),
+                        requestBodyDemandObserved = demand,
+                    )
+                val client = isolatedGatewayClient(fixture.serverUri(gateway))
+                val publicResponses = mutableListOf<String>()
+                repeat(2) {
+                    val response =
+                        client
+                            .execute(
+                                chatCompletionsRequestWithBody(
+                                    chatCompletionsBody("warm-$it"),
+                                    "Bearer $token",
+                                )
+                            )
+                            .aggregate()
+                            .get(3, TimeUnit.SECONDS)
+                    assertEquals(HttpStatus.OK, response.status())
+                    publicResponses += response.toString()
+                }
+                assertEquals(1, calls.get())
+                demand.set(false)
+                val active =
+                    List(2) {
+                        client.execute(
+                            chatCompletionsRequestWithBody(
+                                chatCompletionsBody("private-active-$it"),
+                                "Bearer $token-active",
+                            )
+                        )
+                    }
+                val results = active.map { it.aggregate() }
+                assertTrue(reached.await(2, TimeUnit.SECONDS))
+                assertTrue(
+                    fixture.awaitUntil(Duration.ofSeconds(2)) {
+                        reader
+                            .collectAllMetrics()
+                            .singleOrNull { it.name.endsWith(".cache.coalesced") }
+                            ?.longSumData
+                            ?.points
+                            ?.singleOrNull()
+                            ?.value == 1L
+                    }
+                )
+                if (shutdown) cache.close() else active.forEach { it.abort() }
+                assertTrue(
+                    fixture.awaitUntil(Duration.ofSeconds(3)) {
+                        cancellations.get() == 1 && results.all { it.isDone }
+                    }
+                )
+                results.forEach {
+                    if (shutdown) {
+                        val response = it.get(1, TimeUnit.SECONDS)
+                        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.status())
+                        publicResponses += response.toString()
+                    } else assertTrue(it.isCompletedExceptionally)
+                }
+                assertFalse(demand.get())
+                assertEquals(2, upstreamCalls.get())
+                assertEquals(2, calls.get())
+                assertTrue(
+                    fixture.awaitUntil(Duration.ofSeconds(3)) {
+                        cachePrivacyEvents.drop(eventsStart).count { event ->
+                            event.keyValuePairs.orEmpty().any {
+                                it.key == "event.name" && it.value == "request_completed"
+                            }
+                        } == 4 &&
+                            spans.drop(spansStart).count {
+                                it.name == "vigilant.identity.external.lookup"
+                            } == 2
+                    },
+                    "terminal telemetry must be published before privacy assertions",
+                )
+                val metrics = reader.collectAllMetrics()
+                val lookupPoints =
+                    metrics
+                        .single { it.name == "vigilant.identity.external.lookups" }
+                        .longSumData
+                        .points
+                assertEquals(
+                    1L,
+                    lookupPoints
+                        .single { it.attributes.get(stringKey("identity.outcome")) == "cancelled" }
+                        .value,
+                )
+                assertTrue(
+                    cachePrivacyEvents.drop(eventsStart).any { event ->
+                        event.keyValuePairs.orEmpty().any {
+                            it.key == "event.name" && it.value == "policy.analysis_completed"
+                        }
+                    }
+                )
+                cache.close()
+                val surfaces =
+                    cachePrivacyEvents.drop(eventsStart).joinToString("\n") {
+                        it.renderForSecretScan()
+                    } +
+                        spans.drop(spansStart) +
+                        metrics +
+                        reader.collectAllMetrics() +
+                        publicResponses
+                (listOf(token, user, group, secret) + digests).forEach {
+                    assertFalse(surfaces.contains(it))
+                }
+            }
+        }
+
+    /** A held cold key does not serialize another key's Bridge exchange or policy outcome. */
+    @Test
+    @Suppress("LongMethod") // Keeps each causal acceptance scenario and its independent observations together.
+    fun `cache independent cold keys complete without waiting for one another`() {
+        val authorizations = CopyOnWriteArrayList<String>()
+        val held = CompletableFuture<HttpResponse>()
+        val reached = CountDownLatch(1)
+        val bridge = fixture.startServer { request ->
+            val authorization = requireNotNull(request.headers().get("authorization"))
+            authorizations += authorization
+            if (authorization == "Bearer slow-key") {
+                reached.countDown()
+                HttpResponse.of(held)
+            } else
+                HttpResponse.of(
+                    HttpStatus.OK,
+                    MediaType.JSON,
+                    """{"user":"same-user","groups":["restricted"]}""",
+                )
+        }
+        val upstream = fixture.startServer {
+            HttpResponse.of(
+                HttpStatus.OK,
+                MediaType.JSON,
+                """{"choices":[{"message":{"role":"assistant","content":"person@example.com"}}]}""",
+            )
+        }
+        val cache = newCachedExternalLookup(URI("${fixture.serverUri(bridge)}/identity"))
+        val gateway =
+            startShadowGateway(
+                fixture.serverUri(upstream),
+                identityExtractor = ExternalIdentityExtractor(cache),
+                policyProvider =
+                    DummyPolicyProvider(
+                        listOf(
+                            shadowPolicy(Duration.ofSeconds(2)),
+                            responsePolicy(
+                                "independent-key-policy",
+                                Reaction(Disposition.BLOCK, emptyList()),
+                                subject = PolicySubject(SubjectType.GROUP, SubjectId("restricted")),
+                            ),
+                        )
+                    ),
+            )
+        val client = isolatedGatewayClient(fixture.serverUri(gateway))
+        val slow =
+            client
+                .execute(
+                    chatCompletionsRequestWithBody(chatCompletionsBody("slow"), "Bearer slow-key")
+                )
+                .aggregate()
+        assertTrue(reached.await(2, TimeUnit.SECONDS))
+        val fast =
+            client
+                .execute(
+                    chatCompletionsRequestWithBody(chatCompletionsBody("fast"), "Bearer fast-key")
+                )
+                .aggregate()
+                .get(3, TimeUnit.SECONDS)
+        assertEquals(HttpStatus.FORBIDDEN, fast.status())
+        assertEquals(RESPONSE_BLOCKED_BODY, fast.contentUtf8())
+        assertFalse(
+            slow.isDone,
+            "independent key must complete while the first Bridge exchange remains held",
+        )
+        assertEquals(listOf("Bearer slow-key", "Bearer fast-key"), authorizations)
+        held.complete(
+            HttpResponse.of(HttpStatus.OK, MediaType.JSON, """{"user":"same-user","groups":[]}""")
+        )
+        assertEquals(HttpStatus.OK, slow.get(3, TimeUnit.SECONDS).status())
+        assertEquals(2, authorizations.size)
+    }
+
+    /**
+     * A joined HTTP caller observes the original Bridge timeout command without creating or
+     * replacing its deadline.
+     */
+    @Test
+    @Suppress("LongMethod") // Keeps each causal acceptance scenario and its independent observations together.
+    fun `cache join retains the original real bridge deadline`() {
+        val scheduler =
+            CapturingTimeoutScheduler().also { closeables += AutoCloseable { it.shutdownNow() } }
+        val reader = TestMetricReader()
+        val meters =
+            SdkMeterProvider.builder().registerMetricReader(reader).build().also(closeables::add)
+        val calls = AtomicInteger()
+        val reached = CountDownLatch(1)
+        val cancelled = CountDownLatch(1)
+        val bridge =
+            fixture.startServer(
+                HttpService { ctx, _ ->
+                    calls.incrementAndGet()
+                    ctx.whenRequestCancelling().thenRun(cancelled::countDown)
+                    reached.countDown()
+                    HttpResponse.streaming()
+                }
+            )
+        val upstreamCalls = AtomicInteger()
+        val upstream = fixture.startServer {
+            upstreamCalls.incrementAndGet()
+            validChatCompletionsResponse()
+        }
+        val demand = AtomicBoolean()
+        val cache =
+            newCachedExternalLookup(
+                URI("${fixture.serverUri(bridge)}/identity"),
+                meter = meters.get("shared-deadline"),
+                timeoutScheduler = scheduler,
+            )
+        val gateway =
+            startShadowGateway(
+                fixture.serverUri(upstream),
+                identityExtractor = ExternalIdentityExtractor(cache),
+                requestBodyDemandObserved = demand,
+            )
+        val client = isolatedGatewayClient(fixture.serverUri(gateway))
+        val first =
+            client
+                .execute(
+                    chatCompletionsRequestWithBody(
+                        chatCompletionsBody("first"),
+                        "Bearer deadline-token",
+                    )
+                )
+                .aggregate()
+        assertTrue(reached.await(2, TimeUnit.SECONDS))
+        val originalDeadline = scheduler.capturedCommand()
+        val joined =
+            client
+                .execute(
+                    chatCompletionsRequestWithBody(
+                        chatCompletionsBody("joined"),
+                        "Bearer deadline-token",
+                    )
+                )
+                .aggregate()
+        assertTrue(
+            fixture.awaitUntil(Duration.ofSeconds(2)) {
+                reader
+                    .collectAllMetrics()
+                    .singleOrNull { it.name.endsWith(".cache.coalesced") }
+                    ?.longSumData
+                    ?.points
+                    ?.singleOrNull()
+                    ?.value == 1L
+            }
+        )
+        assertFalse(first.isDone)
+        assertFalse(joined.isDone)
+        originalDeadline.run()
+        listOf(first, joined).forEach {
+            val response = it.get(3, TimeUnit.SECONDS)
+            assertEquals(HttpStatus.SERVICE_UNAVAILABLE, response.status())
+            assertEquals(IDENTITY_UNAVAILABLE_BODY, response.contentUtf8())
+            assertEquals("1", response.headers().get("retry-after"))
+            assertEquals(MediaType.JSON, response.contentType())
+        }
+        assertTrue(cancelled.await(2, TimeUnit.SECONDS))
+        assertEquals(1, calls.get())
+        assertFalse(demand.get())
+        assertEquals(0, upstreamCalls.get())
+        val lookups =
+            reader.collectAllMetrics().single { it.name == "vigilant.identity.external.lookups" }
+        assertEquals(1L, lookups.longSumData.points.single().value)
+        assertEquals(
+            "timeout",
+            lookups.longSumData.points.single().attributes.get(stringKey("identity.outcome")),
+        )
+    }
+
+    /**
+     * Real cancellation reaches the sole shared exchange only after the final caller leaves or the
+     * owner closes.
+     */
+    @TestFactory
+    @Suppress("LongMethod") // Keeps each causal acceptance scenario and its independent observations together.
+    fun `cache last cancellation and close abort the real shared bridge exactly once`():
+        List<DynamicTest> =
+        listOf("single", "last-of-three", "close").map { terminal ->
+            DynamicTest.dynamicTest("cache-http-$terminal") {
+                val reader = TestMetricReader()
+                val meters =
+                    SdkMeterProvider.builder()
+                        .registerMetricReader(reader)
+                        .build()
+                        .also(closeables::add)
+                val calls = AtomicInteger()
+                val cancellations = AtomicInteger()
+                val reached = CountDownLatch(1)
+                val bridge =
+                    fixture.startServer(
+                        HttpService { ctx, _ ->
+                            if (calls.incrementAndGet() == 1) {
+                                ctx.whenRequestCancelling().thenRun {
+                                    cancellations.incrementAndGet()
+                                }
+                                reached.countDown()
+                                HttpResponse.streaming()
+                            } else
+                                HttpResponse.of(
+                                    HttpStatus.OK,
+                                    MediaType.JSON,
+                                    """{"user":"cancel-user","groups":[]}""",
+                                )
+                        }
+                    )
+                val upstreamCalls = AtomicInteger()
+                val upstream = fixture.startServer {
+                    upstreamCalls.incrementAndGet()
+                    validChatCompletionsResponse()
+                }
+                val demand = AtomicBoolean()
+                val cache =
+                    newCachedExternalLookup(
+                        URI("${fixture.serverUri(bridge)}/identity"),
+                        meter = meters.get("cache-terminal"),
+                    )
+                val gateway =
+                    startShadowGateway(
+                        fixture.serverUri(upstream),
+                        identityExtractor = ExternalIdentityExtractor(cache),
+                        requestBodyDemandObserved = demand,
+                    )
+                val client = isolatedGatewayClient(fixture.serverUri(gateway))
+                val count = if (terminal == "single") 1 else 3
+                val responses =
+                    List(count) {
+                        client.execute(
+                            chatCompletionsRequestWithBody(
+                                chatCompletionsBody("cancel-$it"),
+                                "Bearer cancel-token",
+                            )
+                        )
+                    }
+                val results = responses.map { it.aggregate() }
+                assertTrue(reached.await(2, TimeUnit.SECONDS))
+                if (count > 1)
+                    assertTrue(
+                        fixture.awaitUntil(Duration.ofSeconds(2)) {
+                            reader
+                                .collectAllMetrics()
+                                .singleOrNull { it.name.endsWith(".cache.coalesced") }
+                                ?.longSumData
+                                ?.points
+                                ?.singleOrNull()
+                                ?.value == 2L
+                        },
+                        "all callers must join before cancellation",
+                    )
+                assertEquals(1, calls.get())
+                if (terminal == "close") {
+                    cache.close()
+                    cache.close()
+                } else
+                    responses.forEach {
+                        it.abort()
+                        it.abort()
+                    }
+                assertTrue(
+                    fixture.awaitUntil(Duration.ofSeconds(3)) { cancellations.get() == 1 },
+                    "Bridge cancellation absent",
+                )
+                assertTrue(
+                    fixture.awaitUntil(Duration.ofSeconds(3)) { results.all { it.isDone } },
+                    "caller cleanup absent",
+                )
+                results.forEach {
+                    if (terminal == "close")
+                        assertEquals(
+                            HttpStatus.INTERNAL_SERVER_ERROR,
+                            it.get(1, TimeUnit.SECONDS).status(),
+                        )
+                    else assertTrue(it.isCompletedExceptionally)
+                }
+                assertFalse(demand.get())
+                assertEquals(0, upstreamCalls.get())
+                if (terminal == "close") {
+                    assertTrue(cache.lookup("cancel-token").isCancelled)
+                    assertEquals(1, calls.get())
+                } else {
+                    val retry =
+                        client
+                            .execute(
+                                chatCompletionsRequestWithBody(
+                                    chatCompletionsBody("fresh-after-cancel"),
+                                    "Bearer cancel-token",
+                                )
+                            )
+                            .aggregate()
+                            .get(3, TimeUnit.SECONDS)
+                    assertEquals(HttpStatus.OK, retry.status())
+                    assertEquals(VALID_CHAT_COMPLETIONS_RESPONSE_BODY, retry.contentUtf8())
+                    assertEquals(2, calls.get())
+                    assertEquals(1, upstreamCalls.get())
+                }
+                assertEquals(
+                    1,
+                    cancellations.get(),
+                    "repeated cancellation must not create another Bridge terminal event",
+                )
+            }
+        }
+
+    /**
+     * Published join counters gate real cancellation and parentage assertions for one shared Bridge
+     * exchange. Each surviving caller's exported server, upstream and inspection spans gate its
+     * parentage assertions independently of HTTP response completion.
+     */
+    @TestFactory
+    @Suppress("LongMethod", "CyclomaticComplexMethod")
+    fun `cache shared misses preserve bridge span ownership through success failure and partial cancellation`():
+        List<DynamicTest> =
+        listOf("success", "provider-failure", "cancel-initiator", "cancel-joiner").mapIndexed {
+            caseIndex,
+            outcome ->
+            DynamicTest.dynamicTest("cache-shared-$outcome") {
+                val reader = TestMetricReader()
+                val meterProvider =
+                    SdkMeterProvider.builder()
+                        .registerMetricReader(reader)
+                        .build()
+                        .also(closeables::add)
+                val tracerProvider =
+                    SdkTracerProvider.builder()
+                        .addSpanProcessor(SimpleSpanProcessor.builder(spanExporter).build())
+                        .build()
+                        .also(closeables::add)
+                val calls = AtomicInteger()
+                val reached = CountDownLatch(1)
+                val cancellations = AtomicInteger()
+                val release = CompletableFuture<HttpResponse>()
+                val identity = """{"user":"shared-user","groups":["shared-group"]}"""
+                val bridge =
+                    fixture.startServer(
+                        HttpService { ctx, _ ->
+                            ctx.whenRequestCancelling().thenRun { cancellations.incrementAndGet() }
+                            if (calls.incrementAndGet() == 1) {
+                                reached.countDown()
+                                HttpResponse.of(release)
+                            } else HttpResponse.of(HttpStatus.OK, MediaType.JSON, identity)
+                        }
+                    )
+                val upstreamCalls = AtomicInteger()
+                val upstream = fixture.startServer {
+                    upstreamCalls.incrementAndGet()
+                    validChatCompletionsResponse()
+                }
+                val demand = AtomicBoolean()
+                val cache =
+                    newCachedExternalLookup(
+                        URI("${fixture.serverUri(bridge)}/identity"),
+                        meter = meterProvider.get("cache-shared-http"),
+                        tracer = tracerProvider.get("cache-shared-http"),
+                    )
+                val gateway =
+                    startShadowGateway(
+                        fixture.serverUri(upstream),
+                        identityExtractor = ExternalIdentityExtractor(cache),
+                        requestBodyDemandObserved = demand,
+                    )
+                val client = isolatedGatewayClient(fixture.serverUri(gateway))
+                val traceIds = (1..4).map { (caseIndex * 10 + it).toString(16).padStart(32, '0') }
+                /**
+                 * Gives each HTTP caller an independent trace while retaining the same exact Bearer
+                 * credential.
+                 */
+                fun request(index: Int): HttpResponse =
+                    client.execute(
+                        HttpRequest.of(
+                            RequestHeaders.builder(HttpMethod.POST, "/v1/chat/completions")
+                                .contentType(MediaType.JSON)
+                                .add("authorization", "Bearer shared-token")
+                                .add("traceparent", "00-${traceIds[index]}-0123456789abcdef-01")
+                                .build(),
+                            HttpData.ofUtf8(chatCompletionsBody("shared-$index")),
+                        )
+                    )
+                val count = if (outcome.startsWith("cancel")) 2 else 3
+                val responses = mutableListOf(request(0))
+                val results = mutableListOf(responses.single().aggregate())
+                assertTrue(reached.await(2, TimeUnit.SECONDS))
+                repeat(count - 1) { index ->
+                    responses += request(index + 1)
+                    results += responses.last().aggregate()
+                }
+                assertTrue(
+                    fixture.awaitUntil(Duration.ofSeconds(2)) {
+                        reader
+                            .collectAllMetrics()
+                            .singleOrNull {
+                                it.name == "vigilant.identity.external.cache.coalesced"
+                            }
+                            ?.longSumData
+                            ?.points
+                            ?.singleOrNull()
+                            ?.value == (count - 1).toLong()
+                    },
+                    "join publication absent: ${reader.collectAllMetrics()}",
+                )
+                assertEquals(1, calls.get())
+                assertFalse(demand.get())
+                assertEquals(0, upstreamCalls.get())
+                assertFalse(
+                    spans.any {
+                        it.name == "vigilant.identity.external.lookup" &&
+                            it.traceId == traceIds.first()
+                    }
+                )
+                val cancelledIndex =
+                    when (outcome) {
+                        "cancel-initiator" -> 0
+                        "cancel-joiner" -> 1
+                        else -> -1
+                    }
+                if (cancelledIndex >= 0) {
+                    responses[cancelledIndex].abort()
+                    assertTrue(
+                        fixture.awaitUntil(Duration.ofSeconds(2)) {
+                            spans.any {
+                                it.name == "vigilant.request.inspect" &&
+                                    it.traceId == traceIds[cancelledIndex]
+                            }
+                        },
+                        "cancelled request inspection did not finish",
+                    )
+                    assertEquals(
+                        0,
+                        cancellations.get(),
+                        "partial cancellation reached shared Bridge",
+                    )
+                    assertFalse(
+                        spans.any {
+                            it.name == "vigilant.identity.external.lookup" &&
+                                it.traceId == traceIds.first()
+                        }
+                    )
+                }
+                release.complete(
+                    if (outcome == "provider-failure") HttpResponse.of(HttpStatus.FORBIDDEN)
+                    else HttpResponse.of(HttpStatus.OK, MediaType.JSON, identity)
+                )
+                results.forEachIndexed { index, result ->
+                    if (index == cancelledIndex) assertTrue(result.isCompletedExceptionally)
+                    else {
+                        val response = result.get(3, TimeUnit.SECONDS)
+                        assertEquals(
+                            if (outcome == "provider-failure") HttpStatus.SERVICE_UNAVAILABLE
+                            else HttpStatus.OK,
+                            response.status(),
+                        )
+                        assertEquals(
+                            if (outcome == "provider-failure") IDENTITY_UNAVAILABLE_BODY
+                            else VALID_CHAT_COMPLETIONS_RESPONSE_BODY,
+                            response.contentUtf8(),
+                        )
+                        if (outcome == "provider-failure") {
+                            assertEquals("1", response.headers().get("retry-after"))
+                            assertEquals(MediaType.JSON, response.contentType())
+                        }
+                    }
+                }
+                assertTrue(
+                    fixture.awaitUntil(Duration.ofSeconds(2)) {
+                        spans.any {
+                            it.name == "vigilant.identity.external.lookup" &&
+                                it.traceId == traceIds.first()
+                        } &&
+                            spans.any {
+                                it.name == "vigilant.request.inspect" &&
+                                    it.traceId == traceIds.first()
+                            }
+                    },
+                    "shared Bridge span or initiating inspection span missing",
+                )
+                val sharedSpan = spans.single {
+                    it.name == "vigilant.identity.external.lookup" && it.traceId == traceIds.first()
+                }
+                val initiatingSpan = spans.single {
+                    it.name == "vigilant.request.inspect" && it.traceId == traceIds.first()
+                }
+                assertEquals(SpanKind.CLIENT, sharedSpan.kind)
+                assertEquals(initiatingSpan.spanId, sharedSpan.parentSpanId)
+                assertEquals(
+                    if (outcome == "provider-failure") "provider_status" else "success",
+                    sharedSpan.attributes.get(stringKey("identity.outcome")),
+                )
+                assertEquals(
+                    1,
+                    spans.count {
+                        it.name == "vigilant.identity.external.lookup" && it.traceId in traceIds
+                    },
+                )
+                if (outcome != "provider-failure") {
+                    val inspectionSpanNames =
+                        listOf("vigilant.request.inspect", "vigilant.response.inspect")
+                    (0 until count)
+                        .filter { it != cancelledIndex }
+                        .forEach { index ->
+                            var callerSpans = emptyList<SpanData>()
+                            assertTrue(
+                                fixture.awaitUntil(Duration.ofSeconds(2)) {
+                                    callerSpans = spans.filter { it.traceId == traceIds[index] }
+                                    callerSpans.any { it.kind == SpanKind.SERVER } &&
+                                        callerSpans.any {
+                                            it.kind == SpanKind.CLIENT &&
+                                                it.name != "vigilant.identity.external.lookup"
+                                        } &&
+                                        inspectionSpanNames.all { name ->
+                                            callerSpans.any { it.name == name }
+                                        }
+                                },
+                                "surviving caller spans not published: ${callerSpans.map { it.name to it.kind }}",
+                            )
+                            val server = callerSpans.single { it.kind == SpanKind.SERVER }
+                            val upstream = callerSpans.single {
+                                it.kind == SpanKind.CLIENT &&
+                                    it.name != "vigilant.identity.external.lookup"
+                            }
+                            assertEquals(server.spanId, upstream.parentSpanId)
+                            inspectionSpanNames.forEach { name ->
+                                assertEquals(
+                                    server.spanId,
+                                    callerSpans.single { it.name == name }.parentSpanId,
+                                )
+                            }
+                        }
+                }
+                if (cancelledIndex >= 0)
+                    assertFalse(
+                        spans.any {
+                            it.traceId == traceIds[cancelledIndex] &&
+                                it.kind == SpanKind.CLIENT &&
+                                it.name != "vigilant.identity.external.lookup"
+                        },
+                        "cancelled caller must not create an upstream exchange",
+                    )
+                val requests =
+                    reader.collectAllMetrics().single {
+                        it.name == "vigilant.identity.external.cache.requests"
+                    }
+                assertEquals(count.toLong(), requests.longSumData.points.single().value)
+                assertEquals(
+                    "miss",
+                    requests.longSumData.points.single().attributes.get(stringKey("cache.result")),
+                )
+                if (outcome == "provider-failure") {
+                    assertFalse(demand.get())
+                    assertEquals(0, upstreamCalls.get())
+                    assertEquals(
+                        HttpStatus.OK,
+                        request(3).aggregate().get(3, TimeUnit.SECONDS).status(),
+                    )
+                    assertEquals(2, calls.get())
+                } else {
+                    assertEquals(count - if (cancelledIndex >= 0) 1 else 0, upstreamCalls.get())
+                    assertEquals(
+                        HttpStatus.OK,
+                        request(3).aggregate().get(3, TimeUnit.SECONDS).status(),
+                    )
+                    assertTrue(
+                        fixture.awaitUntil(Duration.ofSeconds(2)) {
+                            spans.any {
+                                it.name == "vigilant.request.inspect" && it.traceId == traceIds[3]
+                            }
+                        }
+                    )
+                    assertEquals(1, calls.get())
+                    assertEquals(
+                        1,
+                        spans.count {
+                            it.name == "vigilant.identity.external.lookup" && it.traceId in traceIds
+                        },
+                    )
+                }
+            }
+        }
+
+    /**
+     * Every expired-cache failure path rejects before body demand and recovers through a fresh real
+     * Bridge exchange.
+     */
+    @TestFactory
+    @Suppress("LongMethod", "CyclomaticComplexMethod")
+    fun `cache expiry never serves stale identity on bridge failure or waiter overload`():
+        List<DynamicTest> =
+        listOf("provider-status", "invalid-response", "transport-error", "timeout", "overloaded")
+            .map { family ->
+                DynamicTest.dynamicTest("cache-expired-$family") {
+                    val eventOffset = cachePrivacyEvents.size
+                    val spanOffset = spans.size
+                    val reader = TestMetricReader()
+                    val meters =
+                        SdkMeterProvider.builder()
+                            .registerMetricReader(reader)
+                            .build()
+                            .also(closeables::add)
+                    val tracers =
+                        SdkTracerProvider.builder()
+                            .addSpanProcessor(SimpleSpanProcessor.builder(spanExporter).build())
+                            .build()
+                            .also(closeables::add)
+                    val token = "cache-private-token-$family-92ad"
+                    val user = "cache-private-user-$family-73be"
+                    val group = "cache-private-group-$family-64cf"
+                    val secret = "cache-secret-0123456789abcdefghi"
+                    val hasher = ExternalIdentityCacheKeyHasher { target ->
+                        secret.toByteArray().copyInto(target)
+                    }
+                    val digest = hasher.keyFor(token)
+                    val now = AtomicLong()
+                    val calls = AtomicInteger()
+                    val failing = AtomicBoolean()
+                    val heldReached = CountDownLatch(1)
+                    val cancelled = CountDownLatch(1)
+                    val identity = """{"user":"$user","groups":["$group"]}"""
+                    val endpoint =
+                        if (family == "transport-error") {
+                            RawHttp1TestUpstream("cache-transport") { output ->
+                                    calls.incrementAndGet()
+                                    if (failing.get()) {
+                                        output.writeAsciiHttp1(
+                                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n" +
+                                                "Content-Length: 1000\r\n\r\n{"
+                                        )
+                                    } else {
+                                        output.writeAsciiHttp1(
+                                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n" +
+                                                "Content-Length: ${identity.length}\r\n\r\n$identity"
+                                        )
+                                    }
+                                }
+                                .also(closeables::add)
+                                .uri
+                        } else {
+                            val bridge =
+                                fixture.startServer(
+                                    HttpService { ctx, _ ->
+                                        calls.incrementAndGet()
+                                        if (!failing.get())
+                                            HttpResponse.of(HttpStatus.OK, MediaType.JSON, identity)
+                                        else
+                                            when (family) {
+                                                "provider-status" ->
+                                                    HttpResponse.of(
+                                                        HttpStatus.FORBIDDEN,
+                                                        MediaType.JSON,
+                                                        "bridge-payload-sentinel",
+                                                    )
+                                                "invalid-response" ->
+                                                    HttpResponse.of(
+                                                        HttpStatus.OK,
+                                                        MediaType.JSON,
+                                                        "{bridge-payload-sentinel",
+                                                    )
+                                                else -> {
+                                                    ctx.whenRequestCancelling()
+                                                        .thenRun(cancelled::countDown)
+                                                    heldReached.countDown()
+                                                    HttpResponse.streaming()
+                                                }
+                                            }
+                                    }
+                                )
+                            URI("${fixture.serverUri(bridge)}/identity")
+                        }
+                    val upstreamCalls = AtomicInteger()
+                    val upstream = fixture.startServer {
+                        upstreamCalls.incrementAndGet()
+                        validChatCompletionsResponse()
+                    }
+                    val demand = AtomicBoolean()
+                    val cache =
+                        newCachedExternalLookup(
+                            endpoint,
+                            Duration.ofNanos(10),
+                            now::get,
+                            maxWaiters = 1,
+                            timeout =
+                                if (family == "timeout") Duration.ofMillis(500)
+                                else Duration.ofSeconds(5),
+                            meter = meters.get("cache-private"),
+                            tracer = tracers.get("cache-private"),
+                            hasher = hasher,
+                        )
+                    val gateway =
+                        startShadowGateway(
+                            fixture.serverUri(upstream),
+                            identityExtractor = ExternalIdentityExtractor(cache),
+                            requestBodyDemandObserved = demand,
+                        )
+                    val client = isolatedGatewayClient(fixture.serverUri(gateway))
+                    val authorization = "Bearer $token"
+                    assertEquals(
+                        HttpStatus.OK,
+                        client
+                            .execute(
+                                chatCompletionsRequestWithBody(
+                                    chatCompletionsBody("warm"),
+                                    authorization,
+                                )
+                            )
+                            .aggregate()
+                            .get(3, TimeUnit.SECONDS)
+                            .status(),
+                    )
+                    assertEquals(
+                        HttpStatus.OK,
+                        client
+                            .execute(
+                                chatCompletionsRequestWithBody(
+                                    chatCompletionsBody("hit"),
+                                    authorization,
+                                )
+                            )
+                            .aggregate()
+                            .get(3, TimeUnit.SECONDS)
+                            .status(),
+                    )
+                    assertEquals(1, calls.get())
+                    assertEquals(2, upstreamCalls.get())
+                    now.set(10)
+                    failing.set(true)
+                    demand.set(false)
+                    val holder =
+                        if (family == "overloaded") {
+                            client
+                                .execute(
+                                    chatCompletionsRequestWithBody(
+                                        chatCompletionsBody("held-body"),
+                                        "Bearer other-token",
+                                    )
+                                )
+                                .also {
+                                    it.aggregate()
+                                    assertTrue(heldReached.await(2, TimeUnit.SECONDS))
+                                }
+                        } else null
+                    val failed =
+                        client
+                            .execute(
+                                chatCompletionsRequestWithBody(
+                                    chatCompletionsBody("failure-body-sentinel"),
+                                    authorization,
+                                )
+                            )
+                            .aggregate()
+                            .get(3, TimeUnit.SECONDS)
+                    assertEquals(HttpStatus.SERVICE_UNAVAILABLE, failed.status())
+                    assertEquals(IDENTITY_UNAVAILABLE_BODY, failed.contentUtf8())
+                    assertEquals(MediaType.JSON, failed.contentType())
+                    assertEquals("1", failed.headers().get("retry-after"))
+                    assertEquals(null, failed.headers().get("www-authenticate"))
+                    assertFalse(demand.get(), "expired failure demanded body: $family")
+                    assertEquals(
+                        2,
+                        upstreamCalls.get(),
+                        "expired failure reached upstream: $family",
+                    )
+                    assertEquals(2, calls.get())
+                    if (family == "timeout") assertTrue(cancelled.await(2, TimeUnit.SECONDS))
+                    if (holder != null) {
+                        holder.abort()
+                        assertTrue(cancelled.await(2, TimeUnit.SECONDS))
+                    }
+                    failing.set(false)
+                    val recovered =
+                        client
+                            .execute(
+                                chatCompletionsRequestWithBody(
+                                    chatCompletionsBody("recovery"),
+                                    authorization,
+                                )
+                            )
+                            .aggregate()
+                            .get(3, TimeUnit.SECONDS)
+                    assertEquals(HttpStatus.OK, recovered.status())
+                    assertEquals(VALID_CHAT_COMPLETIONS_RESPONSE_BODY, recovered.contentUtf8())
+                    assertEquals(3, calls.get(), "failure must not be cached")
+                    assertEquals(3, upstreamCalls.get())
+                    assertTrue(
+                        fixture.awaitUntil(Duration.ofSeconds(3)) {
+                            cachePrivacyEvents.drop(eventOffset).count { event ->
+                                event.keyValuePairs.orEmpty().any {
+                                    it.key == "event.name" && it.value == "request_completed"
+                                }
+                            } >= if (holder == null) 4 else 5
+                        },
+                        "request logs must be published before the privacy snapshot",
+                    )
+                    assertTrue(
+                        fixture.awaitUntil(Duration.ofSeconds(3)) {
+                            spans.drop(spanOffset).count {
+                                it.name == "vigilant.identity.external.lookup"
+                            } == 3
+                        },
+                        "Bridge spans must be published before the privacy snapshot",
+                    )
+                    val events = cachePrivacyEvents.drop(eventOffset)
+                    assertTrue(
+                        events.any { event ->
+                            event.keyValuePairs.orEmpty().any {
+                                it.key == "event.name" && it.value == "policy.analysis_completed"
+                            }
+                        },
+                        "successful cached requests must actually emit audit before its privacy assertion",
+                    )
+                    val beforeClose = reader.collectAllMetrics()
+                    assertTrue(
+                        beforeClose.any { it.name == "vigilant.identity.external.cache.requests" }
+                    )
+                    cache.close()
+                    val surfaces =
+                        events.joinToString("\n") { it.renderForSecretScan() } +
+                            spans.drop(spanOffset) +
+                            beforeClose +
+                            reader.collectAllMetrics() +
+                            failed +
+                            recovered
+                    listOf(token, digest, user, group, secret, "bridge-payload-sentinel").forEach {
+                        assertFalse(surfaces.contains(it), "sensitive value escaped on $family")
+                    }
+                }
+            }
+
+    /**
+     * Builds real Bridge transport with the production decorator and controlled cache-only test
+     * seams.
+     */
+    @Suppress("LongParameterList")
+    private fun newCachedExternalLookup(
+        endpoint: URI,
+        ttl: Duration = Duration.ofMinutes(10),
+        nanoTime: () -> Long = System::nanoTime,
+        maxWaiters: Int = 4,
+        timeout: Duration = Duration.ofSeconds(5),
+        meter: Meter = OpenTelemetry.noop().getMeter("cache-http-test"),
+        tracer: Tracer = OpenTelemetry.noop().getTracer("cache-http-test"),
+        hasher: ExternalIdentityCacheKeyHasher = ExternalIdentityCacheKeyHasher(),
+        timeoutScheduler: ScheduledExecutorService? = null,
+    ): CachingExternalIdentityLookup {
+        val webClient = isolatedUnboundClient()
+        val bridge =
+            BridgeIdentityClient(
+                    ExternalIdentitySettings(endpoint, timeout),
+                    webClient,
+                    timeoutScheduler ?: webClient.options().factory().eventLoopGroup().next(),
+                    maxWaiters,
+                    meter,
+                    tracer,
+                )
+                .also(closeables::add)
+        return CachingExternalIdentityLookup(
+                delegate = bridge,
+                ttl = ttl,
+                nanoTime = nanoTime,
+                maxWaiters = maxWaiters,
+                meter = meter,
+                hasher = hasher,
+                maintenanceExecutor = Executor(Runnable::run),
+            )
+            .also(closeables::add)
+    }
+
+    /**
+     * Real policy outcomes distinguish token keys, write expiry, and newly fetched group
+     * identities.
+     */
+    @TestFactory
+    @Suppress("LongMethod")
+    fun `cache preserves exact forwarding and token policies through monotonic expiry`():
+        List<DynamicTest> =
+        listOf(10L, 11L).map { age ->
+            DynamicTest.dynamicTest("cache-http-expiry-age=$age") {
+                val now = AtomicLong()
+                val calls = AtomicInteger()
+                val restricted = AtomicBoolean()
+                val firstReached = CountDownLatch(1)
+                val firstRelease = CompletableFuture<HttpResponse>()
+                val bridge = fixture.startServer { request ->
+                    if (calls.incrementAndGet() == 1) {
+                        firstReached.countDown()
+                        HttpResponse.of(firstRelease)
+                    } else {
+                        val groups =
+                            if (
+                                restricted.get() ||
+                                    request.headers().get("authorization") == "Bearer token-B"
+                            ) {
+                                "[\"restricted\"]"
+                            } else "[]"
+                        HttpResponse.of(
+                            HttpStatus.OK,
+                            MediaType.JSON,
+                            """{"user":"same-user","groups":$groups}""",
+                        )
+                    }
+                }
+                val received = CopyOnWriteArrayList<AggregatedHttpRequest>()
+                val upstreamBody =
+                    """{"choices":[{"message":{"role":"assistant","content":"contact person@example.com"}}]}"""
+                val upstream = fixture.startServer { request ->
+                    HttpResponse.of(
+                        request.aggregate().thenApply {
+                            received += it
+                            HttpResponse.of(HttpStatus.OK, MediaType.JSON, upstreamBody)
+                        }
+                    )
+                }
+                val cache =
+                    newCachedExternalLookup(
+                        URI("${fixture.serverUri(bridge)}/identity"),
+                        Duration.ofNanos(10),
+                        now::get,
+                    )
+                val block =
+                    responsePolicy(
+                        "restricted-response",
+                        Reaction(Disposition.BLOCK, emptyList()),
+                        subject = PolicySubject(SubjectType.GROUP, SubjectId("restricted")),
+                    )
+                val policies =
+                    DummyPolicyProvider(
+                        listOf(
+                            shadowPolicy(Duration.ofSeconds(2)),
+                            block,
+                        )
+                    )
+                val demand = AtomicBoolean()
+                val gateway =
+                    startShadowGateway(
+                        fixture.serverUri(upstream),
+                        identityExtractor = ExternalIdentityExtractor(cache),
+                        policyProvider = policies,
+                        requestBodyDemandObserved = demand,
+                    )
+                val client = isolatedGatewayClient(fixture.serverUri(gateway))
+                val expected = mutableListOf<Pair<String, String>>()
+                /**
+                 * Sends exact original bytes and records the independent upstream forwarding
+                 * oracle.
+                 */
+                fun send(
+                    authorization: String,
+                    content: String,
+                ): CompletableFuture<AggregatedHttpResponse> {
+                    val body = chatCompletionsBody(content)
+                    expected += authorization to body
+                    return client
+                        .execute(chatCompletionsRequestWithBody(body, authorization))
+                        .aggregate()
+                }
+                assertEquals(0, calls.get(), "startup must not prewarm")
+                val first = send("bEaReR token-A", "first original body")
+                assertTrue(firstReached.await(2, TimeUnit.SECONDS))
+                assertFalse(demand.get())
+                assertTrue(received.isEmpty())
+                now.set(100)
+                firstRelease.complete(
+                    HttpResponse.of(
+                        HttpStatus.OK,
+                        MediaType.JSON,
+                        """{"user":"same-user","groups":[]}""",
+                    )
+                )
+                assertEquals(upstreamBody, first.get(3, TimeUnit.SECONDS).contentUtf8())
+                assertEquals(
+                    upstreamBody,
+                    send("bEaReR token-A", "second original body")
+                        .get(3, TimeUnit.SECONDS)
+                        .contentUtf8(),
+                )
+                assertEquals(1, calls.get())
+                val otherToken =
+                    send("Bearer token-B", "independent token body").get(3, TimeUnit.SECONDS)
+                assertEquals(HttpStatus.FORBIDDEN, otherToken.status())
+                assertEquals(RESPONSE_BLOCKED_BODY, otherToken.contentUtf8())
+                assertEquals(2, calls.get())
+                listOf(101L, 105L, 109L).forEach { instant ->
+                    now.set(instant)
+                    assertEquals(
+                        upstreamBody,
+                        send("bEaReR token-A", "hit-$instant")
+                            .get(3, TimeUnit.SECONDS)
+                            .contentUtf8(),
+                    )
+                    assertEquals(2, calls.get())
+                }
+                restricted.set(true)
+                now.set(100 + age)
+                assertEquals(2, calls.get(), "idle expiry cannot refresh")
+                val refreshed = send("bEaReR token-A", "fresh groups").get(3, TimeUnit.SECONDS)
+                assertEquals(HttpStatus.FORBIDDEN, refreshed.status())
+                assertEquals(RESPONSE_BLOCKED_BODY, refreshed.contentUtf8())
+                assertEquals(3, calls.get())
+                restricted.set(false)
+                now.set(1_000)
+                assertEquals(3, calls.get(), "long idle cannot refresh")
+                assertEquals(
+                    upstreamBody,
+                    send("bEaReR token-A", "idle refresh").get(3, TimeUnit.SECONDS).contentUtf8(),
+                )
+                assertEquals(4, calls.get())
+                assertEquals(
+                    expected,
+                    received.map {
+                        requireNotNull(it.headers().get("authorization")) to it.contentUtf8()
+                    },
+                )
+            }
+        }
+
     /** One exact invalid Authorization shape and its safe HTTP/audit outcome. */
     private data class IdentityRejectCase(
         /** Diagnostic case name and body-sentinel prefix. */

@@ -40,7 +40,6 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.CyclicBarrier
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
-import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
@@ -1302,24 +1301,6 @@ class BridgeIdentityClientTest {
         /** Safe lookup result, absent only for cancellation. */
         val result: ExternalIdentityLookupResult?,
     )
-
-    /** Captures the production timeout command so a test can release it through a shared race barrier. */
-    private class CapturingTimeoutScheduler : ScheduledThreadPoolExecutor(1) {
-        private val captured = CompletableFuture<Runnable>()
-
-        /** Captures one command while retaining a cancellable scheduled handle for production ownership. */
-        override fun schedule(
-            command: Runnable,
-            delay: Long,
-            unit: TimeUnit,
-        ): ScheduledFuture<*> {
-            captured.complete(command)
-            return super.schedule(command, 1, TimeUnit.DAYS)
-        }
-
-        /** Returns the exact command installed by the Bridge lookup. */
-        fun capturedCommand(): Runnable = captured.get(2, TimeUnit.SECONDS)
-    }
 
     /** Owns one isolated in-memory meter/tracer pair for exact observation assertions. */
     private class TestBridgeTelemetry : AutoCloseable {

@@ -15,12 +15,16 @@ Client -> Server : запрос с необязательными traceparent, t
 activate Server
 Server -> RequestInspect : создать непосредственный дочерний span
 activate RequestInspect
-opt External identity mode
+opt External cold miss creator only (no span on hit/join)
   RequestInspect -> IdentityLookup : создать дочерний CLIENT span
   activate IdentityLookup
   IdentityLookup -> Bridge : exact one-attempt POST
   Bridge --> IdentityLookup : complete response / failure
-  IdentityLookup --> RequestInspect : finite outcome
+  IdentityLookup --> RequestInspect : shared terminal outcome
+  note right of IdentityLookup
+    Initiator parent is retained if it cancels
+    while another caller still waits.
+  end note
   deactivate IdentityLookup
 end
 RequestInspect -> RequestInspect : parse/context/select

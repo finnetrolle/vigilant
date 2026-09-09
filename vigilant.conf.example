@@ -45,6 +45,15 @@ vigilant {
   #   { kty = "RSA", kid = "key-2026-01", n = "<base64url-modulus>", e = "AQAB" }
   # ]
 
+  # External alternative (replace the Dummy or JWT block):
+  # environment = "production"
+  # identity-mode = "EXTERNAL"
+  # identity-external-url = "http://bridge.internal/v1/identity"
+  # identity-external-timeout = 1s
+  # identity-external-cache-ttl = 10m
+  # identity-external-cache-max-size = 10000
+  # Cache settings are optional and forbidden in DUMMY/JWT, even at these defaults.
+
   # OTLP JSON Lines traces и metrics в stdout. Сетевого подключения к Collector нет.
   otlp-enabled = true
 }

@@ -47,6 +47,7 @@ repositories {
 dependencies {
     implementation(platform(libs.opentelemetry.bom))
     implementation(libs.armeria)
+    implementation(libs.caffeine)
     implementation(libs.hoplite.core)
     implementation(libs.hoplite.hocon)
     implementation(libs.jackson.databind)

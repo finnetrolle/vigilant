@@ -79,6 +79,8 @@ vigilant {
   identity-mode = "EXTERNAL"
   identity-external-url = "http://bridge.internal/v1/identity?tenant=platform"
   identity-external-timeout = 1s
+  identity-external-cache-ttl = 10m
+  identity-external-cache-max-size = 10000
 }
 ~~~
 
@@ -114,6 +116,8 @@ variable `VIGILANT_SOME_SETTING`.
 | `VIGILANT_IDENTITY_JWT_JWKS` | Non-empty pinned RSA public JWK list | обязательна в `JWT` |
 | `VIGILANT_IDENTITY_EXTERNAL_URL` | Exact absolute HTTP(S) trusted Bridge endpoint | обязательна в `EXTERNAL` |
 | `VIGILANT_IDENTITY_EXTERNAL_TIMEOUT` | Whole-exchange Bridge deadline | `1s` в `EXTERNAL` |
+| `VIGILANT_IDENTITY_EXTERNAL_CACHE_TTL` | TTL successful identity от записи, без продления на hit | `10m` в `EXTERNAL` |
+| `VIGILANT_IDENTITY_EXTERNAL_CACHE_MAX_SIZE` | Maximum completed entries после Caffeine maintenance | `10000` в `EXTERNAL` |
 | `VIGILANT_OTLP_ENABLED` | Выводит traces и metrics как OTLP JSON Lines в stdout | `true` |
 | `VIGILANT_CONFIG` | Явный путь к HOCON-файлу | не задан |
 
@@ -150,6 +154,12 @@ Complex `VIGILANT_IDENTITY_JWT_JWKS` задаётся strict JSON array с по�
   fallback, health check и runtime switching отсутствуют.
 - External timeout должен быть positive duration в scheduler bound. Он один
   охватывает acquisition, connect, write, response headers и полный body.
+- Обе External cache settings необязательны и независимо используют `env > file > default`.
+  TTL принимает `1..Long.MAX_VALUE` наносекунд, max-size только целое
+  `1..Int.MAX_VALUE`. Zero, negative, empty, malformed, overflow и fractional
+  size отклоняются с safe diagnostic и exit code `2`, без raw input. Явное
+  значение каждой setting, включая default, запрещено в `DUMMY`/JWT. Cache
+  не отключается нулём, startup не обращается в Bridge и не прогревает entries.
 - Dummy user/groups используют grammar
   `[A-Za-z0-9][A-Za-z0-9._:@/\-]{0,127}` и `Locale.ROOT` lowercase. Groups
   дедуплицируются с сохранением первого порядка и ограничены 128 уникальными

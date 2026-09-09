@@ -39,12 +39,15 @@ internal fun chatCompletionsRequest(
     stream: Boolean = false,
 ): HttpRequest = chatCompletionsRequestWithBody(chatCompletionsBody(content, stream))
 
-/** Builds one authenticated supported-path request around an exact caller-supplied body. */
-internal fun chatCompletionsRequestWithBody(body: String): HttpRequest =
+/** Builds one supported-path request preserving the caller's exact body and Authorization representation. */
+internal fun chatCompletionsRequestWithBody(
+    body: String,
+    authorization: String = TEST_DUMMY_AUTHORIZATION,
+): HttpRequest =
     HttpRequest.of(
         RequestHeaders.builder(HttpMethod.POST, CHAT_COMPLETIONS_PATH)
             .contentType(MediaType.JSON)
-            .add("authorization", TEST_DUMMY_AUTHORIZATION)
+            .add("authorization", authorization)
             .build(),
         HttpData.ofUtf8(body),
     )

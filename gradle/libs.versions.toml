@@ -6,6 +6,7 @@ opentelemetry = "1.64.0"
 slf4j = "2.0.18"
 logback = "1.6.3"
 typesafe-config = "1.4.3"
+caffeine = "3.2.4"
 
 [libraries]
 armeria = { module = "com.linecorp.armeria:armeria", version.ref = "armeria" }
@@ -18,3 +19,4 @@ opentelemetry-exporter-logging-otlp = { module = "io.opentelemetry:opentelemetry
 slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
 logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
 typesafe-config = { module = "com.typesafe:config", version.ref = "typesafe-config" }
+caffeine = { module = "com.github.ben-manes.caffeine:caffeine", version.ref = "caffeine" }

@@ -63,7 +63,16 @@ identity claims. Затем required string `sub` и optional top-level array
 `groups` нормализуются по общему identity contract; missing `groups` даёт
 empty set, а invalid/duplicate normalized values получают safe `400`.
 
-External после shared Bearer parsing выполняет ровно один `POST` на exact
+External после shared Bearer parsing использует process-local Caffeine cache.
+Ключом служит полный HMAC-SHA-256 UTF-8 token в lowercase hex, с отдельным
+32-byte случайным секретом на запуск. Cache хранит только normalized successful
+identity; raw token не удерживается. По умолчанию TTL равен `10m`, maximumSize
+равен `10000` completed entries. `expireAfterWrite` начинается при successful
+completion, hit не продлевает срок, возраст `>= TTL` даёт miss. Expired или
+evicted identity не используется даже при Bridge failure; idle не запускает refresh.
+Caffeine maintenance ограничивает число entries, без обещания точного heap budget.
+
+Создатель cold miss выполняет ровно один `POST` на exact
 configured path/query с единственными provider headers `Authorization: Bearer
 <token>`, `Accept: application/json`, `Content-Length: 0` и без body. Redirect
 не follow-ится. Только `200 application/json` с object, required string `user`
@@ -76,13 +85,23 @@ duplicate-after-normalization identity и больше 128 groups отклоня
 connection acquisition и охватывает acquisition, connect, request write,
 headers и полный response body. Immediate nonfair semaphore использует
 effective `inspection-max-concurrent-request-sources`; N+1 не ждёт в очереди и
-сразу получает unavailable. Client cancellation отменяет lookup и Bridge
-exchange. Graceful drain позволяет admitted lookup завершиться только в своём
-deadline, forced shutdown отменяет его до закрытия общего outbound factory.
+сразу получает unavailable. Decorator отдельно ограничивает тем же `N` всех
+ожидающих callers, включая joins. Miss при исчерпании waiter slots получает
+тот же `503 identity_unavailable`; ready hit не занимает slot или Bridge permit.
+Concurrent misses одного key делят exchange и исходный deadline. Отмена одного
+caller не влияет на остальных, отмена последнего отменяет Bridge exchange.
+Failure и cancellation не кешируются, следующий miss запускает новую попытку.
+Graceful drain позволяет shared lookup завершиться в исходном deadline; forced
+shutdown закрывает cache, затем Bridge и общий outbound factory. Cache close
+отменяет callers, удаляет entries/in-flight state и ссылку на hasher, повторный
+close безопасен; после close даже прежний hit возвращает cancelled future.
+Cache теряется при restart, новый запуск получает новый секрет.
 
 Все extractors запускаются на blocking-safe request executor до body demand;
 Dummy/JWT завершают локальный future, а External связывает его с async Armeria
-exchange.
+exchange. Каждая async continuation возвращается на тот же inspection executor
+и входит в контекст своего request, даже если shared lookup завершён под
+контекстом инициатора.
 Raw token и decoded claim values не сохраняются и не попадают в audit, logs,
 metrics, traces или errors; policy context получает только normalized
 user/groups. Принятый Authorization передаётся upstream с исходным значением

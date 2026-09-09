@@ -1,6 +1,8 @@
 package io.vigilant.gateway
 
 import com.linecorp.armeria.common.HttpResponse
+import com.linecorp.armeria.common.HttpStatus
+import com.linecorp.armeria.common.MediaType
 import com.linecorp.armeria.server.HttpService
 import io.vigilant.gateway.config.DummyIdentitySettings
 import io.vigilant.gateway.config.ExternalIdentitySettings
@@ -34,6 +36,55 @@ import org.junit.jupiter.api.TestFactory
 /** Focused startup selection evidence for the common Bearer identity contract. */
 class AppComponentIdentityTest {
     private val fixture = GatewayTestFixture()
+
+    /**
+     * The application-owned External lookup caches normalized successes from its real Bridge
+     * client.
+     */
+    @Test
+    fun `external outbound owner caches repeated identity lookups`() {
+        val calls = AtomicInteger()
+        val bridge = fixture.startServer {
+            calls.incrementAndGet()
+            HttpResponse.of(
+                HttpStatus.OK,
+                MediaType.JSON,
+                """{"user":"alice","groups":["operators"]}""",
+            )
+        }
+        val config =
+            loadAppConfig(
+                env =
+                    mapOf(
+                        "VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081",
+                        "VIGILANT_ENVIRONMENT" to "test",
+                        "VIGILANT_IDENTITY_MODE" to "EXTERNAL",
+                        "VIGILANT_IDENTITY_EXTERNAL_URL" to "${fixture.serverUri(bridge)}/identity",
+                        "VIGILANT_IDENTITY_EXTERNAL_CACHE_TTL" to "5s",
+                        "VIGILANT_IDENTITY_EXTERNAL_CACHE_MAX_SIZE" to "1",
+                    ),
+                defaultConfigPaths = emptyList(),
+            )
+        val telemetry = OpenTelemetry.noop()
+        OutboundClientResources(
+                config,
+                telemetry.getMeter("cache-owner"),
+                telemetry.getTracer("cache-owner"),
+            )
+            .use { owner ->
+                assertEquals(0, calls.get(), "startup must not warm the cache")
+                val lookup = requireNotNull(owner.externalIdentityLookup)
+                repeat(2) {
+                    val result =
+                        assertIs<ExternalIdentityLookupResult.Resolved>(
+                            lookup.lookup("owner-token").get(2, TimeUnit.SECONDS)
+                        )
+                    assertEquals("alice", result.identity.user)
+                    assertEquals(setOf("operators"), result.identity.groups)
+                }
+                assertEquals(1, calls.get())
+            }
+    }
 
     /** Stops every real Bridge server after its ownership scenario. */
     @AfterTest
@@ -76,7 +127,10 @@ class AppComponentIdentityTest {
         )
     }
 
-    /** CFG-15: Dummy and JWT resource owners do not construct a Bridge client or semaphore. */
+    /**
+     * CFG-15: Dummy and JWT resource owners do not construct the External cache, hasher,
+     * Bridge client, or semaphore.
+     */
     @Test
     fun `dummy and jwt outbound resources contain no external client`() {
         val base =

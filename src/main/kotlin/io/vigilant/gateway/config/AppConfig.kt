@@ -190,6 +190,8 @@ data class UpstreamClientSettings(
  * @param identityJwtJwks pinned RSA public JWK set.
  * @param identityExternalUrl exact trusted Bridge endpoint.
  * @param identityExternalTimeout optional whole-exchange timeout; absence selects the documented default.
+ * @param identityExternalCacheTtl optional completed-entry lifetime, permitted only in External mode.
+ * @param identityExternalCacheMaxSize optional completed-entry capacity, permitted only in External mode.
  */
 internal data class VigilantSettings(
     val environment: String? = null,
@@ -216,6 +218,8 @@ internal data class VigilantSettings(
     val identityJwtJwks: List<IdentityJwkSettings> = emptyList(),
     val identityExternalUrl: String? = null,
     val identityExternalTimeout: Duration? = null,
+    val identityExternalCacheTtl: Duration? = null,
+    val identityExternalCacheMaxSize: String? = null,
     val otlpEnabled: Boolean = true,
 )
 
@@ -263,6 +267,8 @@ internal fun loadAppConfig(
         is Validated.Valid -> result.value
         is Validated.Invalid -> {
             val description = result.error.description()
+            require(!description.contains("identityExternalCacheTtl")) { INVALID_EXTERNAL_CACHE_TTL }
+            require(!description.contains("identityExternalCacheMaxSize")) { INVALID_EXTERNAL_CACHE_SIZE }
             require(!description.contains("identityExternalTimeout")) {
                 "VIGILANT_IDENTITY_EXTERNAL_TIMEOUT must contain a valid positive duration"
             }

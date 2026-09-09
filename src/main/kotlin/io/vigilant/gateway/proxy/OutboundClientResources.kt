@@ -9,6 +9,8 @@ import io.opentelemetry.api.trace.Tracer
 import io.vigilant.gateway.config.AppConfig
 import io.vigilant.gateway.config.ExternalIdentitySettings
 import io.vigilant.gateway.identity.BridgeIdentityClient
+import io.vigilant.gateway.identity.CachingExternalIdentityLookup
+import io.vigilant.gateway.identity.ExternalIdentityCacheKeyHasher
 import io.vigilant.gateway.identity.ExternalIdentityLookup
 import io.vigilant.lifecycle.runAllCleanupActions
 import java.util.concurrent.atomic.AtomicBoolean
@@ -18,7 +20,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  * complete application lifecycle.
  *
  * The upstream client always exists. The distinct Bridge client exists only in
- * External identity mode and is closed before the shared factory.
+ * External identity mode. Its cache decorator closes before Bridge work and the shared factory.
  */
 @SingleIn(AppScope::class)
 @Inject
@@ -40,18 +42,30 @@ class OutboundClientResources(
                 tracer = tracer,
             )
         }
+    private val cachingExternalIdentityLookup = bridgeIdentityClient?.let { bridge ->
+        val settings = appConfig.identity as ExternalIdentitySettings
+        CachingExternalIdentityLookup(
+            delegate = bridge,
+            ttl = settings.cacheTtl,
+            maxSize = settings.cacheMaxSize,
+            maxWaiters = appConfig.inspection.requestSourceLimits.maxConcurrentRequestSources,
+            hasher = ExternalIdentityCacheKeyHasher(),
+            meter = meter,
+        )
+    }
 
     /** Upstream web client sharing the application-owned connection factory. */
     val upstreamWebClient: WebClient = buildUpstreamWebClient(appConfig.upstream, factory)
 
     /** External lookup when and only when External mode selected it at startup. */
     internal val externalIdentityLookup: ExternalIdentityLookup?
-        get() = bridgeIdentityClient
+        get() = cachingExternalIdentityLookup
 
-    /** Cancels Bridge work, then closes the sole shared outbound connection factory. */
+    /** Closes cache ownership, cancels Bridge work, then closes the sole shared outbound connection factory. */
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         runAllCleanupActions(
+            { cachingExternalIdentityLookup?.close() },
             { bridgeIdentityClient?.close() },
             { factory.closeAsync().join() },
         )

@@ -14,6 +14,8 @@ node "Процесс Vigilant" as Vigilant {
   component "TracingService" as Tracing
   component "PiiShadowProxyService" as ShadowProxy
   component "BearerIdentityExtractor\nDummy / offline JWT / External" as Identity
+  component "CachingExternalIdentityLookup\nCaffeine completed + bounded in-flight" as Cache
+  component "ExternalIdentityCacheKeyHasher\nprocess-local HMAC-SHA-256" as Hasher
   component "BridgeIdentityClient\ntimeout + admission + telemetry" as BridgeClient
   component "OutboundClientResources\none ClientFactory" as Outbound
   component "ShadowInspectionWorkflow" as Workflow
@@ -39,7 +41,11 @@ Admission --> Metrics
 Metrics --> Tracing
 Tracing --> ShadowProxy
 ShadowProxy --> Identity : blocking-safe validation\nдо body demand
-Identity --> BridgeClient : External only\nasync exact token lookup
+Identity --> Cache : External only\nasync exact token lookup
+Cache --> Hasher : transient token -> full digest
+Cache --> BridgeClient : cold miss creator only
+Outbound --> Cache : close first; callers + entries
+Outbound --> Hasher : one EXTERNAL instance
 BridgeClient --> Bridge : POST exact endpoint\nempty body
 Outbound --> BridgeClient : shared factory lifecycle
 Outbound --> Transport : shared factory lifecycle

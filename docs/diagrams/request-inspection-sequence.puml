@@ -8,6 +8,8 @@ participant "TrafficAdmissionService" as Admission
 participant "PiiShadowProxyService" as Proxy
 participant "Blocking-safe request executor" as Executor
 participant "BearerIdentityExtractor" as Identity
+participant "CachingExternalIdentityLookup" as Cache
+participant "ExternalIdentityCacheKeyHasher" as Hasher
 participant "BridgeIdentityClient" as BridgeClient
 participant "Trusted identity Bridge" as Bridge
 participant "BoundedRequestSource" as Source
@@ -35,10 +37,26 @@ else дескриптор поддерживается
   Proxy -> Executor : проверить identity до body demand
   Executor -> Identity : single Bearer header
   alt External mode
-    Identity -> BridgeClient : exact non-empty token
-    BridgeClient -> Bridge : POST configured path/query\nBearer token + empty body
-    Bridge --> BridgeClient : complete response или failure
-    BridgeClient --> Identity : normalized identity / unavailable / cancellation
+    Identity -> Cache : exact non-empty token
+    Cache -> Hasher : full HMAC-SHA-256 key
+    alt ready unexpired hit
+      Cache --> Identity : normalized identity; no slot/permit/span
+    else admitted joined miss
+      Cache -> Cache : independent caller, same original deadline
+    else admitted new miss
+      Cache -> BridgeClient : sole delegate operation
+      BridgeClient -> Bridge : POST configured path/query\nBearer token + empty body
+      Bridge --> BridgeClient : complete response или failure
+      BridgeClient --> Cache : normalized identity / unavailable / cancellation
+      Cache -> Cache : cache success before fan-out; release slots
+    else exhausted waiter slots
+      Cache --> Identity : existing OVERLOADED
+    end
+    Cache --> Identity : independent caller outcome
+    note right of Cache
+      Only final caller cancellation aborts Bridge.
+      Close drops entries, in-flight state and hasher.
+    end
   else Dummy или JWT
     Identity -> Identity : configured identity или\noffline RS256 + pinned JWK + claims
   end
@@ -46,7 +64,7 @@ else дескриптор поддерживается
     Identity --> Executor : typed safe failure
     Executor --> Client : 400/401 или External 503\nбез audit pair и body demand
   else identity нормализована
-    Identity --> Executor : normalized user/groups
+    Identity --> Executor : dispatch caller continuation\nunder its own request context
     Executor -> Source : принять с обратным давлением и квотами
     Source --> Proxy : полный источник
     Proxy -> Workflow : передать владение источником

@@ -56,9 +56,17 @@ blocking-safe request executor. Development/test `DummyIdentityExtractor`
 `OfflineJwtIdentityExtractor` локально выбирает pinned RSA public key по exact
 `kid`, проверяет RS256 signature, issuer, audience и time claims, а только
 после этого нормализует `sub`/`groups`. `ExternalIdentityExtractor` после того
-же shared Bearer boundary передаёт token только `BridgeIdentityClient`, который
-выполняет exact one-attempt HTTP lookup, whole-exchange deadline, immediate
-bounded admission и strict aggregate response parsing. Любой reject предшествует
+же shared Bearer boundary обращается к `CachingExternalIdentityLookup`.
+Decorator хранит successful normalized identity в Caffeine по полному HMAC key,
+полученному от отдельного process-local `ExternalIdentityCacheKeyHasher`.
+Write TTL и maximumSize ограничивают completed entries, in-flight registry
+объединяет misses одного key и ограничивает всех ожидающих existing owner limit.
+Ready hit не требует Bridge permit. Только создатель miss вызывает
+`BridgeIdentityClient`, который выполняет exact one-attempt HTTP lookup,
+whole-exchange deadline, immediate bounded admission и strict aggregate parsing.
+Отмена последнего caller отменяет shared lookup; failure не кешируется.
+Продолжение каждого caller выполняется на existing inspection executor под
+его собственным request context, независимо от контекста завершения shared lookup. Любой reject предшествует
 body demand и upstream call. Raw token не сохраняется, а принятый Authorization
 передаётся upstream без изменения.
 
@@ -233,8 +241,15 @@ configured concurrent-source limit. Policy detector waits и deadlines такж�
 | Inspection orchestration | `InspectionResources` | virtual-thread executor |
 | Fast PII CPU | `InspectionResources` | bounded fixed-size pool и bounded queue |
 | LLM и Bridge connections | `OutboundClientResources` | один shared Armeria `ClientFactory`; distinct WebClient per target |
+| External completed identity и in-flight callers | `CachingExternalIdentityLookup` | configurable write TTL/maximumSize; immediate waiter limit `N`; expiry/eviction не затрагивают pending lookup |
+| HMAC secret | `ExternalIdentityCacheKeyHasher` | 32 random bytes на запуск EXTERNAL, fresh JCA Mac на каждый token |
 | External identity admission | `BridgeIdentityClient` | immediate nonfair semaphore из request-source concurrency limit |
 | Traces и metrics | `SdkTracerProvider`, `SdkMeterProvider` | process-wide providers, stdout exporters |
+
+`OutboundClientResources` создаёт decorator и hasher только в EXTERNAL.
+Close через `runAllCleanupActions` пытается закрыть cache, Bridge, затем factory;
+первый failure сохраняется, остальные suppressed. Cache удаляет entries,
+отменяет свои callers/delegate futures и освобождает ссылку на hasher.
 
 ## Startup и shutdown
 
@@ -265,7 +280,7 @@ Quiet period и force timeout настраиваются. Полный опер�
 | Admission и probes | `gateway/health/*` |
 | Request inspection | `gateway/proxy/PiiShadowProxyService.kt`, `ShadowInspectionWorkflow.kt`, `ReplayReadyRequest.kt`, `InspectionResources.kt` |
 | Response inspection и lifecycle | `gateway/proxy/RetainedResponseHandler.kt`, `gateway/proxy/ResponseInspectionWorkflow.kt`, `gateway/proxy/ReplayReadyResponse.kt`, `gateway/proxy/ResponseAnalysisLifecycle.kt`, `source/RetainedResponseSource.kt` |
-| Transport и outbound lifecycle | `gateway/proxy/BypassProxyService.kt`, `gateway/proxy/OutboundClientResources.kt`, `gateway/identity/BridgeIdentityClient.kt` |
+| Transport и outbound lifecycle | `gateway/proxy/BypassProxyService.kt`, `gateway/proxy/OutboundClientResources.kt`, `gateway/identity/BridgeIdentityClient.kt`, `gateway/identity/CachingExternalIdentityLookup.kt`, `gateway/identity/ExternalIdentityCacheKeyHasher.kt` |
 | OpenAI normalization | `protocol/openai/*` |
 | Bounded request source | `source/*` |
 | Policy loading и engine | `policy/config/*`, `policy/selection/*`, `policy/execution/*`, `policy/engine/*` |

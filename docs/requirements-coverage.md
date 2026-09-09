@@ -19,7 +19,7 @@
 | `MVP-02` | Работает | `fast-pii` с полным detector set и UTF-8-safe windowing подключён к request, ordinary-response и SSE-response fragments. |
 | `MVP-03` | Частично | Ordinary JSON и SSE response применяют exact `ALLOW`, source-patched `MASK` и whole-response `BLOCK` с closed VIG-29 errors. Request остаётся shadow-only. |
 | `MVP-04` | Частично | Startup policy snapshot и group matching существуют, но новая direction/group contract и startup policy logging отсутствуют. |
-| `MVP-05` | Частично | Startup-selectable `DUMMY`, offline `JWT` и trusted Bridge `EXTERNAL` реализуют общий async cancellation-aware identity contract. External lookup fail-closed и bounded; VIG-31 cache ещё отсутствует. |
+| `MVP-05` | Работает | Startup-selectable `DUMMY`, offline `JWT` и trusted Bridge `EXTERNAL` реализуют общий async cancellation-aware contract. EXTERNAL использует Caffeine с process-local HMAC keys, configurable write TTL/size, bounded coalescing, независимой cancellation и fail-closed refresh по следующему request. |
 | `MVP-06` | Работает | REQUEST и ordinary JSON/SSE RESPONSE analysis публикуют safe best-effort started/completed pair через existing non-blocking stdout без application-owned persistence. |
 | `MVP-07` | Работает | OpenAI-compatible Chat Completions request и response JSON/SSE parser и enforcement contracts реализованы; другие OpenAI APIs остаются вне MVP. |
 
@@ -37,7 +37,7 @@
 | `PROXY-01` | Работает | Ordinary JSON и SSE удерживаются до EOF/standalone `[DONE]` и final policy decision, после чего атомарно применяют `ALLOW`/`MASK`/`BLOCK`. |
 | `PROXY-02` | Работает | Ordinary JSON и SSE поддерживают byte-identical `ALLOW` и exact-span source-patched `MASK` с lossless preservation незатронутых bytes и header rewrite. |
 | `PROXY-03` | Частично | Все пять VIG-29 rows зафиксированы; ordinary и SSE response реально используют exact `403`, `502` и `503` без partial disclosure. Request `BLOCK` ещё не подключён. |
-| `OBS-01` | Частично | Base HTTP metrics/tracing, REQUEST и RESPONSE audit pairs, inspection spans и External lookup counter/duration/CLIENT span используют bounded safe outcomes. Обязательные identity cache hit/miss metrics появятся с VIG-31. |
+| `OBS-01` | Частично | Base HTTP metrics/tracing, REQUEST и RESPONSE audit pairs, inspection spans и External lookup counter/duration/CLIENT span используют bounded safe outcomes. EXTERNAL cache публикует точные hit/miss, coalesced и actual expiry/size removal counters с finite attributes; hit/join не создают дополнительных Bridge spans. |
 | `OBS-02` | Работает | REQUEST и ordinary/SSE RESPONSE pairs, VIG-29 errors, logs, metrics и traces исключают payload, PII values/spans, credentials, identity/session, upstream details и raw inbound propagation values. Разрешены только safe policy/detector references в stdout и tracing identifiers. |
 
 ## Stage 1 и non-goals

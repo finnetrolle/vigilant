@@ -121,7 +121,7 @@ Issue является листом mind map, если:
 | [VIG-28: Offline trusted JWT Bearer identity extractor](issues/issue_28_keycloak_jwt_identity_extractor.md) | `Done` | завершена | 0 дней осталось |
 | [VIG-29: OpenAI-compatible error contract for enforcement](issues/issue_29_openai_error_contract.md) | `Done` | завершена | 0 дней осталось |
 | [VIG-30: External Bearer identity extractor](issues/issue_30_external_identity_extractor.md) | `Done` | завершена | 0 дней осталось |
-| [VIG-31: Cache external identity lookup](issues/issue_31_identity_lookup_cache.md) | `Ready for implementation` | cache contract и acceptance matrix согласованы | 4-5 инженерных дней |
+| [VIG-31: Cache external identity lookup](issues/issue_31_identity_lookup_cache.md) | `Done` | завершена | 0 дней осталось |
 | [EPIC-32: Best-effort stdout audit migration](epics/epic_32_best_effort_stdout_audit.md) | `Done` | 2/2 | 0 дней осталось |
 | [VIG-33: Availability SLO and operational evidence](issues/issue_33_availability_slo_and_operations.md) | `Draft` | production SLO не определён | не оценено |
 | [VIG-34: Request-side PII enforcement](issues/issue_34_request_pii_enforcement.md) | `Draft` | reaction, rewrite и lifecycle contract требуют диалога | не оценено |
@@ -219,11 +219,11 @@ Issue является листом mind map, если:
   зафиксировать baseline, разделить gateway E2E, изолировать serial process
   tests, устранить обнаруженную health lifecycle instability и квалифицировать
   ровно четыре non-process workers.
-- [ ] После EPIC-37 реализовать
-  [VIG-31](issues/issue_31_identity_lookup_cache.md) (`Ready for implementation`):
+- [x] После EPIC-37 реализовать
+  [VIG-31](issues/issue_31_identity_lookup_cache.md) (`Done`):
   Caffeine decorator и отдельный HMAC hasher, configurable TTL/size,
-  coalescing/cancellation и safe metrics. Уточнение завершено; нагрузочное
-  тестирование cache не входит в issue.
+  coalescing/cancellation и safe metrics реализованы; полный build и packaged
+  lifecycle cases прошли. Нагрузочное тестирование cache не входило в issue.
 - [ ] Провести отдельный requirements dialogue по
   [VIG-34](issues/issue_34_request_pii_enforcement.md), перевести issue в Ready
   и только затем реализовать request `ALLOW`/`MASK`/`BLOCK`.
@@ -236,9 +236,10 @@ Issue является листом mind map, если:
 - [ ] После стабилизации identity, enforcement и observability уточнить
   [VIG-33](issues/issue_33_availability_slo_and_operations.md).
 
-Текущий следующий шаг: реализовать
-[VIG-31](issues/issue_31_identity_lookup_cache.md). Grill-сессия завершена,
-статус `Ready for implementation`, обе hard dependencies имеют `Done`.
+Текущий следующий шаг: отдельный requirements dialogue по
+[VIG-34](issues/issue_34_request_pii_enforcement.md) перед request enforcement.
+[VIG-31](issues/issue_31_identity_lookup_cache.md) завершена: config, HMAC cache,
+HTTP/race/process evidence и full build GREEN; нового performance claim нет.
 EPIC-37 завершена:
 four-worker qualification дала improvement медианы `34.82%`, а все десять
 stability runs прошли с exact `1128` tests и clean process lifecycle.

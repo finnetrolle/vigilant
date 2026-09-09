@@ -2,7 +2,7 @@
 
 - **ID:** `VIG-31`
 - **Тип:** Issue
-- **Статус:** Ready for implementation
+- **Статус:** Done
 - **Приоритет:** High
 - **Зависит от:** [VIG-30](issue_30_external_identity_extractor.md),
   [VIG-37-04](epic_37/issue_37_04_four_worker_qualification.md)
@@ -304,7 +304,7 @@ request-body demand и отсутствие LLM upstream call.
 | `BOUND-02` | После success, каждого failure, timeout, отмены одного и последнего caller повторное заполнение всех `N` slots | Лимит доступен вновь без утечки или double-release; caller `N+1` всё ещё отклоняется |
 | `CANCEL-01` | Отмена инициатора при оставшемся joined caller; отмена joined caller при оставшемся инициаторе | Только выбранный caller отменён; Bridge продолжает; оставшийся получает identity; последующий hit работает |
 | `CANCEL-02` | Отмена единственного caller; отмена последнего из нескольких; повторная cancellation | Bridge server наблюдает cancellation один раз, upstream не вызывается; следующий request запускает fresh lookup |
-| `RACE-01` | Cancellation/close до публикации delegate future; late success старого поколения после нового lookup того же key | Поздно установленный delegate отменяется; старый callback не заполняет cache и не удаляет новое поколение |
+| `RACE-01` | Отмена присоединившегося caller и close до публикации delegate future; late success старого поколения после нового lookup того же key | Partial cancellation отменяет только joined caller, инициатор продолжает lookup; close отменяет поздно установленный delegate. Старый callback не заполняет cache и не удаляет новое поколение |
 | `RACE-02` | Success первым, last cancellation первой, timeout первым, close первым, каждый порядок управляется барьером | Один terminal outcome; winner определяет cache publication; slots и Bridge work освобождаются согласно lifecycle matrix |
 | `RACE-03` | Присоединение перед shared deadline; caller пытается complete/completeExceptionally/obtrude/completeAsync/orTimeout/completeOnTimeout свой future | Join не продлевает Bridge timeout; вмешательство caller не меняет другой caller, cache или владение shared operation |
 | `LIFE-01` | Close пустого cache; close с готовыми entries; close с одним и несколькими активными keys; повторный close | Никакой hit после close, новые lookup отменены без Bridge; все активные operations завершены cancellation, позднее заполнение исключено |
@@ -318,6 +318,12 @@ request-body demand и отсутствие LLM upstream call.
 | `PROC-02` | Packaged startup с invalid TTL, invalid size и cache setting в каждом не-EXTERNAL mode | Exit code `2` и safe diagnostic, без Bridge call; полная invalid-value matrix отдельно в config tests |
 | `PROC-03` | Installed gateway имеет два coalesced активных requests при forced shutdown | Один Bridge exchange отменён, оба clients завершаются; upstream не вызван; процесс выходит в текущем bounded shutdown window |
 | `REG-01` | Existing DUMMY/JWT и VIG-30 success/failure/header validation | Shared Bearer parsing, immutable identity, byte-for-byte forwarding, stable errors и mode isolation сохраняются |
+
+Уточнение `RACE-01`, согласованное при реализации: future инициатора возвращается
+из `lookup` только после установки delegate future. До этого через публичный
+seam доступны partial cancellation присоединившегося caller и close; отмена
+последнего caller проверяется после публикации в `CANCEL-02`. Дополнительный
+executor или production test hook для недоступного извне порядка не вводится.
 
 TTL проверяется fake monotonic clock без реального ожидания десяти минут.
 Concurrent/E2E fixtures используют barriers на наблюдение, которое утверждают:
@@ -376,16 +382,16 @@ production, tests, KDoc, current docs, normative references и work items.
 
 ## Критерии завершения реализации
 
-- [ ] Реализованы Caffeine decorator и отдельный hasher; boundaries и config
+- [x] Реализованы Caffeine decorator и отдельный hasher; boundaries и config
   соответствуют этому контракту.
-- [ ] Для всех строк acceptance matrix и каждого названного варианта есть
+- [x] Для всех строк acceptance matrix и каждого названного варианта есть
   требуемая behavioral evidence, включая lifecycle/race и packaged cases.
-- [ ] Privacy, cancellation, admission, EXTERNAL-only composition и
+- [x] Privacy, cancellation, admission, EXTERNAL-only composition и
   deterministic tests подтверждены; non-goals не расширены.
-- [ ] Обновлены current docs, UML, KDoc/Javadoc и coverage status в пределах
+- [x] Обновлены current docs, UML, KDoc/Javadoc и coverage status в пределах
   реализованного поведения; performance claims не добавлены.
-- [ ] Выполнены TDD RED -> GREEN slices и итоговые проверки ниже.
-- [ ] Перед закрытием повторно прочитаны полная issue, non-goals и diff;
+- [x] Выполнены TDD RED -> GREEN slices и итоговые проверки ниже.
+- [x] Перед закрытием повторно прочитаны полная issue, non-goals и diff;
   closure ledger связывает каждый criterion/non-goal с path, observation,
   independent oracle и exact command/result либо scope-review evidence.
   Unsupported rows, label-only cases, stale contracts и unapproved files
@@ -409,6 +415,28 @@ Targeted команды по соответствующему slice:
 Нагрузочный прогон не является условием `Done`. Handoff в `verify-changes`,
 если он запрошен, требует стандартного `Pre-verification closure` из
 `CLAUDE.md`; сама эта issue не запускает дополнительный workflow.
+
+## Evidence завершения (2026-09-09)
+
+- Behavioral RED -> GREEN slices проверили configuration, HMAC, write TTL,
+  coalescing, cancellation, waiter bound, close, protected caller futures,
+  eviction/metrics и EXTERNAL composition. Real HTTP regression выявила и
+  исправила возврат shared completion под чужим Armeria request context:
+  continuation каждого caller использует existing inspection executor.
+- Итоговый affected suite: hasher, cache, Bridge, cache/config loading,
+  AppComponent identity, GatewayIdentityE2eTest и cleanup helper - GREEN
+  (`test -x processTest` с exact class filters), 4m42s.
+- Все packaged restart/config/shutdown cases прошли в serial `processTest`.
+  Shutdown independently наблюдает один Bridge cancellation и завершение
+  обоих admitted clients; N=2 и отдельный overload доказывают shared admission.
+- `./gradlew validateWorkItems` прошёл перед full build; `./gradlew build`
+  завершился GREEN за 14m31s, включая оба test lanes, detekt и graph validator.
+  Команды выполнялись последовательно через `rtk proxy`, с `--no-daemon`
+  и `-Pkotlin.compiler.execution.strategy=in-process`.
+- Полный closure ledger с отдельной строкой для каждого criterion/non-goal,
+  командами, observations, independent oracles, lifecycle и scope review
+  сохранён локально в ignored `build/reports/vig-31/closure.md`.
+  Нагрузка не запускалась; нового performance evidence claim нет.
 
 ## Проверенные основания и альтернативы
 

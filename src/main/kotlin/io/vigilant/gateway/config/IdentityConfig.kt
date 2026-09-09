@@ -1,3 +1,5 @@
+@file:Suppress("TooManyFunctions")
+
 package io.vigilant.gateway.config
 
 import com.fasterxml.jackson.core.JsonFactory
@@ -43,6 +45,24 @@ private const val IDENTITY_EXTERNAL_TIMEOUT_ENV = "VIGILANT_IDENTITY_EXTERNAL_TI
 
 /** Effective whole-exchange deadline when External timeout is not configured. */
 internal val DEFAULT_IDENTITY_EXTERNAL_TIMEOUT: Duration = Duration.ofSeconds(1)
+
+/** Minutes retained by the default successful-entry write expiry. */
+private const val DEFAULT_IDENTITY_EXTERNAL_CACHE_TTL_MINUTES = 10L
+
+/** Shared startup and decorator default for successful-entry write expiry. */
+internal val DEFAULT_IDENTITY_EXTERNAL_CACHE_TTL: Duration =
+    Duration.ofMinutes(DEFAULT_IDENTITY_EXTERNAL_CACHE_TTL_MINUTES)
+
+/** Shared startup and decorator default for completed-entry capacity. */
+internal const val DEFAULT_IDENTITY_EXTERNAL_CACHE_MAX_SIZE = 10_000
+
+/** Value-free diagnostic for every invalid cache lifetime representation. */
+internal const val INVALID_EXTERNAL_CACHE_TTL =
+    "VIGILANT_IDENTITY_EXTERNAL_CACHE_TTL must contain a positive duration in 1..Long.MAX_VALUE nanoseconds"
+
+/** Value-free diagnostic for every invalid completed-entry capacity. */
+internal const val INVALID_EXTERNAL_CACHE_SIZE =
+    "VIGILANT_IDENTITY_EXTERNAL_CACHE_MAX_SIZE must contain an integer in 1..Int.MAX_VALUE"
 
 /** Environment variable configuring pinned public JWT verification keys. */
 internal const val IDENTITY_JWT_JWKS_ENV = "VIGILANT_IDENTITY_JWT_JWKS"
@@ -134,10 +154,14 @@ data class JwtIdentitySettings(
  *
  * @param endpoint exact absolute HTTP(S) lookup endpoint, including configured path and query.
  * @param timeout positive deadline covering the complete Bridge exchange.
+ * @param cacheTtl lifetime of a successfully resolved cache entry.
+ * @param cacheMaxSize maximum completed cache entries after maintenance.
  */
 data class ExternalIdentitySettings(
     val endpoint: URI,
     val timeout: Duration,
+    val cacheTtl: Duration = DEFAULT_IDENTITY_EXTERNAL_CACHE_TTL,
+    val cacheMaxSize: Int = DEFAULT_IDENTITY_EXTERNAL_CACHE_MAX_SIZE,
 ) : IdentitySettings
 
 /** Validates the complete environment and selected Bearer identity startup contract. */
@@ -154,7 +178,8 @@ internal fun VigilantSettings.validatedRuntimeIdentity(): Pair<RuntimeEnvironmen
 
 /** Validates development/test-only Dummy identity settings. */
 private fun VigilantSettings.validatedDummyIdentity(runtimeEnvironment: RuntimeEnvironment): DummyIdentitySettings {
-    require(identityExternalUrl == null && identityExternalTimeout == null) {
+    require(identityExternalUrl == null && identityExternalTimeout == null &&
+        identityExternalCacheTtl == null && identityExternalCacheMaxSize == null) {
         "VIGILANT_IDENTITY_EXTERNAL_* settings are permitted only in EXTERNAL mode"
     }
     require(identityJwtIssuer == null && identityJwtAudience == null && identityJwtJwks.isEmpty()) {
@@ -190,7 +215,8 @@ private fun VigilantSettings.validatedDummyIdentity(runtimeEnvironment: RuntimeE
 
 /** Validates one immutable issuer, audience, and pinned RSA public-key snapshot. */
 private fun VigilantSettings.validatedJwtIdentity(): JwtIdentitySettings {
-    require(identityExternalUrl == null && identityExternalTimeout == null) {
+    require(identityExternalUrl == null && identityExternalTimeout == null &&
+        identityExternalCacheTtl == null && identityExternalCacheMaxSize == null) {
         "VIGILANT_IDENTITY_EXTERNAL_* settings are permitted only in EXTERNAL mode"
     }
     require(identityDummyUser == null && identityDummyGroups.isEmpty()) {
@@ -223,7 +249,31 @@ private fun VigilantSettings.validatedExternalIdentity(): ExternalIdentitySettin
     }
     val endpoint = validatedExternalIdentityUri(identityExternalUrl)
     val timeout = validatedExternalIdentityTimeout(identityExternalTimeout)
-    return ExternalIdentitySettings(endpoint, timeout)
+    return ExternalIdentitySettings(
+        endpoint, timeout,
+        cacheTtl = validatedExternalCacheTtl(identityExternalCacheTtl),
+        cacheMaxSize = validatedExternalCacheSize(identityExternalCacheMaxSize),
+    )
+}
+
+/** Parses the original scalar to prevent the generic integer decoder from truncating HOCON fractions. */
+private fun validatedExternalCacheSize(configured: String?): Int {
+    if (configured == null) return DEFAULT_IDENTITY_EXTERNAL_CACHE_MAX_SIZE
+    val size = configured.toIntOrNull()
+    require(size != null && size > 0) { INVALID_EXTERNAL_CACHE_SIZE }
+    return size
+}
+
+/** Accepts only positive cache lifetimes exactly representable by the monotonic nanosecond ticker. */
+private fun validatedExternalCacheTtl(configured: Duration?): Duration {
+    val ttl = configured ?: DEFAULT_IDENTITY_EXTERNAL_CACHE_TTL
+    require(ttl > Duration.ZERO) { INVALID_EXTERNAL_CACHE_TTL }
+    try {
+        ttl.toNanos()
+    } catch (_: ArithmeticException) {
+        throw IllegalArgumentException(INVALID_EXTERNAL_CACHE_TTL)
+    }
+    return ttl
 }
 
 /** Validates one positive External deadline representable by the nanosecond scheduler. */
