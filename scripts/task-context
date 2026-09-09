@@ -1,0 +1,426 @@
+#!/usr/bin/env python3
+"""Read one exact active issue and its declared context without changing files."""
+
+import json
+from pathlib import Path, PurePosixPath
+import re
+import subprocess
+import sys
+import unicodedata
+
+
+IDENTIFIER = r'(?:VIG|EPIC)-[A-Z0-9]+(?:-[A-Z0-9]+)*'
+META = re.compile(r'^(?:-\s+)?\*\*([^*]+):\*\*(.*)$')
+LINK = re.compile(r'\[([^]\n]+)]\(([^\s)]+)\)')
+STATUSES = {'Draft', 'Ready for implementation', 'In progress', 'Blocked', 'Done'}
+STATUS_FIELD = 'Статус'
+REGISTRY_PATH = 'spec/WORK_ITEMS.md'
+JOURNAL_PATH = '.papercuts.jsonl'
+HELP = 'Usage: ./scripts/task-context VIG-NN\nRead one exact active issue; no flags except --help.\nExample: ./scripts/task-context VIG-33'
+
+
+class ContextError(Exception):
+    """Carry a stable diagnostic without echoing source text or raw tool errors."""
+
+    def __init__(self, code, help_text):
+        super().__init__(code)
+        self.code = code
+        self.help_text = help_text
+
+
+def fail(code, help_text):
+    """Reject the complete packet before any successful output is published."""
+    raise ContextError(code, help_text)
+
+
+def scalar(value):
+    """Quote TOON scalars with JSON-compatible Unicode and control escapes."""
+    return json.dumps(value, ensure_ascii=False)
+
+
+def read(root, name):
+    """Read UTF-8 only from a regular file contained in this repository."""
+    path = root / name
+    try:
+        if not path.resolve().is_relative_to(root) or not path.is_file():
+            fail('source_file', 'Use an existing regular repository file.')
+        return path.read_bytes().decode('utf-8')
+    except (OSError, RuntimeError, ValueError):
+        fail('source_file', 'Restore a readable UTF-8 repository source.')
+
+
+def prose_lines(text):
+    """Blank fenced examples while retaining original line positions."""
+    result, fence = [], None
+    for line in text.splitlines(keepends=True):
+        content = line.rstrip('\r\n')
+        marker = re.match(r'^ {0,3}(`{3,}|~{3,})', content)
+        if marker:
+            token, suffix = marker.group(1), content[marker.end():]
+            if fence is None:
+                fence = token
+            elif token[0] == fence[0] and len(token) >= len(fence) and not suffix.strip():
+                fence = None
+            result.append('')
+        else:
+            result.append(line.rstrip('\r\n') if fence is None else '')
+    return result
+
+
+def slug(title):
+    """Match the catalog validator's Unicode heading spelling, without guessing."""
+    title = re.sub(r'<[^>]*>', '', title.lower())
+    title = re.sub(r'\[([^]]+)]\([^)]+\)', r'\1', title)
+    return ''.join(char for char in title if char in '_ -' or unicodedata.category(char)[0] in 'LMN').replace(' ', '-')
+
+
+def atx_heading(line):
+    """Split heading delimiters without reconsidering runs of internal whitespace."""
+    match = re.match(r'^ {0,3}(#{1,6})(\s.*)$', line)
+    if match is None or len(match.group(2)) < 2:
+        return None
+    tail = match.group(2)
+    body = tail.lstrip()
+    # Preserve the old extractor's one-character title for blank/hash-only headings.
+    title = body.rstrip().rstrip('#').rstrip() or (body[0] if body else tail[-1])
+    return len(match.group(1)), title
+
+
+def heading_at(lines, number, headings):
+    """Recognize one ATX or Setext boundary, excluding a rule after an ATX heading."""
+    atx = atx_heading(lines[number])
+    if atx:
+        return (*atx, number)
+    setext = re.fullmatch(r' {0,3}(=+|-+)\s*', lines[number])
+    previous_is_heading = headings and headings[-1]['heading'] == number - 1
+    if setext and number and lines[number - 1].strip() and not previous_is_heading:
+        level = 1 if setext.group(1)[0] == '=' else 2
+        return level, lines[number - 1].strip(), number - 1
+    return None
+
+
+def register_heading(headings, anchors, pending, number, heading):
+    """Publish a boundary with unique explicit IDs and stable duplicate slug suffixes."""
+    level, title, start = heading
+    entry = {'start': pending[0][1] if pending else start,
+             'heading': number, 'level': level, 'title': title}
+    for anchor, _ in pending:
+        if anchor in anchors:
+            fail('ambiguous_anchor', 'Give each explicit source anchor a unique ID.')
+        anchors[anchor] = entry
+    base, suffix = slug(title), 0
+    anchor = base
+    while anchor in anchors:
+        suffix += 1
+        anchor = f'{base}-{suffix}'
+    anchors[anchor] = entry
+    headings.append(entry)
+
+
+def sections(text):
+    """Index ATX/Setext sections and adjacent explicit IDs, ignoring code fences."""
+    lines = prose_lines(text)
+    original_lines = text.splitlines()
+    headings, anchors, pending = [], {}, []
+    for number, line in enumerate(lines):
+        if not line and original_lines[number].strip():
+            # A masked fence is content, not an allowed blank anchor separator.
+            pending = []
+        explicit = re.fullmatch(r'''\s*<a id=["']([^"']+)["']></a>\s*''', line)
+        if explicit:
+            pending.append((explicit.group(1), number))
+            continue
+        heading = heading_at(lines, number, headings)
+        if heading is None:
+            next_is_setext = number + 1 < len(lines) and re.fullmatch(r' {0,3}(=+|-+)\s*', lines[number + 1])
+            # Keep an adjacent explicit ID until the Setext underline arrives.
+            if line.strip() and not next_is_setext:
+                pending = []
+            continue
+        register_heading(headings, anchors, pending, number, heading)
+        pending = []
+    for index, entry in enumerate(headings):
+        entry['end'] = next((other['start'] for other in headings[index + 1:] if other['level'] <= entry['level']), len(lines))
+    return headings, anchors
+
+
+def section_body(text, title, required=False):
+    """Read one exact H2 declaration; duplicate declaration sections are errors."""
+    matches = [entry for entry in sections(text)[0] if entry['title'] == title and entry['level'] == 2]
+    if len(matches) > 1 or required and not matches:
+        fail('context_declaration', 'Declare exactly one Context sources section, using the issue template.')
+    if not matches:
+        return None
+    entry = matches[0]
+    return ''.join(text.splitlines(keepends=True)[entry['heading'] + 1:entry['end']])
+
+
+def declarations(text, title, required=False):
+    """Accept only exact inline-code list entries or explicit empty context."""
+    body = section_body(text, title, required)
+    if body is None or body.strip() == 'нет':
+        return []
+    values = []
+    for line in body.splitlines():
+        if not line.strip():
+            continue
+        match = re.fullmatch(r'- `([^`\s]+)`', line)
+        if not match or any(ord(char) < 32 or ord(char) == 127 for char in match.group(1)) or match.group(1) in values:
+            fail('context_declaration', 'Use unique exact inline-code entries, or нет for no context.')
+        values.append(match.group(1))
+    if not values:
+        fail('context_declaration', 'Remove empty Papercut tags; declare нет for no external context.')
+    return values
+
+
+def header_fields(lines):
+    """Read unique metadata fields and wrapped values up to the first own section."""
+    fields, current = {}, None
+    for line in lines:
+        if re.match(r'^#{2,6}\s', line):
+            break
+        match = META.fullmatch(line)
+        if match:
+            key, value = match.groups()
+            if key in fields:
+                fail('metadata', 'Keep one value for each issue metadata field.')
+            fields[key], current = value.lstrip(), key
+        elif line.startswith(('  ', '\t')) and current:
+            fields[current] += '\n' + line
+        elif line.strip() and not line.startswith('# '):
+            fail('metadata', 'Use the catalog metadata format in the issue header.')
+    return fields
+
+
+def metadata(text):
+    """Parse the owning header and validate consistent title/metadata identities."""
+    lines = prose_lines(text)
+    fields = header_fields(lines)
+    title_ids = re.findall(rf'^# ({IDENTIFIER}): .+$', '\n'.join(lines), re.MULTILINE)
+    raw_id = fields.get('ID')
+    if raw_id is not None:
+        match = re.fullmatch(rf'`({IDENTIFIER})`', raw_id)
+        if not match:
+            fail('metadata', 'Use the exact backtick-quoted ID metadata format.')
+        title_ids.append(match.group(1))
+    if not title_ids or len(set(title_ids)) != 1 or fields.get(STATUS_FIELD) not in STATUSES:
+        fail('metadata', 'Restore a consistent exact ID and supported status.')
+    fields['id'] = title_ids[0]
+    return fields
+
+
+def links(value):
+    """Return explicit work-item links; prose cannot silently become an empty edge."""
+    if value == 'нет':
+        return []
+    matches = LINK.findall(value)
+    if not matches or LINK.sub('', value).strip(' ,;\n\t'):
+        fail('metadata', 'Declare dependencies and blockers as exact Markdown links or нет.')
+    return matches
+
+
+def linked_path(root, owner, target):
+    """Resolve navigation links while refusing external or escaping graph edges."""
+    if ':' in target or '#' in target or '?' in target:
+        fail('catalog', 'Use repository work-item file links for graph edges.')
+    path = (root / owner).parent / target
+    try:
+        return path.resolve().relative_to(root).as_posix()
+    except (ValueError, OSError, RuntimeError):
+        fail('catalog', 'Keep work-item links inside the repository.')
+
+
+def check_child(root, epic_path, epic, issue_path, fields):
+    """Read canonical child checklist entries and compare their exact state fields."""
+    body = section_body(epic, 'Дочерние issues')
+    if body is None:
+        fail('catalog', 'List the child in its parent Дочерние issues section.')
+    members = []
+    for line in body.splitlines():
+        match = re.fullmatch(rf'- \[([ x])] \[({IDENTIFIER}): [^]]+]\(([^)]+)\) - `([^`]+)`', line)
+        if match and (match.group(2) == fields['id'] or linked_path(root, epic_path, match.group(3)) == issue_path):
+            members.append(match.groups())
+    if len(members) != 1:
+        fail('catalog', 'List the child once with its current status in the parent checklist.')
+    checked, identifier, target, status = members[0]
+    if identifier != fields['id'] or linked_path(root, epic_path, target) != issue_path or status != fields[STATUS_FIELD] or (checked == 'x') != (status == 'Done'):
+        fail('catalog', 'Synchronize the child checklist ID, path, status and checkbox.')
+
+
+def check_registration(root, rows, path, identifier, status):
+    """Resolve the exact registry link and status cell, ignoring free-form notes."""
+    memberships = []
+    for line in rows.splitlines():
+        cells = line.strip().strip('|').split('|') if line.startswith('|') else []
+        if len(cells) < 2:
+            continue
+        match = LINK.fullmatch(cells[0].strip())
+        if match and (re.match(rf'^{re.escape(identifier)}(?:\s*:|$)', match.group(1)) or linked_path(root, REGISTRY_PATH, match.group(2)) == path):
+            memberships.append((match.group(1), match.group(2), cells[1].strip()))
+    if len(memberships) != 1:
+        fail('catalog', 'Register the work item exactly once at its actual file path.')
+    label, target, displayed_status = memberships[0]
+    if not re.match(rf'^{re.escape(identifier)}(?:\s*:|$)', label) or linked_path(root, REGISTRY_PATH, target) != path or displayed_status != f'`{status}`':
+        fail('catalog', 'Synchronize catalog ID, path and exact status cell with the owner.')
+
+
+def issue_source(root, identifier):
+    """Resolve one complete source by its exact visible title or metadata ID."""
+    matches = []
+    for path in sorted((root / 'spec/issues').rglob('*.md')):
+        name = path.relative_to(root).as_posix()
+        text = read(root, name)
+        visible = '\n'.join(prose_lines(text))
+        if re.search(rf'^# {re.escape(identifier)}: .+$', visible, re.MULTILINE) or re.search(rf'^(?:-\s+)?\*\*ID:\*\* `{re.escape(identifier)}`\s*$', visible, re.MULTILINE):
+            matches.append((name, text))
+    if not matches:
+        fail('missing_id', 'Use an exact issue ID from the active catalog.')
+    if len(matches) != 1:
+        fail('duplicate_id', 'Remove duplicate issue IDs before requesting a packet.')
+    return matches[0]
+
+
+def registered_owner(root, path, fields, sources):
+    """Validate a child's parent or retain the standalone issue as catalog owner."""
+    parent = fields.get('Epic')
+    if parent:
+        parent_links = links(parent)
+        if len(parent_links) != 1:
+            fail('catalog', 'Give the child exactly one registered parent epic.')
+        _, target = parent_links[0]
+        epic_path = linked_path(root, path, target)
+        epic = read(root, epic_path)
+        epic_fields = metadata(epic)
+        if not epic_fields['id'].startswith('EPIC-'):
+            fail('catalog', 'The parent must be an epic.')
+        check_child(root, epic_path, epic, path, fields)
+        sources.append(epic_path)
+        return epic_path, epic_fields['id'], epic_fields[STATUS_FIELD]
+    if Path(path).parent.as_posix() != 'spec/issues':
+        fail('catalog', 'A child issue requires its registered Epic backlink.')
+    return path, fields['id'], fields[STATUS_FIELD]
+
+
+def validate_edges(root, path, fields):
+    """Check every explicit dependency/blocker target without inferring completion."""
+    for key in ('Зависит от', 'Блокирует'):
+        if key not in fields:
+            fail('metadata', 'Declare dependencies and blockers explicitly, using нет when empty.')
+        for label, target in links(fields[key]):
+            linked = metadata(read(root, linked_path(root, path, target)))
+            if not re.match(rf'^{re.escape(linked["id"])}(?:\s*:|$)', label):
+                fail('metadata', 'Align each work-item link label with its target ID.')
+
+
+def discover(root, identifier):
+    """Resolve a unique issue file before checking its active registry membership."""
+    path, text = issue_source(root, identifier)
+    fields = metadata(text)
+    if fields['id'] != identifier:
+        fail('metadata', 'Align the issue heading and ID metadata.')
+    rows = section_body(read(root, REGISTRY_PATH), 'Реестр', required=True)
+    sources = [REGISTRY_PATH + '#реестр', path]
+    registered_path, registered_id, registered_status = registered_owner(root, path, fields, sources)
+    check_registration(root, rows, registered_path, registered_id, registered_status)
+    validate_edges(root, path, fields)
+    return path, text, fields, sources
+
+
+def external_context(root, issue_path, text):
+    """Extract each explicitly declared section in order, with no adjacent content."""
+    result, ranges = [], {}
+    for source in declarations(text, 'Context sources', required=True):
+        if source.count('#') != 1:
+            fail('context_declaration', 'Use one repository-relative path#anchor per source.')
+        name, anchor = source.split('#')
+        path = PurePosixPath(name)
+        if not name or path.is_absolute() or any(part in ('.', '..', '') for part in name.split('/')) or any(char in source for char in '\\*?[]%:') or not anchor or name == issue_path:
+            fail('context_declaration', 'Use an exact external repository path and literal anchor; no patterns or aliases.')
+        document = read(root, name)
+        entry = sections(document)[1].get(anchor)
+        if entry is None:
+            fail('missing_anchor', f'Repair the exact source anchor in {issue_path}.')
+        if entry['level'] == 1:
+            fail('broad_source', 'Select a specific owning section below the document title.')
+        bounds = (entry['start'], entry['end'])
+        if any(bounds[0] < end and start < bounds[1] for start, end in ranges.get(name, [])):
+            fail('context_declaration', 'Remove overlapping context sections instead of duplicating source content.')
+        ranges.setdefault(name, []).append(bounds)
+        content = ''.join(document.splitlines(keepends=True)[bounds[0]:bounds[1]])
+        result.append((source, content))
+    return result
+
+
+def papercuts(root, tags):
+    """Reuse pinned journal folding and ordering; reject skipped malformed records."""
+    if not tags:
+        return []
+    try:
+        read(root, JOURNAL_PATH)
+    except ContextError:
+        fail('papercuts_unreadable', 'Restore a readable regular .papercuts.jsonl inside the repository.')
+    try:
+        command = [str(Path(__file__).resolve().with_name('papercuts')), '--file', str(root / JOURNAL_PATH), 'list', '--status', 'all', '--limit', '2147483647']
+        run = subprocess.run(command, cwd=root, capture_output=True, timeout=15)
+        response = json.loads(run.stdout)
+        if run.returncode or response.get('ok') is not True:
+            fail('papercuts_unreadable', 'Restore the readable journal and pinned scripts/papercuts prerequisite.')
+        warnings = response.get('meta', {}).get('warnings', [])
+        if any(warning != 'no papercuts matched; try --status all or broader filters' for warning in warnings):
+            fail('papercuts_malformed', 'Run ./scripts/papercuts doctor and repair the journal before retrying.')
+        data = response['data']
+        if data['truncated']:
+            fail('papercuts_malformed', 'The complete journal must be available before exact-tag selection.')
+        selected = [item for item in data['items'] if set(tags).intersection(item['tags'])]
+        return [(item['id'], item['text'], item['status'], item.get('resolution', {}).get('note')) for item in selected[:5]]
+    except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError):
+        fail('papercuts_unreadable', 'Check the journal and pinned scripts/papercuts; retry after repair.')
+
+
+def packet(root, identifier):
+    """Assemble all validated inputs before serializing the complete TOON packet."""
+    path, contract, fields, sources = discover(root, identifier)
+    context = external_context(root, path, contract)
+    tags = declarations(contract, 'Papercut tags')
+    cuts = papercuts(root, tags)
+    sources.extend(source for source, _ in context)
+    if tags:
+        sources.append(JOURNAL_PATH)
+    output = ['issue:']
+    for key, value in [('id', identifier), ('status', fields[STATUS_FIELD]), ('path', path), ('dependencies', fields['Зависит от']), ('blockers', fields['Блокирует']), ('contract', contract)]:
+        output.append(f'  {key}: {scalar(value)}')
+    output.append(f'context[{len(context)}]{{source,content}}:')
+    output.extend('  ' + ','.join(map(scalar, row)) for row in context)
+    output.append(f'papercuts[{len(cuts)}]{{id,symptom,status,resolution}}:')
+    output.extend('  ' + ','.join(map(scalar, row)) for row in cuts)
+    output.append(f'sources[{len(sources)}]: ' + ','.join(map(scalar, sources)) if sources else 'sources[0]:')
+    return '\n'.join(output) + '\n'
+
+
+def main():
+    """Validate CLI input before repository access and emit safe structured errors."""
+    args = sys.argv[1:]
+    if args == ['--help']:
+        print('help: ' + scalar(HELP))
+        return 0
+    if len(args) != 1 or not re.fullmatch(r'VIG-[A-Z0-9]+(?:-[A-Z0-9]+)*', args[0]):
+        print('error: "usage"\nhelp: ' + scalar(HELP))
+        return 2
+    try:
+        run = subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_output=True, timeout=5)
+        if run.returncode:
+            fail('repository', 'Run ./scripts/task-context inside the target Git repository.')
+        root = Path(run.stdout.decode().strip()).resolve()
+        result = packet(root, args[0])
+        sys.stdout.write(result)
+        return 0
+    except ContextError as error:
+        print('error: ' + scalar(error.code) + '\nhelp: ' + scalar(error.help_text))
+        return 1
+    except (OSError, UnicodeError, subprocess.TimeoutExpired):
+        print('error: "repository"\nhelp: "Restore readable repository inputs and retry."')
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

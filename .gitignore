@@ -4,6 +4,9 @@
 /buildSrc/build/
 out/
 
+# Python tooling caches
+__pycache__/
+
 # IDE
 .idea/
 *.iml

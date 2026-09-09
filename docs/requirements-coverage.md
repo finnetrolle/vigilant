@@ -4,8 +4,29 @@
 каталога открытой работы. Перенос документации не меняет production behavior и не создаёт нового dynamic
 evidence; карта уточняет ранее завышенные claims по source/test review.
 Completion проверяется по
-[project protocol](../CLAUDE.md#work-item-completion).
+[project protocol](agent-workflow.md#work-item-completion).
 
+Документальный authoring gate опубликован в
+[risk-based readiness](../spec/WORK_ITEMS.md#risk-based-readiness), формат - в
+[issue template](../spec/ISSUE_TEMPLATE.md). Два
+[учебных примера](../spec/examples/issue-authoring.md#ручная-проверка-authoring-behavior)
+проверяют Low path и незакрытый High lock при semantic review. Это process
+contract; runtime coverage и product evidence ниже не меняются.
+
+Task context реализован как [локальная read-only команда](task-context.md#contract)
+с isolated CLI fixtures и отдельным [baseline context](agent-context-baseline.md).
+[Startup routing](../CLAUDE.md#mandatory-routing) действует без issue ID;
+[project procedures](agent-workflow.md) сохраняют обязательные TDD, lifecycle,
+security и independent review gates. Это tooling evidence, не runtime claim.
+
+Reusable mechanical evidence реализована в [durable runner](development.md#контракт-reusable-evidence)
+и [единственном final gate](development.md#локальные-pipeline-scripts).
+Isolated Python/shell fixtures проверяют exact contract, selected-input и
+artifact invalidation, terminal/process ownership и отсутствие отдельного build
+перед verifyAll. Это tooling evidence; semantic applicability, product runtime
+coverage и external-data freshness между задачами из hashes не следуют.
+[Cycle ledger](development.md#метрики-verification-cycle) позволяет собрать
+следующие 3-5 наблюдений; измеренная wall-clock экономия пока unavailable.
 
 ## Назначение
 

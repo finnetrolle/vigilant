@@ -32,7 +32,7 @@ spec/
 - `spec/issues/epic_NN/` содержит небольшие исполняемые issues одного epic.
 - После выполнения обязательных проверок требования переносятся к постоянным
   owners, а completed issue и полностью completed epic удаляются по
-  [completion protocol](../CLAUDE.md#work-item-completion). Архивные копии не создаются.
+  [completion protocol](../docs/agent-workflow.md#work-item-completion). Архивные копии не создаются.
 
 ## Идентификаторы и связи
 
@@ -60,7 +60,7 @@ spec/
 | Статус | Значение |
 |---|---|
 | `Draft` | Существенные решения или acceptance criteria ещё не закрыты |
-| `Ready for implementation` | Issue однозначна, зависимости могут быть ещё не завершены |
+| `Ready for implementation` | Issue однозначна и прошла применимый [risk-based readiness](#risk-based-readiness); зависимости могут быть ещё не завершены |
 | `In progress` | Реализация начата |
 | `Blocked` | Продолжение невозможно; рядом указаны причина и блокирующая issue |
 | `Done` | Acceptance criteria выполнены и обязательные проверки прошли |
@@ -97,6 +97,55 @@ Issue является листом mind map, если:
 
 Если оценка превышает пять дней или в названии естественно появляется союз
 «и» между независимыми результатами, issue нужно раскрыть ещё на один уровень.
+Scope lock не заменяет эти условия: даже согласованное High-risk решение
+декомпозируется до independently executable leaves.
+
+<a id="risk-based-readiness"></a>
+
+## Risk-based readiness
+
+Автор новой или содержательно пересматриваемой issue явно указывает
+архитектурный риск `Low` или `High`; reviewer проверяет классификацию.
+Это отдельная оценка, не значение `Приоритет`. Правило действует после
+завершённой migration к [permanent owners](requirements/README.md).
+Frozen legacy work items не мигрируются только ради формата; обновление
+fulfilled prerequisite links само по себе не является пересмотром scope.
+
+| Признак изменения | Классификация |
+|---|---|
+| Добавляет долгоживущий resource owner | `High` |
+| Добавляет обязательную конфигурацию | `High` |
+| Добавляет persistence | `High` |
+| Вводит или меняет внешний/public contract | `High` |
+| Добавляет deployment responsibility | `High` |
+| Добавляет packaging responsibility | `High` |
+| Связывает несколько runtime subsystems | `High` |
+| Классификация неоднозначна | `High` |
+| Локальное изменение без любого из признаков выше | `Low` |
+
+Достаточно одного High-признака. Названия bug, refactoring или docs-only сами
+по себе не определяют риск. Для `Low` достаточно уровня и одной короткой
+причины; scope lock, пустые разделы альтернатив и формальное approval не нужны.
+
+`High` не может документально считаться `Ready for implementation`, пока
+полностью не заполнен и не утверждён [scope lock](ISSUE_TEMPLATE.md#scope-lock).
+`Draft` может содержать незакрытый lock. Автор и reviewer проверяют содержание
+и подтверждение решения; green validator не доказывает approval и не заменяет
+эту проверку. Автоматическая семантическая оценка риска не выполняется.
+
+Канонический [issue template](ISSUE_TEMPLATE.md) владеет форматом scope lock и
+context sources. Само решение хранится один раз в owning issue или epic;
+остальные consumers ссылаются на точный раздел. `CLAUDE.md` и runtime docs не
+копируют этот authoring contract. Scope lock фиксирует границу результата,
+не предписывая имена классов, внутренний layout или будущие extension points.
+
+Если жизнеспособность механизма неизвестна, lock может разрешить отдельный
+ограниченный tracer bullet с одним вопросом и наблюдаемым выходом. Его результат
+не становится production implementation автоматически. Согласованное решение
+сохраняет действующие TDD, semantic review, security и final verification gates.
+
+Два [authoring examples](examples/issue-authoring.md) показывают применение
+правил к локальному исправлению и persistence/public-contract предложению.
 
 ## Реестр
 
@@ -104,9 +153,6 @@ Issue является листом mind map, если:
 |---|---|---:|---:|
 | [EPIC-06: OpenAI Responses protocol scope](epics/epic_06_llm_message_parsing.md) | `Draft` | 0/0 | Responses вне MVP; нет implementation-ready leaves |
 | [VIG-33: Availability SLO and operational evidence](issues/issue_33_availability_slo_and_operations.md) | `Draft` | production SLO не определён | не оценено |
-| [VIG-38: Risk-based scope lock для implementation-ready work items](issues/issue_38_risk_based_scope_lock.md) | `Ready for implementation` | не начата | 1-2 инженерных дня |
-| [VIG-39: Компактный task packet и маршрутизация agent context](issues/issue_39_compact_task_context.md) | `Ready for implementation` | не начата | 3-5 инженерных дней |
-| [VIG-40: Один snapshot и переиспользуемая verification evidence](issues/issue_40_reusable_verification_evidence.md) | `Ready for implementation` | не начата | 3-5 инженерных дней |
 
 ## Active TODO: порядок следующей работы
 
@@ -131,22 +177,9 @@ Issue является листом mind map, если:
 - [ ] После стабилизации identity, enforcement и observability уточнить
   [VIG-33](issues/issue_33_availability_slo_and_operations.md).
 
-### Phase 7: сократить стоимость agent workflow
-
-- [ ] Реализовать [VIG-38](issues/issue_38_risk_based_scope_lock.md): добавить
-  risk-based scope lock перед архитектурно дорогими implementation-ready issues,
-  сохранив короткий путь для локальных изменений.
-- [ ] После VIG-38 реализовать
-  [VIG-39](issues/issue_39_compact_task_context.md): выдавать по exact issue ID
-  компактный task packet и убрать дублирование обязательного agent context.
-- [ ] После VIG-39 реализовать
-  [VIG-40](issues/issue_40_reusable_verification_evidence.md): выполнять один
-  дорогой mechanical gate на неизменный snapshot и передавать reusable evidence
-  последующим verification consumers.
-
-Текущий следующий шаг: реализовать
-[VIG-38](issues/issue_38_risk_based_scope_lock.md),
-`Ready for implementation`.
+Готовых к реализации задач сейчас нет. Текущий следующий шаг: уточнить
+[VIG-33](issues/issue_33_availability_slo_and_operations.md), которая остаётся
+`Draft`; это не разрешение начинать implementation.
 [Policy engine](requirements/policy-engine.md),
 [request source](requirements/request-source.md) и
 [REQUEST enforcement](requirements/request-enforcement.md) опубликованы.
@@ -166,7 +199,7 @@ Ordinary JSON и SSE response используют
 
 ## Как закрывать work item
 
-Canonical [completion protocol](../CLAUDE.md#work-item-completion) и
+Canonical [completion protocol](../docs/agent-workflow.md#work-item-completion) и
 [воспроизводимая процедура](../docs/development.md#завершение-work-item)
 применяются к standalone issues, дочерним issues и epics.
 

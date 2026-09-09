@@ -24,7 +24,7 @@ final class RoadmapFrontierContractTest {
         }
     }
 
-    /** The roadmap delegates delivery order to the registry, whose next link names executable work. */
+    /** The next step names executable work, or draft refinement when the graph has no ready issues. */
     @Test
     void frontierResolvesToCurrentOpenWork() throws IOException {
         String roadmap = Files.readString(Path.of("spec/ROADMAP.md"));
@@ -36,9 +36,23 @@ final class RoadmapFrontierContractTest {
         Matcher link = Pattern.compile("\\[VIG-[^]]+]\\(([^)]+)\\)").matcher(registry.substring(next));
         assertTrue(link.find(), "Next step must link directly to an issue");
         Path issue = Path.of("spec").resolve(link.group(1)).normalize();
-        String source = Files.readString(issue);
-        assertTrue(source.contains("**Статус:** Ready for implementation")
-                || source.contains("**Статус:** In progress"), issue.toString());
+        WorkItemGraph graph = WorkItemGraph.discover(Path.of(".").toAbsolutePath().normalize());
+        assertEquals(List.of(), graph.sortedDiagnostics());
+        List<WorkItem> executable = graph.workItems().stream()
+                .filter(item -> item.kind() != WorkItemKind.EPIC)
+                .filter(item -> List.of("Ready for implementation", "In progress")
+                        .contains(item.status().value()))
+                .toList();
+        Path nextPath = issue.toAbsolutePath().normalize();
+        if (executable.isEmpty()) {
+            assertTrue(registry.contains("Готовых к реализации задач сейчас нет."));
+            assertTrue(graph.workItems().stream().anyMatch(item -> item.path().equals(nextPath)
+                    && item.kind() != WorkItemKind.EPIC && item.status().value().equals("Draft")),
+                    "An empty execution queue must point to an existing draft for refinement");
+        } else {
+            assertTrue(executable.stream().anyMatch(item -> item.path().equals(nextPath)),
+                    "Next step must name a ready or in-progress issue: " + issue);
+        }
     }
 
     /** All current navigation, requirement references and graph invariants use the public validator. */

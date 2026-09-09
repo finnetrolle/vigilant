@@ -15,12 +15,13 @@ import time
 import traceback
 import uuid
 
+from check_run_evidence import REQUEST_FILE, RESULT_FILE, artifact_snapshot, open_regular, read_json, seal, tool_snapshot, verify_seal
 
 ENV_KEYS = (
     'JAVA_HOME', 'GRADLE_OPTS', 'JAVA_OPTS', 'JAVA_TOOL_OPTIONS',
     'JDK_JAVA_OPTIONS', 'PATH', 'GRADLE_USER_HOME', 'KOTLIN_OPTS',
 )
-FINAL = {'passed', 'failed', 'timeout', 'cancelled', 'stale', 'infrastructure_failure'}
+FINAL = {'passed', 'failed', 'timeout', 'cancelled', 'stale', 'corrupt', 'infrastructure_failure'}
 ROOT = None
 RUNS = None
 
@@ -59,14 +60,12 @@ def write_json(path, value):
     os.replace(temporary, path)
 
 
-def load(path):
-    """Read a complete published record."""
-    return json.loads(path.read_text())
+load = read_json
 
 
-def fingerprint(inputs, env_keys):
+def fingerprint(inputs, env_keys, command=None, tools=()):
     """Hash selected Git-visible files and relevant environment without values."""
-    names = set(os.fsdecode(name) for name in git('ls-files', '-z', '--cached', '--others', '--exclude-standard').split(b'\0') if name)
+    names = {os.fsdecode(name) for name in git('ls-files', '-z', '--cached', '--others', '--exclude-standard').split(b'\0') if name}
     files = {}
     for name in sorted(names):
         if inputs and not any(name == item or name.startswith(item + '/') for item in inputs):
@@ -88,10 +87,8 @@ def fingerprint(inputs, env_keys):
         key: hashlib.sha256(json.dumps(os.environ.get(key)).encode()).hexdigest()
         for key in sorted(set(ENV_KEYS) | set(env_keys))
     }
-    for item in inputs:
-        if not any(name == item or name.startswith(item + '/') for name in files):
-            raise ValueError(f'input {item} has no Git-visible files; select an actual input')
-    return {'files': files, 'environment': environment}
+    return {'files': files, 'environment': environment,
+            'toolchain': tool_snapshot(ROOT, command or [sys.executable], tools)}
 
 
 def run_path(identifier):
@@ -104,37 +101,94 @@ def run_path(identifier):
     return path
 
 
+def read_result(path):
+    """Validate result identity before using its state or clock fields."""
+    record = load(path / RESULT_FILE)
+    if record['run'] != path.name or record['state'] not in FINAL | {'starting', 'running'}:
+        raise ValueError('invalid result identity or state')
+    if not isinstance(record['created_at'], (int, float)) or not math.isfinite(record['created_at']):
+        raise ValueError('invalid result timestamp')
+    return record
+
+
+def probe_worker(path, record):
+    """Probe without writes and reread publication after acquiring the worker lease."""
+    try:
+        with open_regular(path / 'worker.lock') as lease:
+            fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            # The supervisor may have published a terminal result after our first
+            # read. Acquiring its lease makes that publication authoritative.
+            record = read_result(path)
+    except FileNotFoundError:
+        pass
+    except BlockingIOError:
+        return {**record, 'state': 'running'} if record['state'] == 'passed' else record
+    if record['state'] not in FINAL and time.time() - record['created_at'] > 5:
+        record = {**record, 'state': 'infrastructure_failure', 'error': 'supervisor unavailable; inspect log and owned process group before another check'}
+    return record
+
+
 def read_status(path, check_inputs=False):
     """Return durable status; a missing supervisor is never a successful result."""
-    record = load(path / 'result.json')
-    if record['state'] not in FINAL:
-        with (path / 'worker.lock').open('a') as lease:
-            try:
-                fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                if time.time() - record['created_at'] > 5:
-                    record = {**record, 'state': 'infrastructure_failure', 'error': 'supervisor unavailable; inspect log and owned process group before another check'}
-            except BlockingIOError:
-                pass
-    if check_inputs:
-        request = load(path / 'request.json')
-        current = fingerprint(request['inputs'], request['env_keys'])
-        record['inputs_current'] = (
-            record['state'] == 'passed' and record.get('inputs_stable') is True
-            and current == load(path / 'inputs-before.json')
-        )
-        if record['state'] == 'passed' and not record['inputs_current']:
-            record['state'] = 'stale'
+    try:
+        record = read_result(path)
+        if record['state'] not in FINAL or (record['state'] == 'passed' and not (path / 'seal.json').exists()):
+            record = probe_worker(path, record)
+    except (OSError, ValueError, KeyError, TypeError):
+        return {'state': 'corrupt', 'applicability': 'corrupt', 'reason': 'record_integrity',
+                'error': 'missing or damaged result; start a new check with the original contract'}
+    if record['state'] == 'passed' and check_inputs:
+        try:
+            request, before = validate_passed_evidence(path, record)
+        except (OSError, ValueError, KeyError, TypeError):
+            record.update(state='corrupt', reason='record_or_artifact_integrity',
+                          error='evidence incomplete or modified; restore artifacts or start a new check with the original contract')
+        else:
+            refresh_applicability(record, request, before)
+    record['applicability'] = 'current' if record['state'] == 'passed' and check_inputs else record['state']
     return record
+
+
+def validate_passed_evidence(path, record):
+    """Require a sealed, consistent successful run with all original artifacts intact."""
+    verify_seal(path)
+    request = load(path / REQUEST_FILE)
+    before = load(path / 'inputs-before.json')
+    after = load(path / 'inputs-after.json')
+    timing_ordered = record['finished_at'] >= record['started_at']
+    if (request['cwd'] != str(ROOT) or request['git_dir'] != str(RUNS.parent)
+            or record['exit_code'] != 0 or not record['inputs_stable'] or before != after
+            or not timing_ordered or record['duration_seconds'] < 0):
+        raise ValueError('inconsistent terminal evidence')
+    if artifact_snapshot(ROOT, request['artifacts']) != load(path / 'artifacts.json'):
+        raise ValueError('artifact digest changed')
+    return request, before
+
+
+def refresh_applicability(record, request, before):
+    """Compare present inputs to the verified run without changing its stored record."""
+    try:
+        current = fingerprint(request['inputs'], request['env_keys'], request['command'], request['tools'])
+        changed = [key for key in before if before[key] != current[key]]
+    except (OSError, ValueError, subprocess.SubprocessError):
+        changed = ['unreadable_inputs_or_toolchain']
+    record['inputs_current'] = not changed
+    if changed:
+        record.update(state='stale', reason=','.join(changed),
+                      error='inputs/environment/toolchain changed; start a new check for the current contract')
 
 
 def show(path, check_inputs=False):
     """Expose a compact decision record, leaving verbose evidence in files."""
     record = read_status(path, check_inputs)
-    fields = {'run': path.name, 'state': record['state'], 'exit_code': record.get('exit_code'), 'result': str(path / 'result.json')}
+    fields = {'run': path.name, 'state': record['state'], 'applicability': record['applicability'],
+              'exit_code': record.get('exit_code'), 'result': str(path / RESULT_FILE)}
     if 'inputs_current' in record:
         fields['inputs_current'] = record['inputs_current']
     if record.get('error'):
         fields['error'] = record['error']
+    if record.get('reason'):
+        fields['reason'] = record['reason']
     emit(**fields)
     return 1 if record['state'] in FINAL - {'passed'} else 0
 
@@ -161,62 +215,83 @@ def end_group(process):
         pass
 
 
-def supervise(identifier):
+def wait_command(path, request, record, process):
+    """Observe the command's terminal state and reclaim its original process group."""
+    deadline = time.monotonic() + request['timeout']
+    while process.poll() is None:
+        if (path / 'cancel').exists():
+            record['state'] = 'cancelled'
+            break
+        if time.monotonic() >= deadline:
+            record['state'] = 'timeout'
+            break
+        time.sleep(0.1)
+    if record['state'] != 'running':
+        end_group(process)
+    code = process.wait(timeout=5)
+    record['exit_code'] = code
+    if record['state'] == 'running':
+        record['state'] = 'passed' if code == 0 else 'failed'
+    end_group(process)
+
+
+def capture_outputs(path, request, record, before):
+    """Record final inputs and require intact declared artifacts for successful runs."""
+    try:
+        after = fingerprint(request['inputs'], request['env_keys'], request['command'], request['tools'])
+        write_json(path / 'inputs-after.json', after)
+        record['inputs_stable'] = before == after
+    except (OSError, ValueError, subprocess.SubprocessError):
+        record['inputs_stable'] = False
+    if record['state'] != 'passed':
+        return
+    if not record['inputs_stable']:
+        record.update(state='stale', reason='inputs_changed_during_run',
+                      error='selected inputs/environment/toolchain changed during execution; stop edits and start a new check with the same declaration')
+        return
+    try:
+        write_json(path / 'artifacts.json', artifact_snapshot(ROOT, request['artifacts']))
+    except (OSError, ValueError):
+        record.update(state='corrupt', error='declared artifacts missing or unsafe; fix the command output and start a new check')
+
+
+def supervise(identifier, lease_fd=None):
     """Own execution independently of the terminal and always publish its result."""
     path = run_path(identifier)
-    request = load(path / 'request.json')
-    record = load(path / 'result.json')
+    request = load(path / REQUEST_FILE)
+    record = load(path / RESULT_FILE)
     process = None
     started = time.monotonic()
     for signum in (signal.SIGTERM, signal.SIGINT):
         signal.signal(signum, lambda *_: (path / 'cancel').touch())
-    with (path / 'worker.lock').open('a') as lease, (path.parent / 'execution.lock').open('a') as exclusive:
+    execution = os.fdopen(lease_fd, 'a') if lease_fd is not None else (path.parent / 'execution.lock').open('a')
+    with (path / 'worker.lock').open('a') as lease, execution as exclusive:
         # A status reader briefly probes the same lock. Wait for that probe
         # (or another supervisor), then recheck state before executing once.
         fcntl.flock(lease, fcntl.LOCK_EX)
-        record = load(path / 'result.json')
+        record = load(path / RESULT_FILE)
         if record['state'] != 'starting':
             return
         try:
             fcntl.flock(exclusive, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             record.update(state='infrastructure_failure', error='another check-run owns this repository; wait for its completion')
-            write_json(path / 'result.json', record)
+            write_json(path / RESULT_FILE, record)
             return
         try:
-            before = fingerprint(request['inputs'], request['env_keys'])
+            before = fingerprint(request['inputs'], request['env_keys'], request['command'], request['tools'])
             write_json(path / 'inputs-before.json', before)
             if (path / 'cancel').exists():
                 record['state'] = 'cancelled'
                 return
             record.update(state='running', supervisor_pid=os.getpid(), started_at=time.time())
-            write_json(path / 'result.json', record)
+            write_json(path / RESULT_FILE, record)
             with (path / 'command.log').open('wb') as log:
                 process = subprocess.Popen(request['command'], cwd=ROOT, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True, pass_fds=(exclusive.fileno(),))
                 record['command_pid'] = process.pid
-                write_json(path / 'result.json', record)
-                deadline = time.monotonic() + request['timeout']
-                while process.poll() is None:
-                    if (path / 'cancel').exists():
-                        record['state'] = 'cancelled'
-                        break
-                    if time.monotonic() >= deadline:
-                        record['state'] = 'timeout'
-                        break
-                    time.sleep(0.1)
-                if record['state'] != 'running':
-                    end_group(process)
-                code = process.wait(timeout=5)
-                record['exit_code'] = code
-                if record['state'] == 'running':
-                    record['state'] = 'passed' if code == 0 else 'failed'
-                # Reclaim remaining members of the original command process group.
-                end_group(process)
-            after = fingerprint(request['inputs'], request['env_keys'])
-            write_json(path / 'inputs-after.json', after)
-            record['inputs_stable'] = before == after
-            if record['state'] == 'passed' and not record['inputs_stable']:
-                record['state'] = 'stale'
+                write_json(path / RESULT_FILE, record)
+                wait_command(path, request, record, process)
+            capture_outputs(path, request, record, before)
         except (OSError, ValueError, subprocess.SubprocessError) as error:
             record.update(state='infrastructure_failure', error=f'check execution failed ({type(error).__name__}); inspect supervisor.log')
             traceback.print_exc(file=sys.stderr)
@@ -228,87 +303,258 @@ def supervise(identifier):
                 except subprocess.TimeoutExpired:
                     record.update(state='infrastructure_failure', error='command cleanup did not finish; inspect owned process group')
             record.update(finished_at=time.time(), duration_seconds=round(time.monotonic() - started, 3))
-            write_json(path / 'result.json', record)
+            write_json(path / RESULT_FILE, record)
+            if record['state'] == 'passed':
+                seal(path, write_json)
 
 
-def start(args):
-    """Validate before launch, then detach a supervisor and return its durable ID."""
-    if not args.command or args.command[0] != '--' or len(args.command) < 2:
-        raise ValueError('start requires -- followed by a command and its arguments')
+def input_declarations(values):
+    """Normalize explicit repository input paths before any execution side effects."""
     inputs = []
-    for value in args.input:
+    for value in values:
         path = Path(value)
         if path.is_absolute() or '..' in path.parts or value in ('', '.'):
             raise ValueError('--input must be a file or directory relative to the repository root')
         inputs.append(path.as_posix().rstrip('/'))
+    return inputs
+
+
+def artifact_declarations(values):
+    """Validate owned artifact paths and their supported file/directory kinds."""
+    artifacts = []
+    for value in values:
+        kind, separator, relative = value.partition(':')
+        path = Path(relative)
+        if not separator or kind not in ('file', 'directory') or path.is_absolute() or '..' in path.parts or relative in ('', '.') or '.git' in path.parts:
+            raise ValueError('--artifact requires file:<repo-path> or directory:<repo-path>')
+        artifacts.append(f'{kind}:{path.as_posix()}')
+    return artifacts
+
+
+def contract(args):
+    """Normalize the same exact declaration for launch and read-only lookup."""
+    if not args.command or args.command[0] != '--' or len(args.command) < 2:
+        raise ValueError('start requires -- followed by a command and its arguments')
+    inputs = input_declarations(args.input)
     for key in args.env_key:
         if not key.isidentifier() or not key.isascii():
             raise ValueError('--env-key must name an environment variable')
+    artifacts = artifact_declarations(args.artifact)
     # Prove the input set can be read before creating execution side effects.
-    fingerprint(inputs, args.env_key)
-    directory = RUNS
-    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-    path = directory / uuid.uuid4().hex
-    path.mkdir(mode=0o700)
-    request = {'label': args.label, 'command': args.command[1:], 'timeout': args.timeout, 'inputs': inputs, 'env_keys': args.env_key, 'cwd': str(ROOT), 'git_head': git('rev-parse', 'HEAD').decode().strip()}
-    write_json(path / 'request.json', request)
-    write_json(path / 'result.json', {'run': path.name, 'label': args.label, 'state': 'starting', 'created_at': time.time(), 'exit_code': None, 'log': str(path / 'command.log')})
+    before = fingerprint(inputs, args.env_key, args.command[1:], args.tool)
+    for item in inputs:
+        if not any(name == item or name.startswith(item + '/') for name in before['files']):
+            raise ValueError(f'input {item} has no Git-visible files; select an actual input')
+    return {'version': 2, 'label': args.label, 'command': args.command[1:], 'timeout': args.timeout,
+               'inputs': sorted(set(inputs)), 'env_keys': sorted(set(args.env_key)), 'tools': sorted(set(args.tool)), 'artifacts': sorted(set(artifacts)),
+               'snapshot': args.snapshot, 'gate': args.gate, 'wave': args.wave,
+               'cwd': str(ROOT), 'git_dir': str(RUNS.parent), 'git_head': git('rev-parse', 'HEAD').decode().strip()}
+
+
+def lookup(request):
+    """Find a current exact contract without launching or waiting for a command."""
+    reasons = set()
+    paths = sorted((p for p in RUNS.glob('*') if len(p.name) == 32 and p.is_dir() and not p.is_symlink()),
+                   key=lambda p: p.stat().st_mtime, reverse=True)
+    # HEAD is provenance; selected inputs own applicability across commits.
+    keys = set(request) - {'git_head', 'wave'}
+    for path in paths:
+        try:
+            previous = load(path / REQUEST_FILE)
+            if previous.get('snapshot') != request['snapshot'] or previous.get('label') != request['label']:
+                continue
+            if any(previous.get(key) != request[key] for key in keys):
+                reasons.add('contract_changed')
+                continue
+        except (OSError, ValueError, TypeError, AttributeError):
+            reasons.add('corrupt_record')
+            continue
+        status = read_status(path, True)
+        if status['applicability'] == 'current':
+            return path, []
+        reasons.add(status.get('reason', status['applicability']))
+    return None, sorted(reasons) or ['no_matching_record']
+
+
+def event(request, kind, **fields):
+    """Store one atomic cycle observation without a second execution lock."""
+    directory = RUNS / 'events'
+    directory.mkdir(exist_ok=True)
+    write_json(directory / (uuid.uuid4().hex + '.json'),
+               {'snapshot': request['snapshot'], 'kind': kind, 'at': time.time(),
+                'wave': request['wave'], 'gate': request['gate'], **fields})
+
+
+def start(args):
+    """Reuse under the worktree lock or transfer that lock to the sole supervisor."""
+    request = contract(args)
+    RUNS.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with (RUNS / 'execution.lock').open('a') as exclusive:
+        locked = True
+        try:
+            fcntl.flock(exclusive, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            locked = False
+        if locked and request['snapshot']:
+            current, reasons = lookup(request)
+            if current:
+                event(request, 'reused', run=current.name)
+                emit(evidence='reused')
+                return show(current, True)
+            event(request, 'invalidated', reasons=','.join(reasons))
+        path = RUNS / uuid.uuid4().hex
+        path.mkdir(mode=0o700)
+        request['snapshot'] = request['snapshot'] or path.name
+        return launch(path, request, exclusive if locked else None)
+
+
+def launch(path, request, exclusive):
+    """Publish a durable rejected run or launch the existing supervisor with its lease."""
+    write_json(path / REQUEST_FILE, request)
+    record = {'run': path.name, 'label': request['label'], 'state': 'starting', 'created_at': time.time(), 'exit_code': None, 'log': str(path / 'command.log')}
+    if exclusive is None:
+        record.update(state='infrastructure_failure', finished_at=time.time(), duration_seconds=0,
+                      error='another check-run owns this worktree; wait for its completion before starting a check')
+    write_json(path / RESULT_FILE, record)
+    if exclusive is None:
+        return show(path)
     with (path / 'supervisor.log').open('ab') as log:
-        subprocess.Popen([sys.executable, str(Path(__file__).resolve()), '_supervise', path.name], cwd=ROOT, stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
-    emit(run=path.name, state='starting', result=str(path / 'result.json'), next=f'check-run wait {path.name} --seconds 60')
+        subprocess.Popen([sys.executable, str(Path(__file__).resolve()), '_supervise', path.name,
+                          '--lease-fd', str(exclusive.fileno())], cwd=ROOT, stdin=subprocess.DEVNULL,
+                         stdout=log, stderr=log, start_new_session=True, pass_fds=(exclusive.fileno(),))
+    emit(run=path.name, evidence='new', state='starting', snapshot=request['snapshot'], result=str(path / RESULT_FILE), next=f'check-run wait {path.name} --seconds 60')
     return 0
+
+
+def metrics(snapshot):
+    """Report observed tool durations and reuse counts, never estimated wall-clock savings."""
+    runs, events = [], []
+    for path in RUNS.glob('*/request.json'):
+        request = load(path)
+        if request.get('snapshot') == snapshot:
+            runs.append((request, load(path.parent / RESULT_FILE)))
+    for path in (RUNS / 'events').glob('*.json'):
+        value = load(path)
+        if value['snapshot'] == snapshot:
+            events.append(value)
+    reasons = {}
+    for value in events:
+        if value['kind'] == 'invalidated':
+            for reason in value['reasons'].split(','):
+                reasons[reason] = reasons.get(reason, 0) + 1
+    emit(snapshot=snapshot, full_gates=sum(req['gate'] == 'full' and 'command_pid' in rec for req, rec in runs),
+         reused_evidence=sum(item['kind'] == 'reused' for item in events),
+         reused_full_gates=sum(item['kind'] == 'reused' and item.get('gate') == 'full' for item in events),
+         tool_duration_seconds=round(sum(rec.get('duration_seconds', 0) for _, rec in runs), 3),
+         running=sum(rec['state'] not in FINAL for _, rec in runs),
+         remediation_waves=len({req['wave'] for req, _ in runs if req.get('wave', 0) > 0}
+                               | {item['wave'] for item in events if item['wave'] > 0}),
+         invalidation_reasons=json.dumps(reasons, sort_keys=True), wall_clock_savings='unavailable')
+
+
+def add_control_commands(subs):
+    """Declare the distinct status, wait, cancellation and supervisor options."""
+    for name in ['status', 'wait', 'cancel', '_supervise']:
+        command = subs.add_parser(name, help='read or control a run by its ID' if name != '_supervise' else argparse.SUPPRESS)
+        command.add_argument('run')
+        if name == '_supervise':
+            command.add_argument('--lease-fd', type=int)
+        if name == 'status':
+            command.add_argument('--check-inputs', action='store_true')
+        if name == 'wait':
+            command.add_argument('--seconds', type=number, default=60, help='bounded wait, at most 60 seconds')
+
+
+def parse_args():
+    """Validate subcommand-specific options before accessing the repository."""
+    parser = Parser(description='Durable repository checks. Examples: start --label build -- ./gradlew build; status <id> --check-inputs; wait <id> --seconds 60.')
+    subs = parser.add_subparsers(dest='action')
+    command = Parser(add_help=False)
+    command.add_argument('--label', required=True)
+    command.add_argument('--timeout', type=number, default=3600, help='command timeout in seconds (default: 3600)')
+    command.add_argument('--input', action='append', default=[], help='repeatable repo-relative input path; default: all Git-visible files')
+    command.add_argument('--env-key', action='append', default=[], help='additional environment key to hash without storing its value')
+    command.add_argument('--tool', action='append', default=[], help='repeatable toolchain file/directory whose resolved paths and bytes affect reuse')
+    command.add_argument('--artifact', action='append', default=[], help='repeatable file:<path> or directory:<path>; default: explicit none')
+    command.add_argument('--snapshot', help='verification-session ID; start defaults to its new run ID; reuse never crosses IDs')
+    command.add_argument('--gate', choices=['full', 'affected', 'review'], default='affected')
+    command.add_argument('--wave', type=int, default=0, help='remediation wave, 0 for initial work')
+    command.add_argument('command', nargs=argparse.REMAINDER, help='-- command [arguments]')
+    subs.add_parser('start', parents=[command], help='reuse current evidence in an explicit snapshot, otherwise launch one detached check')
+    subs.add_parser('lookup', parents=[command], help='read-only exact-contract lookup; --snapshot is required')
+    command = subs.add_parser('metrics', help='observed cycle counts and tool time, excluding user pauses')
+    command.add_argument('--snapshot', required=True)
+    add_control_commands(subs)
+    args = parser.parse_args()
+    if args.action == 'wait' and args.seconds > 60:
+        parser.error('--seconds must be at most 60')
+    if args.action in ('start', 'lookup'):
+        if args.wave < 0:
+            parser.error('--wave must be nonnegative')
+        if args.action == 'lookup' and not args.snapshot:
+            parser.error('lookup requires --snapshot <verification-session-id>')
+    return args
+
+
+def home_view():
+    """Show the latest durable run, or a definitive empty state with a launch example."""
+    emit(bin=str(Path(__file__).resolve()), description='Run checks with durable logs, exit codes and input hashes')
+    paths = sorted((p for p in RUNS.glob('*') if p.is_dir() and (p / RESULT_FILE).is_file()),
+                   key=lambda p: p.stat().st_mtime)
+    if paths:
+        return show(paths[-1], True)
+    emit(runs=0, next='check-run start --label build -- ./gradlew build')
+    return 0
+
+
+def show_lookup(args):
+    """Publish current exact-contract evidence or an explicit read-only NOT RUN result."""
+    current, reasons = lookup(contract(args))
+    if current:
+        emit(evidence='reusable')
+        return show(current, True)
+    emit(evidence='NOT RUN', applicability='unavailable', reason=','.join(reasons),
+         next='check-run start with the same declaration and command')
+    return 1
+
+
+def control_run(args):
+    """Handle one existing run with bounded waiting and idempotent cancellation."""
+    path = run_path(args.run)
+    if args.action == '_supervise':
+        supervise(args.run, args.lease_fd)
+        return 0
+    if args.action == 'cancel':
+        if read_status(path)['state'] not in FINAL:
+            (path / 'cancel').touch()
+        show(path)
+        return 0
+    if args.action == 'wait':
+        deadline = time.monotonic() + args.seconds
+        while read_status(path)['state'] not in FINAL and time.monotonic() < deadline:
+            time.sleep(min(0.2, max(0, deadline - time.monotonic())))
+    return show(path, args.action == 'status')
 
 
 def main():
     """Dispatch non-interactive commands with a concise default status view."""
     global ROOT, RUNS
     os.umask(0o077)
-    parser = Parser(description='Durable repository checks. Examples: start --label build -- ./gradlew build; status <id> --check-inputs; wait <id> --seconds 60.')
-    subs = parser.add_subparsers(dest='action')
-    command = subs.add_parser('start', help='launch one detached check with durable evidence')
-    command.add_argument('--label', required=True)
-    command.add_argument('--timeout', type=number, default=3600, help='command timeout in seconds (default: 3600)')
-    command.add_argument('--input', action='append', default=[], help='repeatable repo-relative input path; default: all Git-visible files')
-    command.add_argument('--env-key', action='append', default=[], help='additional environment key to hash without storing its value')
-    command.add_argument('command', nargs=argparse.REMAINDER, help='-- command [arguments]')
-    for name in ['status', 'wait', 'cancel', '_supervise']:
-        command = subs.add_parser(name, help='read or control a run by its ID' if name != '_supervise' else argparse.SUPPRESS)
-        command.add_argument('run')
-        if name == 'status':
-            command.add_argument('--check-inputs', action='store_true')
-        if name == 'wait':
-            command.add_argument('--seconds', type=number, default=60, help='bounded wait, at most 60 seconds')
-    args = parser.parse_args()
-    if args.action == 'wait' and args.seconds > 60:
-        parser.error('--seconds must be at most 60')
+    args = parse_args()
     try:
         ROOT = Path(git('rev-parse', '--show-toplevel').decode().strip())
         RUNS = Path(git('rev-parse', '--absolute-git-dir').decode().strip()) / 'check-runs'
         if not args.action:
-            emit(bin=str(Path(__file__).resolve()), description='Run checks with durable logs, exit codes and input hashes')
-            directory = RUNS
-            paths = sorted((p for p in directory.glob('*') if p.is_dir() and (p / 'result.json').is_file()), key=lambda p:p.stat().st_mtime)
-            if paths:
-                return show(paths[-1])
-            emit(runs=0, next='check-run start --label build -- ./gradlew build')
-            return 0
+            return home_view()
         if args.action == 'start':
             return start(args)
-        path = run_path(args.run)
-        if args.action == '_supervise':
-            supervise(args.run)
+        if args.action == 'lookup':
+            return show_lookup(args)
+        if args.action == 'metrics':
+            metrics(args.snapshot)
             return 0
-        if args.action == 'cancel':
-            if read_status(path)['state'] not in FINAL:
-                (path / 'cancel').touch()
-            show(path)
-            return 0
-        if args.action == 'wait':
-            deadline = time.monotonic() + args.seconds
-            while read_status(path)['state'] not in FINAL and time.monotonic() < deadline:
-                time.sleep(min(0.2, max(0, deadline - time.monotonic())))
-        return show(path, getattr(args, 'check_inputs', False))
-    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        return control_run(args)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, subprocess.SubprocessError) as error:
         emit(error=str(error) if isinstance(error, ValueError) else 'cannot access repository or run evidence', help='check-run --help')
         return 2
 

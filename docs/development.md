@@ -76,23 +76,11 @@ normal, packaged, performance и OCI consumers одним change set.
 
 ## Режим разработки
 
-Следовать [выбранному режиму тестирования](../CLAUDE.md#behavior-first-development-and-selective-tdd).
-По умолчанию одна небольшая возможность реализуется вместе с группой связанных
-примеров; перед кодом согласуются контракт, независимые expected values и старые
-consumers. Явный запрос TDD сохраняет строгий RED/GREEN. Для багов сначала
-воспроизводится поведенческий дефект. Проверки streaming, cancellation, privacy,
-ownership, quota и shutdown сохраняют реальные E2E и причинные барьеры.
-
-После связного изменения выполнять detekt и affected old/new tests. До full
-build проверить миграцию unit, HTTP, process, packaged/OCI и performance fixtures.
-Input/output fixtures можно утверждать как Approved Scenarios; actual output
-сохраняется отдельно и не заменяет baseline автоматически.
-
-Для одной issue основной агент работает непосредственно в задаче, когда нет
-необходимости сменить модель или явного требования делегировать. Независимые
-Standards и Spec review сохраняются. Между волнами исправлений проверять delta
-и её consumers; принимать старую evidence только для неизменных релевантных
-inputs, целых outputs, того же toolchain и допустимой свежести внешних данных.
+[Project testing mode](agent-workflow.md#behavior-first-development-and-selective-tdd)
+владеет порядком behavior-first/TDD slices, independent examples и affected
+consumers. [Defect prevention](agent-workflow.md#pre-verification-defect-prevention)
+владеет criteria, lifecycle и semantic review checks. Обязательные точки чтения
+заданы в [startup routing](../CLAUDE.md#mandatory-routing).
 
 На следующих 3-5 сопоставимых issue записывать в рабочий evidence ledger:
 режим тестирования, модель/effort когда известны, cached input отдельно от
@@ -103,52 +91,158 @@ uncached input и output, время инструментов отдельно �
 
 ## Устойчивый запуск проверок
 
-`scripts/check-run` запускает команду с полным логом и сохраняемым результатом
-в `<git-dir>/check-runs/`, где `<git-dir>` возвращает
-`git rev-parse --absolute-git-dir`. Каталог отдельный для каждого worktree и
-переживает `gradle clean`. Стандартный Python 3 и Git обязательны. stdout содержит
-компактный TOON-статус; полный command, selected input hashes, environment hashes,
-время, exit и пути логов находятся в JSON. Команда получает stdin из /dev/null.
-Не передавать секреты в argv и не выводить их в лог.
+`scripts/check-run` - единственный supervisor локальных checks. Python 3.11+
+и Git обязательны. Run хранится в `<git-dir>/check-runs/<run-id>/`, отдельно
+для каждого worktree, и переживает `gradle clean`. stdout - компактный TOON;
+argv, Git head, repository/worktree, timestamps, monotonic duration, exit,
+selected inputs до/после и artifact digests находятся в JSON. Environment
+сохраняется только в виде digests. stdin команды - `/dev/null`.
+Не передавать секреты в argv и не выводить их в command log.
 
 ~~~bash
-./scripts/check-run start --label lint --timeout 600 -- ./gradlew detekt
-./scripts/check-run start --label final-build --timeout 3600 -- ./gradlew build
-./scripts/check-run status <run-id> --check-inputs
+./scripts/check-run start --label lint --snapshot issue-local-1 --timeout 600 -- ./gradlew detekt
+./scripts/check-run start --label affected --snapshot issue-local-1 --input src --artifact directory:build/test-results/test -- ./gradlew test -x processTest --tests '<pattern>'
+./scripts/check-run lookup --label affected --snapshot issue-local-1 --input src --artifact directory:build/test-results/test -- ./gradlew test -x processTest --tests '<pattern>'
+./scripts/check-run status <run-id>
 ./scripts/check-run wait <run-id> --seconds 60
 ./scripts/check-run cancel <run-id>
+./scripts/check-run metrics --snapshot issue-local-1
 python3 -m unittest discover -s scripts/tests -p 'test_*.py'
 ~~~
 
-Без аргументов runner показывает последний запуск. `start` возвращает run ID;
-supervisor переживает завершение вызывающего terminal и записывает итоговый exit.
-Timeout/cancel завершает исходную process group команды с ограниченным grace
-period. Не использовать runner для команд, намеренно оставляющих background work:
-процессы, создавшие новую session/group, не входят в гарантию очистки. Общие
-сервисы вроде Gradle daemon runner не завершает. Один worktree lock запрещает
-перекрытие runner-команд; прямые внешние Gradle invocations он не блокирует, их
-нужно проверять отдельно.
+Пример affected scope иллюстрирует CLI, а не полный Gradle input contract:
+для реальной проверки добавить build/config/toolchain inputs и старые consumers.
+Набор tests задаёт implementer; автоматического affected-test inference нет.
 
-По умолчанию snapshot включает все Git-visible files, в том числе untracked,
-кроме outputs runner. Повторяемый `--input <repo-relative-path>` ограничивает
-inputs команды; выбирать полный набор source/config/build inputs, включая новые
-файлы под указанными directories. `--env-key <name>` добавляет digest влияющего
-environment value; значения не сохраняются. JAVA_HOME, GRADLE_OPTS, JAVA_OPTS,
-JAVA_TOOL_OPTIONS, JDK_JAVA_OPTIONS, PATH, GRADLE_USER_HOME и Kotlin options
-учитываются автоматически. Отпечаток не доказывает неизменность установленного
-JDK/analyzer или freshness внешних данных: это проверяется отдельно.
+### Контракт reusable evidence
 
-`--check-inputs` сообщает, совпадают ли selected inputs и environment с моментом
-запуска и завершения. Он не превращает RUNNING, FAIL, timeout, потерянный worker
-или изменившийся snapshot в PASS и не разрешает автоматически пропустить gate.
-Изменения файлов во время проверки инвалидируют её сохранённый snapshot даже
-при exit 0. После runtime changes всё ещё нужен current full build; docs-only
-изменения не требуют перезапуска неизменных runtime tests без иной причины.
+`--snapshot` - явный ID одной verification session одной задачи. Для OWASP,
+Sonar и других external-data gates reuse допустим только внутри этой session,
+никогда между задачами по source hash. Новый session получает новый ID;
+отдельной freshness policy нет. Без `--snapshot` start создаёт уникальный ID
+и всегда новый run. ID snapshot не является semantic approval.
 
-Предпочитать completion notification из harness, а при отсутствии выполнять
-одно bounded wait в полезной точке, с согласованным outer exec yield. Runner
-сам по себе не добавляет push notifications. Не опрашивать неизменный статус
-часто и не запускать новые проверки до подтверждённого завершения прежней.
+`start` под worktree execution lock ищет current запись с exact label, argv,
+timeout, snapshot, input/tool/environment/artifact declarations и gate kind.
+При совпадении возвращает прежний run ID и `evidence: reused`, без процесса.
+Иначе возвращает новый ID и `evidence: new`. `lookup` делает тот же read-only
+поиск, никогда не запускает команду и не увеличивает reuse counter; отсутствие
+пригодной записи - exit 1, `evidence: NOT RUN` и причина. HEAD хранится как
+provenance; commit неизменных selected files сам по себе не инвалидирует run.
+Порядок argv значим, порядок повторяемых declarations нормализуется.
+
+Перед каждым reuse consumer вызывает `status <id>` или exact `lookup`:
+
+| Applicability | Значение и следующее действие |
+|---|---|
+| `current` | Terminal exit 0, стабильные inputs до/после, текущие command/toolchain/environment inputs и целые artifacts. Reviewer отдельно проверяет semantic applicability |
+| `stale` | Изменён, добавлен, удалён или недоступен selected input/toolchain/environment; запустить check на текущем contract |
+| `corrupt` | Partial/legacy/повреждённая запись, отсутствующий/изменённый artifact или symlink в artifact path; восстановить точные artifacts либо выполнить новый check |
+| `starting`, `running` | Terminal evidence ещё нет; bounded wait, без повторного запуска |
+| `failed`, `timeout`, `cancelled`, `infrastructure_failure` | Собственный terminal verdict, никогда не reusable; исправить причину или завершить cleanup перед новым run |
+
+`state: passed` после `wait` - сохранённый exit, а не разрешение пропустить
+проверку. Только `applicability: current` после status/lookup подтверждает
+mechanical reuse. Старый `status --check-inputs` сохранён как alias полной
+проверки. Неисправные данные дают короткий reason/action, без полного log.
+Manifest публикуется последним и связывает request/result, before/after и
+artifacts; это integrity check локальных файлов, не криптографическая подпись.
+
+Повторяемый `--input <repo-relative-path>` выбирает Git-visible files, включая
+новые untracked files под выбранными directories. Default - весь Git-visible
+worktree. Deleted tracked files и executable mode учитываются. Не исключать
+реальные consumers: docs-only remediation оставляет узкий runtime run current,
+только если docs не читались им; shared build/contract input инвалидирует gate.
+Изменение inputs между before/after делает exit 0 stale. Не редактировать
+selected inputs во время check и не использовать transient edit/restore как
+доказательство неизменности: snapshots наблюдают границы, не весь интервал.
+
+`--env-key <name>` добавляет digest значения без сохранения значения. Автоматически
+учитываются JAVA_HOME, GRADLE_OPTS, JAVA_OPTS, JAVA_TOOL_OPTIONS, JDK_JAVA_OPTIONS,
+PATH, GRADLE_USER_HOME, KOTLIN_OPTS. Runner, Python, Git, выбранный executable
+и OS identity также входят в snapshot. `--tool <file-or-directory>` добавляет
+пути, resolved paths и bytes установленного JDK, Gradle/analyzer или внешней
+конфигурации; выбирать все реально влияющие tools. Отсутствующий tool path и
+пустой directory тоже записываются: последующее появление файла инвалидирует
+status по прежнему ID. File symlinks учитываются
+с referent, directory symlinks внутри tool tree отклоняются: выбрать resolved
+root отдельно. Hashes не доказывают полноту declarations; это обязанность reviewer.
+
+`--artifact file:<repo-path>` или `--artifact directory:<repo-path>` повторяется
+для каждого результата. Directory должен содержать хотя бы один regular file;
+учитываются весь состав, bytes и mode, включая добавления/удаления. Symlinks
+в любом компоненте artifact path и специальные файлы отклоняются. Без declarations
+record явно содержит `none`; это допустимо для checks без report artifacts,
+но не заменяет обязательные test/OWASP/Sonar reports. Изменённый command или
+набор artifact declarations не совпадает с reusable contract.
+
+Supervisor переживает закрытие terminal. Один execution lock передаётся от
+start supervisor и далее дочерней команде; он запрещает одновременные runner
+commands и сериализует reuse decision. Status не ждёт окончания команды и
+не запускает её; время чтения зависит от объёма declared files. Timeout/cancel
+и normal exit очищают исходную process group с bounded TERM/KILL grace. Lost
+supervisor - infrastructure failure; проверить log и принадлежащую run группу
+перед следующим запуском. Direct внешние Gradle invocations lock не блокирует:
+проверить их отсутствие отдельно. Нельзя стартовать второй Gradle до terminal
+exit первого. Общие Gradle daemons runner не завершает; намеренно отделённые
+sessions/groups вне гарантии cleanup. Не запускать background services через runner.
+
+Предпочитать completion notification harness; иначе один `wait --seconds 60`
+в полезной точке с согласованным outer yield. Runner не добавляет push notifications.
+
+### Метрики verification cycle
+
+`--gate full|affected|review` и `--wave <nonnegative integer>` описывают check;
+wave 0 - начальная работа. Wave не меняет applicability. `metrics --snapshot`
+считает реально стартовавшие full gates, reuse events отдельно от read-only lookup,
+reused full gates, наблюдаемое tool duration без пользовательских пауз,
+remediation waves и причины invalidation. Rejected launch не считается full gate.
+JSON records/events в private run directory - исходные наблюдения для ledger.
+
+На следующих 3-5 сопоставимых issues consumer ведёт одну строку на намеренный
+запрос gate, связывая reuse event с исходным run, а не считая status polls:
+
+| Issue/session | Consumer / run ID | New / reused / NOT RUN | Gate / wave | Причина invalidation | Tool seconds | Task elapsed / user pause seconds |
+|---|---|---|---|---|---:|---|
+| `<issue>/<snapshot>` | `<implementation, verify-changes, delivery>/<run>` | `<mode>` | `<kind>/<wave>` | `<reason or none>` | `<record duration; reused run не суммировать повторно>` | `<measured or unavailable>` |
+
+Количество устранённых full reruns равно намеренным reused full requests;
+сумма durations только уникальных новых runs - фактическое tool time. Для
+wall-clock сравнения отдельно измерять task elapsed и паузы, контролировать
+сопоставимость issues/testing mode/model. Duration прежнего run не является
+наблюдённой wall-clock экономией; CLI сообщает её как `unavailable`. До 3-5
+сопоставимых наблюдений не обещать процент экономии. Reviewer defects и cached/
+uncached model usage остаются отдельными полями рабочего ledger, если доступны.
+
+## Agent papercuts
+
+`.papercuts.jsonl` is the tracked append-only journal of repository, tooling and
+documentation friction. Before diagnosing a known symptom, retrieve both open
+and resolved entries by its explicit exact tag (repeat for each declared tag):
+
+```bash
+rtk proxy ./scripts/papercuts --pretty list --status all --tag tooling --limit 5
+```
+
+Use tags declared by the issue or an exact existing tag justified by the symptom.
+Do not guess a nearby tag. With no known symptom/tag, the explicit fallback is
+`rtk proxy ./scripts/papercuts --pretty list --status all`; broad retrieval is
+not startup context. No tag declaration means task-context never reads the journal.
+
+Record new actionable friction before continuing the primary task:
+
+```bash
+rtk proxy ./scripts/papercuts add "<symptom; context; prevention>" --tag <exact-tag> --severity <minor|major|blocker>
+rtk proxy ./scripts/papercuts resolve <id> --note "<root cause; durable fix/workaround; verification command>"
+rtk proxy ./scripts/papercuts doctor
+```
+
+Keep working unless it is a real blocker. Product defects and planned work
+belong in `spec/issues/`. Prefer fixing the underlying script/config/docs; a
+resolution note does not replace the fix. Reuse an old solution only after
+checking that its context still applies. Never record secrets, bodies, auth
+headers, raw environment dumps or unredacted stderr that may contain them.
+Run doctor after manual journal conflict resolution or suspected corruption.
 
 ## Test timing report
 
@@ -601,13 +695,34 @@ current status находится в
 ## Локальные pipeline scripts
 
 ~~~bash
-./scripts/pipeline-verify
+./scripts/pipeline-verify --snapshot <issue-session> --tool <JDK-home> --tool <Gradle-distribution>
 ./scripts/pipeline-sonar
 ~~~
 
-`pipeline-verify` сначала запускает `detekt` для ранней обратной связи, затем
-`build` и `verifyAll`; Gradle повторно использует актуальные результаты, а
-`verifyAll` добавляет OWASP scan. `pipeline-sonar`
+`pipeline-verify` публикует один durable run/evidence ID через `check-run`.
+Внутри нового run сначала выполняется `detekt` как cheap feedback, затем ровно
+один `verifyAll dependencyCheckAnalyze --rerun`: verifyAll уже владеет build
+и OWASP, а task-specific `--rerun` принудительно выполняет только OWASP,
+чтобы новая verification session не наследовала external-data report как
+UP-TO-DATE от другой задачи. Отдельного полного build
+перед ним нет. Wrapper требует snapshot и installed toolchain declarations;
+автоматически добавляет user Gradle properties, init.d, init.gradle/init.gradle.kts
+(включая их отсутствие) и digest NVD_API_KEY. Используется весь Git-visible
+worktree, включая новые root configuration files:
+`verifyAll` действительно читает documentation/catalog fixtures. Передать те JDK
+и Gradle distributions, которые использует environment/toolchain configuration.
+User Gradle settings могут менять JDK selection; reviewer проверяет этот выбор.
+Не передавать секреты аргументами. Private `--execute` - только child command
+runner, не consumer entry point. Dispatch exit 0 не равен terminal PASS.
+
+Artifacts: JUnit XML и HTML обеих test lanes, XML work-item fixtures, detekt XML
+и OWASP HTML. Прежние Gradle UP-TO-DATE outputs для source-derived tasks допустимы, когда
+сам Gradle подтвердил актуальность; runner затем проверяет их integrity.
+OWASP при новом run выполняется явно, reuse между consumers происходит только
+через current evidence внутри одной session. `--wave` отмечает
+remediation, повторный вызов с неизменным contract возвращает прежний run.
+Sonar остаётся отдельным обязательным gate, когда требуется scope задачи.
+`pipeline-sonar`
 поднимает локальный SonarQube в Docker, запускает tests, JaCoCo и Sonar analysis,
 а затем фильтрует blocking findings по текущему verification scope. Для него
 нужны Docker, `curl`, `jq`, Git и локальный `.claude/sonar.env`; подробные
@@ -657,7 +772,7 @@ pipeline в текущий CI не входят.
 ## Завершение work item
 
 Нормативное правило находится в
-[canonical project guide](../CLAUDE.md#work-item-completion), формат каталога - в
+[canonical project guide](agent-workflow.md#work-item-completion), формат каталога - в
 [реестре](../spec/WORK_ITEMS.md#как-закрывать-work-item), permanent owners - в
 [индексе требований](../spec/requirements/README.md).
 
@@ -734,7 +849,7 @@ byte source и explicit versioned descriptor. Все expected fragments, order,
 semantic kinds, roles, locators, model, coverage и gaps задаются независимо
 от production calculation. Negative cases проверяют safe code и отсутствие
 partial result/source preview. Правила KDoc и lifecycle tests действуют по
-[project guide](../CLAUDE.md#behavior-first-development-and-selective-tdd).
+[project guide](agent-workflow.md#behavior-first-development-and-selective-tdd).
 
 Обязательная matrix:
 

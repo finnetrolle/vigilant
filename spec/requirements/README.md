@@ -4,7 +4,15 @@
 Один behavioral clause имеет одного permanent owner. Runtime docs объясняют
 реализацию и ссылаются на требования; задачи описывают только незавершённое
 изменение. История реализации остаётся в Git после
-[закрытия work item](../../CLAUDE.md#work-item-completion).
+[закрытия work item](../../docs/agent-workflow.md#work-item-completion).
+
+Authoring contract процесса разработки находится отдельно от product IDs:
+[risk-based readiness](../WORK_ITEMS.md#risk-based-readiness) и
+[issue template](../ISSUE_TEMPLATE.md). [Task packet](../../docs/task-context.md#contract)
+реализует exact source retrieval, [startup guide](../../CLAUDE.md#mandatory-routing)
+маршрутизирует обязательные procedures. [Reusable verification evidence](../../docs/development.md#контракт-reusable-evidence)
+владеет mechanical applicability и integrity, [closure handoff](../../docs/agent-workflow.md#finish-the-consistency-pass-before-verification)
+сохраняет semantic ответственность reviewers. Это не добавляет runtime capability.
 
 ## Верхний уровень: 55 stable IDs
 

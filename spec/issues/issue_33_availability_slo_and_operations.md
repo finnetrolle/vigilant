@@ -8,6 +8,10 @@
 - **Блокирует:** нет
 - **Оценка:** не оценено
 
+## Context sources
+
+- `docs/deployment.md#health-и-lifecycle`
+
 ## Цель
 
 После появления production telemetry определить availability SLO и operational

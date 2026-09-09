@@ -77,12 +77,12 @@ qualification без fallback. Historical durations или percentage improvemen
 Delivery order определяется
 [active registry](WORK_ITEMS.md#active-todo-порядок-следующей-работы):
 
-1. [VIG-38](issues/issue_38_risk_based_scope_lock.md) добавляет risk-based scope
-   lock для архитектурно дорогих implementation-ready work items.
-2. [VIG-39](issues/issue_39_compact_task_context.md) создаёт компактный
-   детерминированный task packet после VIG-38.
-3. [VIG-40](issues/issue_40_reusable_verification_evidence.md) закрепляет один
-   verification snapshot и reusable evidence после VIG-39.
+1. [Task packet](../docs/task-context.md#contract) выдаёт компактный
+   детерминированный task packet на основе
+   [issue template](ISSUE_TEMPLATE.md#context-sources).
+2. [Reusable verification evidence](../docs/development.md#контракт-reusable-evidence)
+   реализована поверх опубликованного task packet; semantic applicability
+   остаётся ответственностью reviewers.
 
 [VIG-33](issues/issue_33_availability_slo_and_operations.md) остаётся `Draft`:
 численный SLI/SLO, ownership внешних failures и production evidence period ещё
