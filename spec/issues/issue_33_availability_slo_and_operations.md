@@ -16,7 +16,10 @@ evidence для горизонтально масштабируемого deploy
 ## Известный контекст
 
 - MVP работает в нескольких stateless replicas за load balancer.
-- Каждая replica владеет local identity cache, spool и audit file.
+- Каждая replica владеет local identity cache, bounded request source и
+  retained in-memory response sources. Application-owned audit file отсутствует;
+  safe best-effort audit выходит через stdout, а delivery/retention принадлежат
+  deployment.
 - Graceful shutdown: readiness становится `503`, новые requests не принимаются,
   активные операции drain-ятся до deadline, затем отменяются.
 - Численный availability target пока намеренно не выбран.

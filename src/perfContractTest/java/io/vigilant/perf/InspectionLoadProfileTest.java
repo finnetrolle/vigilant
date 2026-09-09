@@ -45,7 +45,7 @@ final class InspectionLoadProfileTest {
         }
     }
 
-    /** Pins the exact default source limits and JVM bounds used by VIG-21-02 qualification. */
+    /** Pins the exact default source limits and JVM bounds used by max-shape qualification. */
     @Test
     void resourceQualificationProfileUsesExactDefaultSourceLimits() {
         InspectionQualificationProfile profile = InspectionQualificationProfile.fixed();

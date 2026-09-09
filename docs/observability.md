@@ -1,5 +1,11 @@
 # Observability
 
+Нормативные stdout, analysis-audit, tracing, metrics, privacy и delivery rules
+принадлежат [observability contract](../spec/requirements/observability.md).
+Этот документ описывает фактическую runtime-композицию и operator pipeline;
+implementation/evidence gaps перечислены в
+[requirements coverage](requirements-coverage.md#observability-evidence).
+
 ## Логи
 
 У приложения один физический sink - stdout. В нём находятся два логических
@@ -176,6 +182,12 @@ SERVER span также содержит method, path без query, status,
 добавляются. Gateway-owned health/readiness probes не проходят через tracing
 decorator.
 
+При transport failure current SERVER и upstream CLIENT paths вызывают OTel
+`recordException`, поэтому exporter может получить exception type/message/stack.
+Это фактический privacy gap относительно
+[channel matrix](../spec/requirements/observability.md#privacy-by-channel), а не
+разрешённое исключение из target.
+
 ### Correlation в application logs
 
 Request-scoped events получают в MDC:
@@ -194,6 +206,10 @@ failure event он равен CLIENT span, для request completion event он 
 SERVER span. Другие HTTP headers в MDC не копируются.
 
 ## Metrics
+
+Нормативный [identity section](../spec/requirements/observability.md#identity)
+владеет lookup/cache instruments, finite attributes и initiating span lineage.
+Таблица ниже отражает их публикацию через текущий OTel pipeline.
 
 Gateway создаёт следующие OpenTelemetry instruments:
 
@@ -219,6 +235,13 @@ ALLOW/MASK с upstream 200 дают 2xx и один CLIENT span. Active-request 
 возвращается к baseline после owning terminal callback, включая cancellation.
 Новых policy labels или instruments нет; technical request inspection span
 имеет ERROR без raw exception event, policy BLOCK не записывается как exception.
+
+Dedicated inspection OTel instruments для latency/outcome/capacity/deadline и
+PII aggregates сейчас отсутствуют: эти values есть только в stdout
+`policy.analysis_completed`. Кроме того, proxy transport `error.type`
+формируется из exception class и не имеет finite allowlist. Оба расхождения с
+`OBS-01` сохранены в
+[coverage](requirements-coverage.md#observability-evidence).
 
 Каждый lookup открытого cache считает ровно один hit/miss. Join считается
 miss и coalesced: три callers cold key дают miss=3, coalesced=2, один Bridge.

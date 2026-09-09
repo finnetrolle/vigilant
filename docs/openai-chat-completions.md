@@ -1,110 +1,32 @@
-# Контракт запросов OpenAI Chat Completions
+# Реализация протокола OpenAI Chat Completions
 
-## Поддерживаемый дескриптор
+Нормативные [descriptor, полная field map, schema vocabulary и JSON/SSE terminal rules](../spec/requirements/chat-completions-protocol.md)
+живут у protocol owner. Точные [HTTP outcomes](../spec/requirements/http-gateway.md)
+принадлежат gateway owner; [coverage](requirements-coverage.md#protocol-evidence)
+сохраняет target/runtime/evidence gaps.
 
-Текущая исполняемая система проверяет только один адаптер протокола:
+## Runtime parsing boundary
 
-```text
-family=OPENAI
-operation=CHAT_COMPLETIONS
-method=POST
-normalized_path=/v1/chat/completions
-media_type=application/json
-direction=REQUEST
-transport=JSON
-contract=openai-chat-completions-request@2026-08-26
-```
+`PiiShadowProtocol` проверяет request descriptor до body access.
+`ChatCompletionsRequestParser` читает единственную sequential source view и
+возвращает model, ordered fragments, explicit gaps и source metadata.
+`RetainedResponseHandler` выбирает JSON/SSE descriptor по upstream Content-Type;
+`ChatCompletionsResponseParser` создаёт terminal normalized response и immutable
+source maps в одном parse pass. Он не начинает policy enforcement.
 
-Медиатип сравнивается без учёта регистра по типу и подтипу. Параметры,
-например `charset=utf-8`, разрешены. Другой метод, путь, медиатип
-`application/*+json` или транспорт получает ответ
-`400 {"error":"unsupported_schema"}` без чтения тела, записи аудита и запроса
-к вышестоящему серверу.
+Request source defaults: 8 MiB на request, 64 MiB retained bytes на process,
+128 owners и 128 segments/request. Они настраиваются через
+[configuration](configuration.md). Parser bounds 128 nesting levels и 16 384
+fragments закреплены в code и не являются startup settings; превышение даёт
+UNSUPPORTED_SCHEMA. Это не подтверждение более высоких product source targets.
 
-Поле `stream=true` не меняет разбор запроса. Оно выбирает SSE response,
-который gateway полностью удерживает до standalone `data: [DONE]`,
-атомарно анализирует и только затем применяет `ALLOW`, `MASK` или `BLOCK`.
-
-Полная диаграмма последовательности обработки запроса в нотации UML 2.0:
+Полная последовательность показана в UML 2.0
 [request-inspection-sequence.puml](diagrams/request-inspection-sequence.puml).
 
-## Корневая структура и ограничения ресурсов
-
-Корнем должен быть объект JSON со следующими полями:
-
-- непустая строка `model`;
-- непустой массив `messages`.
-
-Недопустимые UTF-8 или JSON, отсутствие обязательного поля и неверный тип поля
-дают ошибку `malformed_message`. Повтор ключа объекта на любом уровне даёт
-`ambiguous_content`: анализатор не выбирает первое или последнее значение.
-
-Полное тело сохраняется в ограниченном источнике в памяти до передачи первого
-байта вышестоящему серверу. Значения по умолчанию:
-
-- `8 MiB` на запрос;
-- `64 MiB` сохранённых данных на процесс;
-- `128` одновременных источников;
-- `128` сохранённых сегментов на запрос.
-
-Глубина структуры свыше `128` уровней или более `16 384` нормализованных
-фрагментов даёт `unsupported_schema`. Все ограничения настраиваются согласно
-[справочнику по конфигурации](configuration.md).
-
-## Что передаётся детектору
-
-Каждое текстовое поле, видимое модели, образует отдельный фрагмент. Тексты из
-разных полей не объединяются, поэтому смещения срабатывания всегда относятся к
-одному декодированному фрагменту.
-
-| Источник | Вид фрагмента | Примечание |
-|---|---|---|
-| `messages[*].content` у `developer` и `system` | `INSTRUCTION` | Строка или каждая известная текстовая часть |
-| `messages[*].content` у `user` и `assistant` | `MESSAGE_TEXT`, `REFUSAL` | Текстовые части и отказы независимо друг от друга |
-| `messages[*].content` у `tool` и `function` | `TOOL_RESULT` | Текст результата |
-| `messages[*].name` | `LABEL` | Только видимое модели имя, но не идентификаторы |
-| `tool_calls[*].function.arguments` | `TOOL_ARGUMENT` | Полная декодированная строка; вложенный JSON может быть недопустимым |
-| Устаревшее поле `function_call.arguments` | `TOOL_ARGUMENT` | Та же семантика |
-| Текстовый ввод пользовательского инструмента | `TOOL_ARGUMENT` | Полная декодированная строка |
-| Имя и описание в `tools[*]` | `LABEL`, `TOOL_DESCRIPTION` | Определения функций и пользовательских инструментов |
-| `tools[*].function.parameters` | `LABEL`, `SCHEMA_TEXT` | Через ограниченный обход JSON Schema |
-| `response_format.json_schema` | `LABEL`, `SCHEMA_TEXT` | Через тот же обход |
-| Именованные `tool_choice` и `allowed_tools` | `LABEL` | Заданные пользователем имена инструментов и функций |
-| Поле `definition` грамматики пользовательского инструмента | `SCHEMA_TEXT` | Фиксированное значение `syntax` не передаётся детектору |
-| `web_search_options.user_location.approximate.*` | `TOOL_ARGUMENT` | Непустые строки страны, региона, города и часового пояса по отдельности |
-| `prediction.content` | `OUTPUT_TEXT` | Строка или известные текстовые части |
-| Открытый текст и краткое содержание рассуждения | `REASONING` | Только доступный открытый текст |
-
-Пустое известное текстовое поле доступно для проверки, но фрагмент нулевой
-длины не создаётся. Детектор не получает `model`, идентификаторы, временные
-метки, статистику использования, настройки выборки и токенов, `stream`,
-`service_tier`, фиксированные значения дискриминаторов и другие управляющие
-метаданные.
-
-## Обход JSON Schema
-
-Параметры инструментов и схемы структурированного ответа не обходятся как
-произвольный JSON. Механизм обхода знает ограниченный словарь и извлекает:
-
-- имена свойств из `properties`, `patternProperties` и `dependentSchemas`;
-- `title`, `description` и строковые значения `enum`, `const`, `default` и
-  `examples`;
-- регулярное выражение `pattern`;
-- те же значения внутри известных контейнеров схемы, включая `$defs`, `items`,
-  `allOf`, `anyOf`, `oneOf` и `if/then/else`.
-
-Служебные ключевые слова, `$id`, `$anchor`, `type`, `required`, имена форматов и
-числовые или логические ограничения не передаются детектору. Локальная ссылка
-`$ref` разрешается только внутри того же ограниченного документа схемы.
-Неразрешимая или циклическая локальная ссылка даёт `ambiguous_content`, а
-внешняя ссылка `$ref` даёт `unresolved_context`.
-
-Неизвестное ключевое слово схемы со значением `null`, логическим или числовым
-значением сохраняется и игнорируется. Неизвестное ключевое слово со строкой,
-объектом или массивом отклоняется как `ambiguous_content`, поскольку может
-скрывать текст, видимый модели.
-
 ## Field classification и REQUEST enforcement
+
+Нормативная classification, reaction priority, marker и rewrite semantics
+принадлежат [REQUEST enforcement](../spec/requirements/request-enforcement.md).
 
 Parser фиксирует назначение каждого fragment независимо от его semantic kind
 и написания JSON Pointer. MASK в structural field блокирует весь request:
@@ -130,51 +52,15 @@ policy BLOCK/structural MASK, затем текстовые masks или origina
 Все untouched raw bytes, gaps, Unicode, escapes, unknown fields и formatting
 остаются исходными; masked body не превышает original ingress limit.
 
-## Непроверяемые части
+## Coverage и rejection
 
-Известное нетекстовое или непрозрачное для поставщика содержимое не превращает
-разбор в ошибку:
-
-| Вид | Примеры |
-|---|---|
-| `IMAGE` | Изображение пользователя |
-| `AUDIO` | Входные аудиоданные |
-| `FILE` | Содержимое, данные или ссылка на файл |
-| `OPAQUE_AUDIO_REFERENCE` | Поле `audio.id` помощника |
-| `OPAQUE_REASONING` | Зашифрованное содержимое рассуждения поставщика |
-
-Отдельные доступные текстовые поля, например метка имени файла или
-расшифровка, по-прежнему становятся фрагментами. Исходный URL, данные файла,
-идентификатор и зашифрованное содержимое не попадают в детектор, журнал или
-аудит.
-
-Полнота проверки вычисляется явно:
-
-- `FULLY_INSPECTABLE`: непроверяемых частей нет;
-- `PARTIALLY_INSPECTABLE`: есть текстовые фрагменты и непроверяемые части;
-- `UNINSPECTABLE`: распознанное содержимое есть, но доступного для проверки
-  текста нет.
-
-Каждая coverage допускает ALLOW или free-text MASK при успешном policy outcome.
-Policy BLOCK, structural MASK или technical failure запрещают весь request.
-Наличие непроверяемой части создаёт решение аудита `INSPECTION_GAP`, если нет
-срабатываний; пустой список фрагментов сам по себе не означает `CLEAN`.
-
-## Результаты fail-closed
-
-| Категория разбора | Результат HTTP | Когда используется |
-|---|---|---|
-| `MALFORMED_MESSAGE` | `400 malformed_message` | Недопустимые JSON или UTF-8, отсутствие обязательной структуры, неверный тип поля |
-| `UNSUPPORTED_SCHEMA` | `400 unsupported_schema` | Дескриптор, структурное ограничение или форма вне поддерживаемой области |
-| `AMBIGUOUS_CONTENT` | `400 ambiguous_content` | Повтор ключа, неизвестный дискриминатор содержимого или потенциально текстовая неизвестная ветвь схемы |
-| `UNRESOLVED_CONTEXT` | `400 unresolved_context` | Видимый модели контекст требует разрешения внешней ссылки |
-
-Типизированная ошибка поддержанного дескриптора возвращается без запуска
-detector execution и без stdout audit pair. Исходное тело, исключение
-анализатора, расположение и предварительный просмотр содержимого не попадают в
-ответ, ошибку или audit event.
-Полная матрица HTTP приведена в
-[контракте исполнения](runtime-contract.md#request-side-errors).
+Parser вычисляет [coverage и gaps](../spec/requirements/chat-completions-protocol.md#coverage-и-safe-failures)
+явно. Policy BLOCK, structural MASK и technical failure запрещают request;
+recognized media/opaque gap сам по себе не блокирует exact replay.
+Audit outcome использует DETECTED > INSPECTION_GAP > CLEAN. До фактического
+detector execution typed parse rejection не создаёт analysis pair;
+ошибка не раскрывает source/preview/locator или parser exception.
+HTTP status/body принадлежат [error matrix](../spec/requirements/http-gateway.md).
 
 ## Передача без потерь
 
@@ -206,7 +92,9 @@ Structural parse и detector не повторяются; whole-body copy и DTO
 - произвольные OpenAI-совместимые конечные точки и резервное распознавание по
   телу запроса.
 
-Combined response parser VIG-06-03 поддерживает ordinary JSON и SSE response
+## Response parsing и enforcement
+
+`ChatCompletionsResponseParser` поддерживает ordinary JSON и SSE response
 через единый public typed result и один parse pass. Runtime полностью
 удерживает ordinary/SSE response до EOF или standalone `data: [DONE]`,
 проверяет protocol и применяет один response policy workflow. Ordinary JSON

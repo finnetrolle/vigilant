@@ -50,6 +50,9 @@ context клиенту и передаёт его upstream.
 
 ### 2. Проверка descriptor, identity и bounded ingest
 
+Нормативный [identity/context contract](../spec/requirements/identity-and-context.md)
+определяет mode selection, lookup, cache и terminal ownership.
+
 `PiiShadowProxyService` до чтения body проверяет method, path и media type.
 Неподдерживаемый descriptor получает stable `400 unsupported_schema` и не
 создаёт analysis audit.
@@ -109,7 +112,7 @@ fields не образуют ложный общий контекст.
 
 Полная карта полей, непроверяемые части, структурные ограничения и категории
 fail-closed описаны в
-[контракте запросов Chat Completions](openai-chat-completions.md).
+[реализации Chat Completions](openai-chat-completions.md).
 
 ### 4. Policy context и engine
 
@@ -118,7 +121,12 @@ Context содержит:
 - canonical effective upstream URL без query, fragment и credentials;
 - `model` из request body;
 - phase `REQUEST`;
-- normalized user/groups выбранного identity mode либо явную anonymous identity.
+- normalized user/groups выбранного identity mode.
+
+[Generic anonymous context](../spec/requirements/identity-and-context.md#normalized-identity)
+остаётся domain API, но production gateway всегда проходит Bearer boundary.
+Parser передаёт assembler только normalized model attributes, без fragments;
+эта граница отражена в component diagram.
 
 Один immutable request snapshot сохраняется typed attribute в соответствующем
 Armeria `ServiceRequestContext`. Public handoff создаёт response context,
@@ -151,7 +159,7 @@ technical error/deadline даёт 503 выше policy BLOCK/structural MASK (403
 - номера платёжных карт;
 - IPv4 и IPv6;
 - IBAN;
-- российские ИНН, СНИЛС, внутренний паспорт и полис ОМС.
+- 12-значные ИНН физических лиц, СНИЛС, внутренний паспорт и полис ОМС.
 
 Finding содержит тип, UTF-8 offsets, evidence strength и versioned recognizer
 metadata, но не matched text. PII-free `WindowedInspectionExecutor` разбивает
@@ -161,11 +169,26 @@ metadata, но не matched text. PII-free `WindowedInspectionExecutor` разб
 предоставляет capability, exhaustive вызов `FastPiiDetector`, semantic identity,
 сравнение PII metadata и канонический порядок.
 
+Generic core принимает immutable invocation input, local finding metadata и
+typed detector contract; ownership cores определяют единственного владельца
+по global start. PII adapter сортирует aggregate по global offsets, type name
+и recognizer metadata. Это отдельный порядок относительно type-first pipeline
+прямого detector call. `FastPiiPolicyAdapter` ждёт future на policy worker-е,
+переносит все safe finding fields и сохраняет cancellation; собственного
+executor-а или protocol field selection у него нет.
+
+Нормативные owners: [Fast PII](../spec/requirements/fast-pii.md#api) и
+[windowed inspection](../spec/requirements/windowed-inspection.md#contract).
+
 Поддерживаемые типы, семантика свидетельств, возможности оконной обработки,
 свидетельства качества и явные ограничения описаны в
 [руководстве по обнаружению PII](pii-detection.md).
 
 ### 6. Best-effort audit, request replay и response enforcement
+
+Нормативные event schema, trigger/absence matrix, correlation и stdout
+ownership принадлежат
+[observability contract](../spec/requirements/observability.md#analysis-lifecycle-audit).
 
 Complete-source orchestration выполняет синхронный
 `ShadowInspectionWorkflow` на существующем blocking-safe inspection executor.
@@ -179,6 +202,10 @@ coverage/counts и stable ERROR code либо actual reaction ALLOW/MASK/BLOCK.
 sequential view, переиспользует canonical JSON scalar decoding и validated
 `RequestMaskingFormatter` shortening. Structural parse/detector не повторяются;
 original source не копируется в full transformed body.
+
+Нормативные owner-ы этого path: [bounded request source](../spec/requirements/request-source.md),
+[policy engine](../spec/requirements/policy-engine.md) и
+[REQUEST enforcement](../spec/requirements/request-enforcement.md).
 Тот же logger обрамляет actual ordinary/SSE response detector execution парой с
 `phase=RESPONSE`; terminal reaction может быть `ALLOW`, `MASK` или `BLOCK`.
 
@@ -226,7 +253,14 @@ audit pair. `ALLOW` передаёт original source. `MASK` сверяет pars
 SSE events. `BLOCK` закрывает source без replay. Тот же path применяется к любому
 upstream status, включая `4xx` и `5xx`. Malformed JSON/SSE,
 missing или malformed terminal event и upstream interruption очищают source и
-возвращают exact VIG-29 `502 invalid_upstream_response` без partial disclosure.
+возвращают exact `502 invalid_upstream_response` по
+[HTTP error contract](../spec/requirements/http-gateway.md#inspection-error-matrix)
+без partial disclosure.
+
+Нормативные response reactions, source-map rewrite и ownership paths находятся
+в [RESPONSE enforcement](../spec/requirements/response-enforcement.md), а
+transport/header/lifecycle rules - в
+[HTTP gateway](../spec/requirements/http-gateway.md#low-level-transport).
 
 `ReplayReadyResponse` обеспечивает one-shot handoff: до successful transport claim source
 принадлежит workflow, после claim terminal publisher владеет cleanup. `BLOCK`,

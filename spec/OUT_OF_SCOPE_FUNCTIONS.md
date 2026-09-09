@@ -44,7 +44,7 @@
 
 Как оператор, я хочу хранить всю observability-информацию внутри Vigilant, чтобы не использовать внешние системы мониторинга.
 
-**Рекомендация:** не включать. Vigilant должен публиковать safe best-effort audit, traces и метрики через stdout, а хранение и delivery принадлежат deployment observability pipeline.
+**Рекомендация:** не включать. Vigilant должен публиковать safe best-effort audit, traces и метрики через stdout, а хранение и delivery принадлежат deployment observability pipeline по [observability contract](requirements/observability.md#stdout-topology-and-ownership).
 
 ### OUT-07. Собственный статический анализатор кода
 
@@ -89,7 +89,9 @@ filtering не входят в MVP. Единственный detector MVP: `fast
 ### OUT-12. Другие LLM protocol surfaces
 
 MVP не поддерживает OpenAI Responses API, Anthropic API, MCP и прочие protocol
-surfaces. Поддерживается только OpenAI Chat Completions.
+surfaces. Поддерживается только [OpenAI Chat Completions](requirements/chat-completions-protocol.md#surface).
+Responses остаётся Draft scope EPIC-06 вне MVP; Realtime и Batch -
+неактивированные post-MVP placeholders без новых contracts или implementation issues.
 
 ### OUT-13. Dynamic control plane и plugins
 

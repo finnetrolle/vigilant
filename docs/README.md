@@ -13,7 +13,7 @@
   проверки.
 - [Политики](policies.md) - формат `politics.conf`, сопоставление политик и
   REQUEST enforcement и startup migration.
-- [Контракт запросов Chat Completions](openai-chat-completions.md) -
+- [Реализация Chat Completions](openai-chat-completions.md) -
   проверяемые поля и причины отклонения запросов.
 - [Обнаружение PII](pii-detection.md) - поддерживаемые типы, срабатывания,
   оконная обработка и ограничения качества.
@@ -24,6 +24,12 @@
   цикл.
 - [Контракт исполнения](runtime-contract.md) - результаты HTTP-запросов,
   тайм-ауты, проверки состояния и завершение работы.
+- [RESPONSE enforcement](../spec/requirements/response-enforcement.md) -
+  атомарная JSON/SSE проверка, masking и lifecycle ownership.
+- [HTTP gateway](../spec/requirements/http-gateway.md) - routing, headers,
+  stable errors, probes и shutdown.
+- [Observability contract](../spec/requirements/observability.md) - stdout,
+  analysis pairs, tracing, metrics, privacy и delivery ownership.
 - [Развёртывание](deployment.md) - дистрибутив, stateless OCI и lifecycle.
 - [Наблюдаемость](observability.md) - JSON Lines, трассировка, метрики и
   безопасный аудит.
@@ -35,7 +41,8 @@
   NFR, Stage 1 и требований вне области продукта с текущей реализацией и
   документацией.
 - [Evidence request enforcement](request-enforcement-evidence.md) - критерии
-  VIG-34, независимые byte/lifecycle oracles и точные команды RED/GREEN.
+  [REQUEST contract](../spec/requirements/request-enforcement.md), независимые
+  byte/lifecycle oracles и точные команды RED/GREEN.
 - [UML-диаграммы](diagrams/README.md) - исходники диаграмм компонентов,
   последовательностей, состояний и деятельности в нотации UML 2.0 и формате
   PlantUML.
@@ -44,17 +51,14 @@
 - [Реестр рабочих элементов](../spec/WORK_ITEMS.md) - формальные статусы эпиков
   и задач.
 
-## Версионированные свидетельства и история
+## Проверки и evidence
 
-Документы ниже фиксируют конкретную ревизию Git, оборудование, нагрузку и дату.
-Они не являются универсальной гарантией производительности:
-
-- [Результат нагрузочного теста проверки](inspection-load-result.md);
-- [Квалификация ресурсов проверки](inspection-resource-qualification-2026-08-30.md);
-- [Superseded историческая квалификация долговечности](durability-qualification-2026-08-31.md);
-- [Методика PERF-01](perf-01-load-test.md) и [результаты](perf-01-result.md);
-- [Архитектурное ревью от 2026-08-29](architecture-review-2026-08-29.md);
-- [Историческое ревью v0 от 2026-08-23](architecture-review-2026-08-23.md).
+- [Методика PERF-01](perf-01-load-test.md) описывает воспроизводимый benchmark,
+  но не объявляет historical run текущей гарантией.
+- [Development guide](development.md) владеет current test, qualification,
+  performance и work-item verification methods.
+- [Карта покрытия](requirements-coverage.md) отделяет target, runtime и
+  применимое evidence для всех 55 stable IDs.
 
 ## Правила поддержки
 

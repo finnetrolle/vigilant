@@ -17,7 +17,7 @@ record InspectionLoadProfile(
     int gatewayPort,
     int gatewayHeapMib
 ) {
-    /** Returns the single versioned production profile owned by VIG-18. */
+    /** Returns the single versioned packaged inspection-load profile. */
     static InspectionLoadProfile production() {
         InspectionLoadProfile profile = new InspectionLoadProfile(
             Path.of(System.getProperty(

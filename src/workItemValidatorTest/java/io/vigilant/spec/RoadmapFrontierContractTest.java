@@ -1,106 +1,58 @@
 package io.vigilant.spec;
 
-import static org.junit.jupiter.api.Assertions.assertAll;
-import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
 
-/** Deterministic text contracts for current roadmap claims not covered by graph validation. */
+/** Checks current navigation against live documents, without freezing a task ID or historical prose. */
 final class RoadmapFrontierContractTest {
-    private static final Path ROADMAP = Path.of("spec/ROADMAP.md");
-    private static final Path ARCHITECTURE = Path.of("docs/architecture.md");
-    private static final Path OBSERVABILITY = Path.of("docs/observability.md");
-
-    /** Names the open audit-removal leaf instead of a completed historical benchmark. */
+    /** Root navigation exposes current requirements, runtime documentation and the open catalog. */
     @Test
-    void namesCurrentOpenImplementationFrontier() throws IOException {
-        String frontier = section(Files.readString(ROADMAP), "## Текущий roadmap frontier");
-
-        assertFalse(frontier.contains("Полный repository frontier сохраняет VIG-01A"));
-        assertTrue(frontier.contains("VIG-32-02"));
+    void rootExposesCurrentOwnersAndWork() throws IOException {
+        String readme = Files.readString(Path.of("README.md"));
+        for (String destination : List.of("spec/requirements/README.md", "docs/README.md",
+                "spec/WORK_ITEMS.md", "spec/ROADMAP.md")) {
+            assertTrue(readme.contains("](" + destination + ")"), destination);
+            assertTrue(Files.isRegularFile(Path.of(destination)), destination);
+        }
     }
 
-    /** Keeps the historical load baseline distinct from the later max-shape qualification. */
+    /** The roadmap delegates delivery order to the registry, whose next link names executable work. */
     @Test
-    void keepsInspectionEvidenceProfilesDistinct() throws IOException {
-        String roadmap = Files.readString(ROADMAP);
-        String stage = section(roadmap, "### Stage 4: production milestone");
+    void frontierResolvesToCurrentOpenWork() throws IOException {
+        String roadmap = Files.readString(Path.of("spec/ROADMAP.md"));
         String frontier = section(roadmap, "## Текущий roadmap frontier");
-
-        assertAll(
-                () -> assertTrue(stage.contains("2026-08-27")),
-                () -> assertTrue(stage.contains("single PII-bearing fragment")),
-                () -> assertTrue(stage.contains("Apple M3 Max")),
-                () -> assertTrue(stage.contains("heap `512 MiB`")),
-                () -> assertTrue(stage.contains("VIG-21-02")),
-                () -> assertTrue(stage.contains("2026-08-30")),
-                () -> assertTrue(stage.contains("three exact `8 MiB` accepted shapes")),
-                () -> assertFalse(stage.contains("### Stage 5:")),
-                () -> assertFalse(frontier.contains("VIG-18 подтвердил memory/concurrency bounds")),
-                () -> assertTrue(frontier.contains("VIG-18 подтверждает только `64 KiB` single-fragment profile")));
+        assertTrue(frontier.contains("](WORK_ITEMS.md#active-todo-порядок-следующей-работы)"));
+        String registry = Files.readString(Path.of("spec/WORK_ITEMS.md"));
+        int next = registry.indexOf("Текущий следующий шаг:");
+        assertTrue(next >= 0, "Registry must name its current next step");
+        Matcher link = Pattern.compile("\\[VIG-[^]]+]\\(([^)]+)\\)").matcher(registry.substring(next));
+        assertTrue(link.find(), "Next step must link directly to an issue");
+        Path issue = Path.of("spec").resolve(link.group(1)).normalize();
+        String source = Files.readString(issue);
+        assertTrue(source.contains("**Статус:** Ready for implementation")
+                || source.contains("**Статус:** In progress"), issue.toString());
     }
 
-    /** Separates historical anonymous scope from the current Dummy and offline JWT modes. */
+    /** All current navigation, requirement references and graph invariants use the public validator. */
     @Test
-    void separatesHistoricalIdentityScopeFromCurrentRuntime() throws IOException {
-        String roadmap = Files.readString(ROADMAP);
-        String frontier = section(roadmap, "## Текущий roadmap frontier");
-        String exclusions = section(roadmap, "## Не входит в первый production increment");
-
-        assertAll(
-                () -> assertTrue(frontier.contains("development/test-only mode `DUMMY`")),
-                () -> assertTrue(frontier.contains("production-capable offline")),
-                () -> assertTrue(frontier.contains("без runtime identity I/O")),
-                () -> assertFalse(exclusions.contains("- User/group identity extraction")),
-                () -> assertTrue(exclusions.contains("historical scope")),
-                () -> assertTrue(exclusions.contains("offline JWT Bearer identity")));
+    void actualRepositoryPassesPublicValidation() {
+        assertEquals(List.of(), WorkItemValidator.validate(Path.of(".")));
     }
 
-    /** Separates the current stdout pair from the superseded historical durable subsystem. */
-    @Test
-    void distinguishesStdoutPairFromHistoricalAuditSubsystem() throws IOException {
-        String roadmap = Files.readString(ROADMAP);
-        String observability = Files.readString(OBSERVABILITY);
-        String architecture = Files.readString(ARCHITECTURE);
-
-        assertAll(
-                () -> assertTrue(roadmap.contains("### Safe request analysis pair")),
-                () -> assertTrue(roadmap.contains("### Historical durable subsystem")),
-                () -> assertFalse(roadmap.contains("### Transitional durable subsystem")),
-                () -> assertTrue(observability.contains("## Safe request analysis pair")),
-                () -> assertFalse(observability.contains("## Transitional durable subsystem")),
-                () -> assertTrue(architecture.contains("request-analysis records")),
-                () -> assertTrue(roadmap.contains("VIG-32-01 отключил")),
-                () -> assertTrue(roadmap.contains("VIG-32-02")),
-                () -> assertTrue(roadmap.contains("EPIC-22")));
-    }
-
-    /** Records closed test gaps while retaining EPIC-20 as the response-lifecycle owner. */
-    @Test
-    void recordsPostMilestoneClosureAndFutureScopeOwner() throws IOException {
-        String frontier = normalizedWhitespace(
-                section(Files.readString(ROADMAP), "## Текущий roadmap frontier"));
-
-        assertAll(
-                () -> assertTrue(frontier.contains("VIG-21-03 и VIG-21-04 имеют status `Done`")),
-                () -> assertTrue(frontier.contains("EPIC-20 остаётся единственным owner")),
-                () -> assertTrue(frontier.contains("retained in-memory response source lifecycle и enforcement")));
-    }
-
-    /** Collapses Markdown wrapping so assertions depend on prose rather than line length. */
-    private static String normalizedWhitespace(String content) {
-        return content.replaceAll("\\s+", " ");
-    }
-
-    /** Extracts one Markdown section including headings nested below the requested level. */
+    /** Extracts an existing Markdown section through the next heading at the same level. */
     private static String section(String document, String heading) {
         int start = document.indexOf(heading);
-        String headingMarker = heading.substring(0, heading.indexOf(' '));
-        int end = document.indexOf("\n" + headingMarker + " ", start + heading.length());
+        assertTrue(start >= 0, heading);
+        String marker = heading.substring(0, heading.indexOf(' '));
+        int end = document.indexOf("\n" + marker + " ", start + heading.length());
         return document.substring(start, end < 0 ? document.length() : end);
     }
 }

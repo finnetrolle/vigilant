@@ -5,9 +5,10 @@ Vigilant - OpenAI-совместимый guardrails gateway для платфо�
 формирует безопасный audit event, не раскрывая содержимое запроса.
 
 > Статус: pre-release, версия `0.1.0-SNAPSHOT`. Первый production milestone
-> request-side PII enforcement и ordinary/SSE response enforcement реализованы. Исторические shadow-измерения и safety evidence
-> опубликованы в [inspection-load report](docs/inspection-load-result.md), а
-> следующий frontier перечислен в [roadmap](spec/ROADMAP.md#текущий-roadmap-frontier).
+> request-side PII enforcement и ordinary/SSE response enforcement реализованы.
+> Текущие возможности и evidence gaps отражены в
+> [карте покрытия](docs/requirements-coverage.md), а следующий frontier
+> перечислен в [реестре](spec/WORK_ITEMS.md#active-todo-порядок-следующей-работы).
 
 ## Что работает сейчас
 
@@ -19,7 +20,7 @@ Vigilant - OpenAI-совместимый guardrails gateway для платфо�
 - Request marker сокращается до UTF-8 budget находки; остальные raw JSON bytes
   сохраняются. Detector error/deadline даёт safe `503`, выше policy `BLOCK`.
 - Явный `policies = []` допустим; без applied policy detector и audit не запускаются.
-- Startup-selectable Dummy, offline JWT или External Bearer identity с
+- [Startup-selectable Dummy, offline JWT или External Bearer identity](spec/requirements/identity-and-context.md#startup-selection) с
   normalized user/groups, unchanged upstream Authorization и
   request-to-response context handoff.
 - Streaming/backpressure в низкоуровневом bypass transport. Guardrail path
@@ -33,10 +34,13 @@ Vigilant - OpenAI-совместимый guardrails gateway для платфо�
 - JSONL-логи, correlation/trace ID, OTLP traces и metrics, health/readiness
   endpoints и non-root OCI image.
 
-Пока не поддерживаются OpenAI Responses API, `REMOVE`, identity lookup cache,
+EXTERNAL использует [локальный bounded identity cache](spec/requirements/identity-and-context.md#cache-settings)
+с write TTL, coalescing и независимой cancellation callers.
+
+Пока не поддерживаются OpenAI Responses API, `REMOVE`,
 request-body или response-body disk spill,
 Kubernetes/Helm и ML/NER detector. Полные границы первого инкремента зафиксированы в
-[roadmap](spec/ROADMAP.md#не-входит-в-первый-production-increment).
+[MVP non-goals](spec/OUT_OF_SCOPE_FUNCTIONS.md#mvp-specific-non-goals).
 
 ## Быстрый старт
 
@@ -77,8 +81,10 @@ Vigilant проверит видимый модели текст, best-effort з
 transformations = ["MASK"] }`; для блокировки `disposition = "BLOCK"` с пустым
 списком transformations. REQUEST `clean` требует ALLOW, `error` требует BLOCK.
 Прежние policy files с `error=ALLOW` нужно обновить явно, иначе startup завершится с кодом `2`.
-Матрицы поведения, lifecycle и process/OCI checks зафиксированы в
-[evidence VIG-34](docs/request-enforcement-evidence.md).
+Нормативные матрицы находятся в
+[REQUEST enforcement contract](spec/requirements/request-enforcement.md), а
+наблюдённые lifecycle и process/OCI checks - в
+[implementation evidence](docs/request-enforcement-evidence.md).
 
 ## Как проходит запрос
 
@@ -171,8 +177,10 @@ Smoke-тест требует `curl`, Docker и Python 3. Он запускае�
   delivery stdout принадлежат container runtime и deployment.
 - Prometheus scrape endpoint отсутствует.
 
-Имена метрик, JSONL schema, audit events, внешний stdout pipeline и правила
-безопасности приведены в [observability reference](docs/observability.md).
+Нормативные имена метрик, JSONL schema, audit events, privacy и stdout
+ownership определены в [observability contract](spec/requirements/observability.md);
+фактический pipeline и operator examples приведены в
+[observability reference](docs/observability.md).
 
 ## Проверки
 
@@ -204,15 +212,21 @@ CI на каждый push в `main` и pull request запускает `build`. 
 Все performance-проверки запускаются явно и не входят в `build`, `verifyAll`
 или CI.
 Описание JMH matrix находится в
-[VIG-02-15](spec/issues/epic_02/issue_02_15_jmh_baseline.md), а нагрузочного
-теста - в [методике PERF-01](docs/perf-01-load-test.md). Зафиксированные
-результаты публикуются в [истории PERF-01](docs/perf-01-result.md).
-Результаты production inspection profile опубликованы в
-[inspection-load report](docs/inspection-load-result.md).
+[development guide](docs/development.md#pii-jmh-methodology), а нагрузочного
+теста - в [методике PERF-01](docs/perf-01-load-test.md). Generated результаты
+остаются под `build/reports/` и относятся только к своему snapshot. Текущий
+статус PERF-01/02 находится в
+[карте покрытия](docs/requirements-coverage.md#нефункциональные-требования-mvp).
 
 ## Документация проекта
 
 - [Индекс документации](docs/README.md)
+- [Действующие требования и владельцы](spec/requirements/README.md)
+- [Policy engine](spec/requirements/policy-engine.md)
+- [Bounded request source](spec/requirements/request-source.md)
+- [REQUEST enforcement](spec/requirements/request-enforcement.md)
+- [RESPONSE enforcement](spec/requirements/response-enforcement.md)
+- [HTTP gateway](spec/requirements/http-gateway.md)
 - [Покрытие MVP/NFR/Stage 1 требований](docs/requirements-coverage.md)
 - [План развития первого производственного этапа](spec/ROADMAP.md)
 - [Реестр эпиков и задач](spec/WORK_ITEMS.md)
@@ -222,17 +236,16 @@ CI на каждый push в `main` и pull request запускает `build`. 
 - [Функции вне границ продукта](spec/OUT_OF_SCOPE_FUNCTIONS.md)
 - [Справочник по конфигурации](docs/configuration.md)
 - [Конфигурация и сопоставление политик](docs/policies.md)
-- [Контракт запросов OpenAI Chat Completions](docs/openai-chat-completions.md)
+- [Реализация протокола OpenAI Chat Completions](docs/openai-chat-completions.md)
 - [Контракт обнаружения PII](docs/pii-detection.md)
 - [Архитектура](docs/architecture.md)
 - [Контракт исполнения](docs/runtime-contract.md)
 - [Справочник по наблюдаемости](docs/observability.md)
 - [Развёртывание](docs/deployment.md)
 - [Разработка](docs/development.md)
-- [Базовый профиль нагрузки проверки](docs/inspection-load-result.md)
 - [UML-диаграммы 2.0](docs/diagrams/README.md)
 
 Нормативная область хранится в `spec/`. README предназначен для быстрого входа
 в проект и не заменяет требования, статусы задач или план развития. Достигнутый
-этап request/response PII enforcement не означает, что реализована вся целевая область
-`MVP-01..21`; точное покрытие приведено в карте требований выше.
+этап request/response PII enforcement не означает, что реализована вся целевая
+область; точное покрытие 55 stable IDs приведено в карте требований выше.

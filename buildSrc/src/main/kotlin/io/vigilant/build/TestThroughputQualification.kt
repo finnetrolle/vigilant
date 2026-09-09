@@ -3,7 +3,7 @@ package io.vigilant.build
 import java.math.BigInteger
 import java.time.Instant
 
-/** Exact whole-suite inventory after the required VIG-37-05 causal lifecycle regression. */
+/** Exact whole-suite inventory after the required causal health lifecycle regression. */
 internal const val QUALIFICATION_TESTCASE_COUNT = 1128
 
 /** Distinguishes baseline, performance-candidate, and stability observations. */

@@ -72,6 +72,34 @@ the policy snapshot is mandatory and
 
 Invalid or missing config prints a message to stderr and exits with code 2.
 
+## Agent code navigation
+
+The repository has a local `ast-index` for compact semantic navigation. Prefer
+it before broad source reads when locating a symbol, outline, references,
+usages, implementations, hierarchy, callers, changed symbols or module
+dependencies:
+
+```bash
+rtk proxy ast-index stats
+rtk proxy ast-index explore "request inspection"
+rtk proxy ast-index symbol PiiShadowProxyService
+rtk proxy ast-index refs PiiShadowProxyService
+rtk proxy ast-index outline src/main/kotlin/io/vigilant/gateway/proxy/PiiShadowProxyService.kt
+rtk proxy ast-index changed
+```
+
+Run `rtk proxy ast-index update` after source edits or a branch switch before
+relying on the index again. Do not start the persistent `watch` command during
+an agent task. If the index is absent, stale or cannot be refreshed, fall back
+to `rg` and direct file reads without blocking the task.
+
+Use `rg` first for literal text, paths, Markdown/specs, configuration, KDoc,
+comments and string literals, and as the final completeness sweep when a change
+may affect non-symbol references. For machine parsing request
+`ast-index --format json` through `rtk proxy`; do not pipe presentation-formatted
+output into another command. Index hits identify code to inspect and do not
+replace reading the owning contract, reviewing the exact diff or running tests.
+
 ## Agent papercuts
 
 `.papercuts.jsonl` is the tracked, append-only journal of recurring friction in
@@ -131,7 +159,7 @@ The maintained architectural overview is `docs/architecture.md`; use it with
 Key gateway and policy files under `src/main/kotlin/io/vigilant/`:
 
 - `gateway/proxy/PiiShadowProxyService.kt` - thin production HTTP inspection boundary. It validates the supported Chat Completions descriptor, ingests into a quota-controlled request source, schedules complete-source workflow execution, maps typed rejects to stable responses, and performs the one-shot handoff to `BypassProxyService` and `RetainedResponseHandler` after best-effort terminal request audit submission without durable reservation or acknowledgement.
-- `gateway/proxy/RetainedResponseHandler.kt` / `source/RetainedResponseSource.kt` - response-retention boundary for the guardrail route. It holds upstream status, headers, trailers and body until complete protocol validation and final response-policy enforcement, then transfers one exact or masked replay or returns a stable VIG-29 error; the source owns in-memory segments and clears them on every terminal path without response quota or disk spill.
+- `gateway/proxy/RetainedResponseHandler.kt` / `source/RetainedResponseSource.kt` - response-retention boundary for the guardrail route. It holds upstream status, headers, trailers and body until complete protocol validation and final response-policy enforcement, then transfers one exact or masked replay or returns a stable error from the [HTTP contract](spec/requirements/http-gateway.md#inspection-error-matrix); the source owns in-memory segments and clears them on every terminal path without response quota or disk spill.
 - `gateway/proxy/ResponseInspectionWorkflow.kt` / `protocol/openai/JsonResponseRewriter.kt` / `protocol/openai/SseResponseRewriter.kt` - shared ordinary JSON/SSE response-policy orchestration and transport-specific exact-source rewriting. The response parser creates immutable source coordinates in its single parse pass; SSE spans may cross delta events without reserializing event objects.
 - `gateway/proxy/ShadowInspectionWorkflow.kt` / `gateway/proxy/ReplayReadyRequest.kt` - gateway-specific complete-source application workflow and one-shot transport ownership boundary. The workflow parses one normalized view, assembles context, evaluates fragments, publishes one safe started/completed pair through the existing non-blocking logger, and returns typed `Forward` or `Reject`. `ReplayReadyRequest` retains owner responsibility until transport accepts original or patched replay, then terminal replay owns cleanup.
 - `gateway/proxy/ShadowAuditLogger.kt` - safe request and response analysis lifecycle events published best-effort through the existing non-blocking Logback stdout pipeline. The application owns no audit persistence or delivery subsystem.
@@ -164,45 +192,111 @@ Tests spin up real Armeria servers on ephemeral ports (`http(0)`) and proxy thro
 - When component ownership, request sequence, audit state or tracing lineage
   changes, update the corresponding UML diagram as contract evidence.
 
-## Mandatory test-driven development
+## Work-item completion
 
-Load and follow the installed `tdd` skill for every task that adds or changes production code, even when the user did not invoke it explicitly. The project-specific rules below define when a seam is already pre-agreed and override conflicting confirmation wording in the skill; the rest of the skill remains authoritative.
+`spec/WORK_ITEMS.md` is the catalog of open work. Permanent product requirements
+belong to the [requirements owners](spec/requirements/README.md), runtime details
+to `docs/`, and implementation history to Git. One behavioral clause has one
+normative owner; coverage distinguishes targets, runtime and evidence gaps.
 
-For every behavior change or bug fix, work in vertical slices:
+Complete an issue and its parent scope as one consistency change:
 
-1. Identify one observable behavior and the seam through which it will be tested, and state the proposed seam in the conversation before writing the test. A seam explicitly documented in a `Ready for implementation` issue or in this guide is already pre-agreed, so proceed without a live confirmation round-trip. Obtain explicit user confirmation only when the seam is undocumented, introduces or materially changes an architectural boundary, or conflicts with the normative specification.
-2. Add one focused behavior test before changing production code. For bugs, start with a regression test that reproduces the problem as an end user would encounter it, using an E2E test whenever practical.
-3. Run the narrowest relevant Gradle test and observe it fail for the expected behavioral reason. A compilation error, broken fixture, or unrelated failure does not count as RED.
-4. Write only the minimum production code needed to satisfy that test.
-5. Run the same test again and observe it pass before starting another slice.
-6. Finish the RED -> GREEN cycle before refactoring. Refactoring is a separate review-stage activity, not part of the implementation loop. Keep the affected tests GREEN throughout that stage and run them after each refactoring step.
-7. Repeat with the next behavior. Do not write a batch of tests followed by a batch of implementation.
+1. Obtain every required implementation/verification observation from the agreed
+   issue and applicable epic criteria before removal. Ensure the exact agreed
+   source is recoverable from Git first; never delete the only uncommitted
+   specification. Do not create archives, historical wrappers or retirement
+   registries in the working tree, or rewrite Git history.
+2. Transfer current requirements from both issue and epic to permanent owners,
+   relevant implementation details to runtime docs, and applicable observations
+   to evidence. Update requirements coverage. Do not transfer superseded rules,
+   planning/history or duplicate clauses, lower product targets to match code,
+   or describe an old measurement as evidence for a new target.
+3. Keep `Зависит от` hard edges to unfinished work. Replace completed prerequisites
+   with explicit requirement/capability links under `Выполненные предпосылки`.
+   Missing files never imply completion; dangling, self and cyclic dependencies
+   are errors. Check every incoming reference, including wrapped metadata.
+4. Delete the completed issue and its registry/checklist row, and remove or
+   redirect incoming references. Retain an unfinished parent with its remaining
+   children/scope; delete a fully completed parent after transferring its clauses.
+   An epic with future scope but no executable children is `Draft` with a reason.
+   Registry progress counts only current checklist files: removed children no
+   longer contribute to either side of `done/total`. Empty catalogs and absent
+   empty directories are valid.
+5. Validate the resulting catalog and local references after terminal removal,
+   not only before it. Follow the reproducible checks in
+   [development](docs/development.md#завершение-work-item). Do not weaken validation
+   to accommodate an already removed source. TDD, KDoc/Javadoc, privacy and all
+   task-specific verification obligations still apply.
+6. Never reuse IDs. Before allocating a new ID, inspect both the active catalog
+   and Git history, including removed paths and title/ID metadata.
 
-When a focused test cannot compile solely because its new public contract does not yet exist, add the smallest behaviorless contract or no-op scaffold after writing the test. The compilation failure still does not count as RED: rerun the test and observe a behavioral failure before implementing the capability. If a later acceptance example already passes because the preceding minimal implementation naturally covers it, keep the test and do not manufacture a production change merely to force another RED.
+## Behavior-first development and selective TDD
 
-Proxy behavior must continue to be tested E2E through real Armeria servers. Focused unit tests are appropriate for pure deterministic logic or edge cases that are impractical to exercise through an E2E seam, but they do not replace required E2E coverage of proxy behavior.
+Load the installed `tdd` skill before planning or changing production behavior.
+This section selects the project default and overrides conflicting workflow or
+confirmation wording in that skill. Explicit user requests for TDD/test-first
+select strict RED -> GREEN; otherwise use small behavior-first slices.
 
-Armeria `RequestLog.whenComplete()` and similar completion callbacks may publish observations after the client has received or aggregated the response. Client completion is not a synchronization barrier for those observations. Assert them with deadline-bounded polling through `GatewayTestFixture.awaitUntil`, using the shortest practical timeout and a failure message that reports the last observed state.
+1. Before coding, map acceptance criteria to independent input/output examples,
+   existing contract consumers and exact observations. Think through data types,
+   errors and lifecycle ownership together. Include old unit, HTTP, process,
+   packaged/OCI and performance fixtures affected by a changed contract.
+2. State the seam briefly. A boundary documented in the agreed issue, guide or
+   session is pre-agreed. Ask only when it is undocumented, materially changes
+   architecture or conflicts with normative requirements.
+3. Implement one small coherent behavior with its related examples. Code/test
+   writing order is flexible; run the group before taking another slice. Do not
+   batch the entire issue without feedback. Quantified cases remain mandatory.
+4. For a bug, first obtain a failing regression test at the public boundary,
+   using real E2E when practical. Confirm the behavioral reason, then fix and
+   run the same test. Compilation, fixture and environment failures are not RED.
+   Keep naturally GREEN additional examples; never manufacture a defect.
+5. Run detekt and the narrow affected old/new tests after a coherent code change.
+   Resolve lint and contract-migration failures before a broad build. A stable
+   slice needs no repeated checks unless relevant inputs change or it fails.
+6. Refactor under existing GREEN tests; add characterization coverage only where
+   needed. Documentation, formatting and test/build tooling use relevant focused
+   checks without artificial RED when production behavior is unchanged.
 
-Pure refactoring is the exception to the RED-first requirement because it must not change observable behavior. Before refactoring, run the narrowest relevant existing tests and confirm they are GREEN; add characterization coverage first if the behavior is not adequately protected. Keep the tests GREEN throughout the refactoring.
+Proxy behavior still requires E2E through real Armeria servers. Keep causal
+barriers and every required terminal-path check for cancellation, replay, quota,
+ownership, backpressure, privacy and shutdown. Client completion does not prove
+that `RequestLog.whenComplete()`, spans, metrics or cleanup have been published;
+observe the owning boundary with `GatewayTestFixture.awaitUntil` and a bounded
+diagnostic timeout.
 
-Changes limited to documentation, comments, formatting, build metadata, or test infrastructure are exempt when they do not add or change production behavior.
+For deterministic parser/masking/header/error contracts, use input/expected-output
+fixtures with independent literals. Human-approved baselines must not be updated
+automatically to match actual output. Approved scenarios supplement lifecycle
+tests. Mutation testing remains on demand, outside regular development gates.
 
-After the final slice, run the narrowest affected test suite once, then run `./gradlew build` before declaring implementation complete. Do not run an overlapping broad regression subset immediately before the full build unless diagnosing an earlier failure, the affected scope cannot be selected reliably, or the full build will not be run. Report the command and expected failure that established RED, plus the commands that established local and final GREEN.
+Before implementation completion, obtain one current full `./gradlew build` for
+production changes. Do not run an overlapping broad subset immediately before
+it unless diagnosing a failure or the task explicitly requires that evidence.
+Run required process/OCI/load checks when the issue calls for them. Preserve
+their applicability to the final inputs; an unchanged valid result may be reused.
+
+Use `scripts/check-run` for long checks. It records a durable command/result/log
+and selected input hashes. Prefer completion events; otherwise use a single
+bounded wait at useful checkpoints, aligned with the outer tool yield. Do not
+repeatedly read unchanged stdout, request heartbeat messages or run overlapping
+Gradle invocations. The runner's lock protects runner invocations; check for an
+already running direct Gradle command before starting it.
 
 ## Pre-verification defect prevention
 
 The final verification pipeline is a backstop, not the first time the change
 should be compared with its contract. Apply the following rules while coding.
-They supplement the TDD loop above and do not replace its RED -> GREEN order.
+They apply in every testing mode; regression fixes and explicit TDD still require behavioral RED.
 
 ### Build criterion-level evidence
 
 - Before the first slice, read the implementation-ready issue, its parent epic,
-  linked normative specs, dependencies, and explicit non-goals. Keep a working
-  matrix that maps every criterion to the production behavior and exact test or
-  dynamic evidence that will prove it. Update the matrix as the implementation
-  changes.
+  linked normative specs, dependencies, and explicit non-goals. Keep one compact
+  map of criteria, changed contracts, old consumers, independent examples and
+  validation commands. Execute its cheap checks during coding; do not defer
+  contract migration or lint until the final full build. Update the same map as
+  the implementation changes.
 - Treat `all`, `each`, `every`, `exact`, `complete`, `exhaustive`, and
   `deterministic` as quantifiers. Cover every named state, position, ordering,
   content class, boundary, and lifecycle outcome, preferably with a
@@ -290,9 +384,9 @@ They supplement the TDD loop above and do not replace its RED -> GREEN order.
 - Inspect `git status` and the complete diff against the chosen base. Keep
   unrelated papercuts, Sonar cleanup, generated reports, and other issues out of
   the current change set unless the user explicitly includes them.
-- Update the issue checklist/status, parent epic membership/progress, dependent
-  issue contracts, and `spec/WORK_ITEMS.md` together. Parent epics describe
-  outcomes and boundaries; they must not copy detailed acceptance rules owned
+- Update the issue completion/removal, parent epic membership/progress, dependent
+  prerequisite references, and `spec/WORK_ITEMS.md` together under the completion
+  protocol. Parent epics describe outcomes and boundaries; they must not copy detailed acceptance rules owned
   by leaf issues.
 - Do not mark an issue or epic `Done` while required dynamic evidence is
   missing, a dependency is incomplete, or its decomposition still says
@@ -302,6 +396,15 @@ They supplement the TDD loop above and do not replace its RED -> GREEN order.
   matrix has no unsupported row, required KDoc/Javadoc is current, specialized
   dynamic evidence has run, the diff contains no unapproved behavior, and all
   asynchronous tests use deterministic barriers.
+
+Verification keeps independent Standards and Spec axes. Run an initial complete
+review; after an authorized remediation wave, review its delta and affected
+contracts with the same reviewers. Expand to a full review when context or the
+trusted baseline is missing, or a shared boundary changes broadly. Collect
+available Sonar/static findings before semantic review when feasible. Reuse a
+check only while all its relevant inputs, configuration and toolchain remain
+valid; input hashes alone do not prove artifact integrity or report freshness.
+The final state must have every required gate covered.
 
 Before requesting `verify-changes`, publish this closure summary and stop when
 any required field is unresolved:

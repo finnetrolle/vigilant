@@ -90,6 +90,9 @@ configuration/deployment update с overlap старого и нового public
 
 ## Health и lifecycle
 
+Нормативные probe, admission и shutdown rules принадлежат
+[HTTP gateway](../spec/requirements/http-gateway.md#health-admission-and-shutdown).
+
 Orchestrator probes:
 
 - `GET /healthz` - liveness;
@@ -116,7 +119,9 @@ storage. Started request analysis публикует safe best-effort
 `AsyncAppender` с `neverBlock=true`; request не ждёт queue delivery или stdout write.
 Collector должен разделять записи по top-level `resourceSpans` и
 `resourceMetrics`; остальные JSON records являются application logs. Требования
-и пример pipeline приведены в [observability reference](observability.md).
+к delivery ownership определены в
+[observability contract](../spec/requirements/observability.md#stdout-topology-and-ownership),
+а пример pipeline приведён в [observability reference](observability.md).
 
 ## OCI smoke test
 
@@ -130,7 +135,9 @@ Collector должен разделять записи по top-level `resourceS
 - Docker;
 - Python 3.
 
-Скрипт собирает временный image и проверяет:
+Скрипт собирает временный image и проверяет перечисленные cases. Это описание
+методики и существующего smoke target, а не новая qualification текущей
+documentation migration:
 
 - env-only configuration без durable-audit settings;
 - read-only policy mount;

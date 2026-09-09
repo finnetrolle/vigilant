@@ -2,7 +2,7 @@ package io.vigilant.perf;
 
 import java.nio.file.Path;
 
-/** Fixed packaged-process profile for VIG-21-02 resource qualification. */
+/** Fixed packaged-process profile for max-shape inspection resource qualification. */
 record InspectionQualificationProfile(
     Path projectDirectory,
     int upstreamPort,

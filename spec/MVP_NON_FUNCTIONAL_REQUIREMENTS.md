@@ -25,6 +25,10 @@ payload sizes и percentiles. Max-size и overload scenarios проверяют�
 Каждая policy задаёт свой positive deadline в `politics.conf`. Для нескольких
 применимых policies действует minimum deadline. Timeout `fast-pii` или policy
 даёт `503`; implicit fail-open не допускается.
+Детальный shared-execution contract определён в
+[policy engine](requirements/policy-engine.md#execution-and-deadlines), а
+REQUEST priority - в
+[request enforcement](requirements/request-enforcement.md#request-reactions-and-priority).
 
 ## Ресурсы и cancellation
 
@@ -34,11 +38,19 @@ payload sizes и percentiles. Max-size и overload scenarios проверяют�
 raw body. Большие text fragments проверяются UTF-8-safe windowing без silent
 truncation. Превышение request limits не передаётся дальше.
 
+Detector preflight и одновызовный limit определены в
+[Fast PII](requirements/fast-pii.md#preflight), evidence-span capability,
+bounded execution и cancellation - в
+[windowed inspection](requirements/windowed-inspection.md#capability).
+Эти внутренние bounds не заменяют request targets и enforcement SLO выше.
+
 Response не имеет application-level raw/text limit или shared capacity quota:
 он использует доступный JVM heap до terminal policy decision. После `ALLOW`,
 `MASK`, `BLOCK`, cancellation, upstream failure или shutdown response source
 освобождает owned buffers и references; фактическое освобождение heap выполняет
 JVM GC. Heap sizing и OOM policy принадлежат deployment.
+Полный retained-source ownership и cleanup contract принадлежит
+[RESPONSE enforcement](requirements/response-enforcement.md#retained-source-and-ownership).
 
 ### CONC-02. Request capacity outcome
 
@@ -47,6 +59,8 @@ Request RAM or spool exhaustion не создаёт unbounded queue и не пр
 `Retry-After`; exact request capacity limits являются deployment configuration.
 Response не резервирует отдельную application capacity; его heap lifecycle
 определён в `CONC-01`.
+Точные request quotas, precedence и terminal cleanup принадлежат
+[bounded request source](requirements/request-source.md#resource-bounds).
 
 ### CONC-03. Execution classes
 
@@ -69,21 +83,31 @@ Request удерживается в bounded request source, а response, вкл�
 retained in-memory response source до policy decision. Response source не имеет
 application-level limit или shared quota. Клиент не получает response byte до
 `ALLOW` или `MASK`; при `BLOCK` body upstream не раскрывается.
+Точные atomic outcomes принадлежат
+[RESPONSE enforcement](requirements/response-enforcement.md#atomic-boundary).
 
 ### PROXY-02. Lossless forwarding and mutation
 
 Разрешённый body передаётся losslessly. `MASK` patch-ит только exact text spans,
 сохраняет JSON structure и unknown fields, затем корректирует transport headers.
+Response source maps и rewrite определены в
+[RESPONSE enforcement](requirements/response-enforcement.md#source-maps-and-exact-rewrite),
+header matrix - в
+[HTTP gateway](requirements/http-gateway.md#response-outcomes-and-headers).
 
 ### PROXY-03. Stable technical failures
 
 Capacity exhaustion, detector/policy failure и unavailable identity дают `503`
-с `Retry-After`. Contract policy `BLOCK` и client error body оформляется отдельно
-в [VIG-29](issues/issue_29_openai_error_contract.md).
+с `Retry-After`. Exact inspection и policy BLOCK outcomes определены в
+[HTTP error contract](requirements/http-gateway.md#inspection-error-matrix),
+External identity outcome - в [identity contract](requirements/identity-and-context.md#external-bridge).
 
 ## Наблюдаемость и audit
 
 ### OBS-01. Metrics и tracing
+
+Полная нормативная matrix принадлежит
+[observability contract](requirements/observability.md).
 
 Gateway публикует request/response outcomes, latency каждого path, PII counts по
 type, deadline/errors, spool/capacity rejects и identity cache hit/miss/lookup
@@ -100,7 +124,8 @@ Audit, logs, metrics, traces и errors не содержат body, PII value/spa
 token, user ID или groups. Исключение: tracing identifiers хранятся для
 корреляции.
 Этот privacy contract покрывает текущие REQUEST и ordinary JSON/SSE
-RESPONSE stdout pairs.
+RESPONSE stdout pairs. Channel-specific разрешения и текущие conformance gaps
+определены в [privacy matrix](requirements/observability.md#privacy-by-channel).
 
 ## Deployment и stack
 

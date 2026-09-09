@@ -1,5 +1,10 @@
 # Политики Vigilant
 
+Нормативные schema, validation, selection, execution и aggregation принадлежат
+[policy engine](../spec/requirements/policy-engine.md). REQUEST-specific
+ограничения и итоговый priority принадлежат
+[REQUEST enforcement](../spec/requirements/request-enforcement.md).
+
 ## Текущий контракт
 
 Vigilant загружает один неизменяемый снимок политик при запуске. Путь к файлу
@@ -107,9 +112,11 @@ findings, а `detected { disposition = "BLOCK", transformations = [] }` блок
 Идентификация выполняется до выбора политик. Общий Bearer contract передаёт
 только normalized user/groups: development/test Dummy использует configured
 values, JWT локально проверяет pinned RS256 token, а External получает identity
-от trusted Bridge и применяет ту же canonical normalization. Raw token не
-входит в policy context. Полный startup
-и HTTP contract описан в
+от trusted Bridge через local cache и применяет ту же canonical normalization.
+Raw token не входит в policy context.
+[Identity/context owner](../spec/requirements/identity-and-context.md#assembly-и-handoff)
+определяет immutable handoff; REQUEST и RESPONSE независимо выбирают policies
+с теми же URL, request model, user/groups. Runtime wiring описан в
 [контракте исполнения](runtime-contract.md#bearer-identity).
 
 ## Переопределения
@@ -157,7 +164,9 @@ REQUEST оценивает все fragments: technical failure/deadline даёт
 Structural names, JSON Schema keys/constraints, arguments/custom input,
 grammar и location не переписываются; selected MASK finding блокирует весь
 request. Free-text content/descriptions/titles/examples/filename/reasoning/
-prediction допускают MASK. Полная карта и raw rewrite contract описаны в
+prediction допускают MASK. Полная classification и raw rewrite contract описаны
+в [REQUEST enforcement](../spec/requirements/request-enforcement.md#field-classification),
+а recognized protocol surface - в
 [Chat Completions reference](openai-chat-completions.md).
 
 REQUEST marker не длиннее decoded UTF-8 span: full marker сохраняется, иначе

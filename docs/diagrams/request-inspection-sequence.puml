@@ -157,7 +157,7 @@ else дескриптор поддерживается
         ResponseWorkflow -> ResponseReplay : masked body + rewritten headers
       else BLOCK / 503
         ResponseWorkflow --> ResponseHandler : Reject
-        ResponseHandler --> Client : safe VIG-29 response
+        ResponseHandler --> Client : safe inspection error
       end
       ResponseWorkflow -> Audit : RESPONSE analysis_completed
       ResponseReplay --> ResponseHandler : one-shot transport claim

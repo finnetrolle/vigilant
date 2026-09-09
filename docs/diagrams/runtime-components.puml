@@ -53,7 +53,8 @@ Outbound --> BridgeClient : shared factory lifecycle
 Outbound --> Transport : shared factory lifecycle
 ShadowProxy --> Workflow : полный ограниченный источник
 Workflow --> Parser : представление только для чтения
-Parser --> Context : модель и фрагменты
+Parser --> Context : NormalizedProtocolAttributes(model)
+Workflow --> PolicyEngine : independent fragments
 Context --> PolicyEngine : PolicyContext
 PolicyEngine --> FastPii : независимые фрагменты
 FastPii --> Windowing : capability и detector contract

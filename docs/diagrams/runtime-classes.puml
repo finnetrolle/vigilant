@@ -180,7 +180,21 @@ package "OpenAI protocol\nio.vigilant.protocol.openai" as Protocol {
   class SseResponseRewriter
 }
 
-package "PII и windowing\nio.vigilant.detectors.pii / windowing" as Pii {
+package "Generic windowing\nio.vigilant.windowing" as Windowing {
+  class WindowedInspectionExecutor {
+    +inspect(fragment, input, contract): Future<WindowedInspectionResult>
+  }
+
+  interface "WindowedDetectorContract<I, F, K>" as WindowedDetectorContract {
+    +capability: WindowedCapability
+    +detect(window, input): List<LocalFinding>
+    +semanticIdentity(finding): K
+    +hasEquivalentMetadata(first, second): Boolean
+    +canonicalComparator: Comparator<GlobalFinding>
+  }
+}
+
+package "Fast PII adapter и detector\nio.vigilant.windowing / detectors.pii" as Pii {
   class WindowedFastPiiExecutor {
     +inspect(fragment, enabledTypes): Future
   }
@@ -190,6 +204,7 @@ package "PII и windowing\nio.vigilant.detectors.pii / windowing" as Pii {
   }
 
   class FastPiiDetector
+  class FastPiiWindowedDetectorContract <<private>>
 }
 
 class WebClient <<Armeria external>>
@@ -256,7 +271,11 @@ DetectorExecutor --> Detector : registry
 
 FastPiiPolicyAdapter ..|> Detector
 FastPiiPolicyAdapter --> WindowedFastPiiExecutor
-WindowedFastPiiExecutor --> PiiDetector
+WindowedFastPiiExecutor *-- WindowedInspectionExecutor
+WindowedFastPiiExecutor *-- FastPiiWindowedDetectorContract
+WindowedInspectionExecutor --> WindowedDetectorContract : sequential windows + aggregation
+FastPiiWindowedDetectorContract ..|> WindowedDetectorContract
+FastPiiWindowedDetectorContract --> PiiDetector : exhaustive detect
 FastPiiDetector ..|> PiiDetector
 PiiShadowProtocol --> ChatCompletionsRequestParser
 

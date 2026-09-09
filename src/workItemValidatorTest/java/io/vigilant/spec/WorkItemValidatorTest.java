@@ -169,7 +169,8 @@ final class WorkItemValidatorTest {
                 List.of(
                         "spec/issues/epic_01/issue_01_01_child.md: Epic backlink for VIG-01-01"
                                 + " resolves to spec/epics/epic_99_missing.md instead of"
-                                + " spec/epics/epic_01_sample.md"),
+                                + " spec/epics/epic_01_sample.md",
+                        "spec/issues/epic_01/issue_01_01_child.md:4: missing local target `../../epics/epic_99_missing.md`"),
                 WorkItemValidator.validate(projectDirectory));
     }
 
@@ -202,7 +203,8 @@ final class WorkItemValidatorTest {
                 List.of(
                         "spec/epics/epic_01_sample.md: child link for VIG-01-01 resolves to"
                                 + " spec/issues/epic_01/issue_01_01_missing.md instead of"
-                                + " spec/issues/epic_01/issue_01_01_child.md"),
+                                + " spec/issues/epic_01/issue_01_01_child.md",
+                        "spec/epics/epic_01_sample.md:8: missing local target `../issues/epic_01/issue_01_01_missing.md`"),
                 WorkItemValidator.validate(projectDirectory));
     }
 
@@ -283,7 +285,8 @@ final class WorkItemValidatorTest {
                 List.of(
                         "spec/WORK_ITEMS.md: registry link for VIG-02 resolves to"
                                 + " spec/issues/issue_02_missing.md instead of"
-                                + " spec/issues/issue_02_standalone.md"),
+                                + " spec/issues/issue_02_standalone.md",
+                        "spec/WORK_ITEMS.md:6: missing local target `issues/issue_02_missing.md`"),
                 WorkItemValidator.validate(projectDirectory));
     }
 
@@ -337,7 +340,8 @@ final class WorkItemValidatorTest {
         assertEquals(
                 List.of(
                         "spec/issues/epic_99/issue_99_01_orphan.md: scoped issue VIG-99-01"
-                                + " has no discovered parent EPIC-99"),
+                                + " has no discovered parent EPIC-99",
+                        "spec/issues/epic_99/issue_99_01_orphan.md:4: missing local target `../../epics/epic_99_missing.md`"),
                 WorkItemValidator.validate(projectDirectory));
     }
 
@@ -392,7 +396,8 @@ final class WorkItemValidatorTest {
         assertEquals(
                 List.of(
                         "spec/WORK_ITEMS.md: registry entry VIG-99 resolves to"
-                                + " undiscovered spec/issues/issue_99_missing.md"),
+                                + " undiscovered spec/issues/issue_99_missing.md",
+                        "spec/WORK_ITEMS.md:7: missing local target `issues/issue_99_missing.md`"),
                 WorkItemValidator.validate(projectDirectory));
     }
 
@@ -410,7 +415,8 @@ final class WorkItemValidatorTest {
                         "spec/epics/epic_01_sample.md: child VIG-01-99 does not resolve"
                                 + " to a discovered issue",
                         "spec/epics/epic_01_sample.md: scoped issue VIG-01-01 at"
-                                + " spec/issues/epic_01/issue_01_01_child.md is missing from child checklist"),
+                                + " spec/issues/epic_01/issue_01_01_child.md is missing from child checklist",
+                        "spec/epics/epic_01_sample.md:8: missing local target `../issues/epic_01/issue_01_99_missing.md`"),
                 WorkItemValidator.validate(projectDirectory));
     }
 

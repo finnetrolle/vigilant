@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -64,9 +65,18 @@ final class WorkItemGraph {
         diagnostics.add(diagnostic);
     }
 
-    /** Returns diagnostics in stable lexical order. */
+    /** Orders diagnostics by file, numeric line and message; file-wide findings precede lines. */
     List<String> sortedDiagnostics() {
-        return diagnostics.stream().sorted().toList();
+        return diagnostics.stream().sorted(Comparator
+                .comparing((String diagnostic) -> diagnostic.substring(0, diagnostic.indexOf(':')))
+                .thenComparingInt(WorkItemGraph::diagnosticLine)
+                .thenComparing(Comparator.naturalOrder())).toList();
+    }
+
+    /** Returns zero for a file-wide diagnostic or its explicit one-based source line. */
+    private static int diagnosticLine(String diagnostic) {
+        Matcher location = Pattern.compile("^[^:]+:(\\d+):.*$").matcher(diagnostic);
+        return location.matches() ? Integer.parseInt(location.group(1)) : 0;
     }
 
     /** Formats a normalized repository-relative path with forward slashes. */
@@ -74,10 +84,9 @@ final class WorkItemGraph {
         return projectDirectory.relativize(path.toAbsolutePath().normalize()).toString().replace('\\', '/');
     }
 
-    /** Loads every Markdown work item below one specification directory. */
+    /** Loads every Markdown work item; Git need not retain an empty catalog directory. */
     private void discoverWorkItems(Path directory) throws IOException {
         if (!Files.isDirectory(directory)) {
-            report(relative(directory) + ": work-item directory does not exist");
             return;
         }
 

@@ -22,6 +22,11 @@ if ! grep -Eq 'failBuildOnCVSS[[:space:]]*=' build.gradle.kts; then
     exit 2
 fi
 
+step "early feedback: ./gradlew detekt"
+if ! ./gradlew detekt; then
+    exit 1
+fi
+
 step "gate 1/2: ./gradlew build"
 if ! ./gradlew build; then
     exit 1

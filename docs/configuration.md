@@ -1,5 +1,11 @@
 # Конфигурация Vigilant
 
+Нормативные identity mode/settings/error matrices принадлежат
+[identity/context owner](../spec/requirements/identity-and-context.md#startup-selection).
+Этот документ описывает runtime configuration и примеры. Известная граница
+проверки явно пустых settings чужого mode отражена в
+[coverage](requirements-coverage.md#identity-evidence).
+
 ## Источники и приоритет
 
 Application configuration загружается в порядке:
@@ -177,7 +183,8 @@ Complex `VIGILANT_IDENTITY_JWT_JWKS` задаётся strict JSON array с по�
 Создание trace context, request-scoped JSON logs и сбор метрик внутри процесса
 продолжаются. Настройки Collector endpoint нет: Vigilant не открывает к нему
 сетевое соединение. Захват, retention, rotation и delivery stdout принадлежат
-container runtime и deployment.
+container runtime и deployment по
+[observability contract](../spec/requirements/observability.md#otlp-output-and-lifecycle).
 
 ## Снимок политик
 
@@ -187,8 +194,9 @@ container runtime и deployment.
 
 Минимальный снимок приведён в
 [politics.conf.example](../politics.conf.example). Полная строгая структура
-HOCON, сопоставление, одновременные переопределения и правила проверки описаны
-в [руководстве по политикам](policies.md). Файл обязателен, но явный
+HOCON, сопоставление, одновременные переопределения и правила проверки принадлежат
+[policy engine](../spec/requirements/policy-engine.md); operator examples
+описаны в [руководстве по политикам](policies.md). Файл обязателен, но явный
 `policies = []` допустим. Disabled/unmatched policies не запускают detector;
 global coverage и implicit default отсутствуют.
 

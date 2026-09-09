@@ -1,0 +1,317 @@
+#!/usr/bin/env python3
+"""Run repository checks with durable results and bounded process ownership."""
+
+import argparse
+import fcntl
+import hashlib
+import json
+import math
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import time
+import traceback
+import uuid
+
+
+ENV_KEYS = (
+    'JAVA_HOME', 'GRADLE_OPTS', 'JAVA_OPTS', 'JAVA_TOOL_OPTIONS',
+    'JDK_JAVA_OPTIONS', 'PATH', 'GRADLE_USER_HOME', 'KOTLIN_OPTS',
+)
+FINAL = {'passed', 'failed', 'timeout', 'cancelled', 'stale', 'infrastructure_failure'}
+ROOT = None
+RUNS = None
+
+
+def emit(**fields):
+    """Emit a flat TOON object with unambiguous scalar values."""
+    for key, value in fields.items():
+        print(f'{key}: {json.dumps(value, ensure_ascii=False)}')
+
+
+class Parser(argparse.ArgumentParser):
+    """Keep usage failures structured and include the local command help."""
+
+    def error(self, message):
+        emit(error=message, help=self.format_help().strip())
+        raise SystemExit(2)
+
+
+def number(value):
+    """Accept finite positive deadlines only."""
+    result = float(value)
+    if not math.isfinite(result) or result <= 0:
+        raise argparse.ArgumentTypeError('must be a finite positive number')
+    return result
+
+
+def git(*args):
+    """Read Git metadata without altering the checkout."""
+    return subprocess.check_output(['git', *args], cwd=ROOT, stderr=subprocess.DEVNULL)
+
+
+def write_json(path, value):
+    """Publish complete JSON atomically to readers in the private run directory."""
+    temporary = path.with_name(path.name + f'.{os.getpid()}.tmp')
+    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + '\n')
+    os.replace(temporary, path)
+
+
+def load(path):
+    """Read a complete published record."""
+    return json.loads(path.read_text())
+
+
+def fingerprint(inputs, env_keys):
+    """Hash selected Git-visible files and relevant environment without values."""
+    names = set(os.fsdecode(name) for name in git('ls-files', '-z', '--cached', '--others', '--exclude-standard').split(b'\0') if name)
+    files = {}
+    for name in sorted(names):
+        if inputs and not any(name == item or name.startswith(item + '/') for item in inputs):
+            continue
+        path = ROOT / name
+        if path.is_symlink():
+            # Both link spelling and referent content matter to a check.
+            value = os.fsencode(os.readlink(path)) + b'\0'
+            value += path.read_bytes() if path.is_file() else b'missing-referent'
+        elif path.is_file():
+            value = path.read_bytes()
+        elif not path.exists():
+            files[name] = 'deleted'
+            continue
+        else:
+            raise ValueError(f'unsupported Git input {name}; submodules require separate evidence')
+        files[name] = {'sha256': hashlib.sha256(value).hexdigest(), 'mode': path.lstat().st_mode & 0o777}
+    environment = {
+        key: hashlib.sha256(json.dumps(os.environ.get(key)).encode()).hexdigest()
+        for key in sorted(set(ENV_KEYS) | set(env_keys))
+    }
+    for item in inputs:
+        if not any(name == item or name.startswith(item + '/') for name in files):
+            raise ValueError(f'input {item} has no Git-visible files; select an actual input')
+    return {'files': files, 'environment': environment}
+
+
+def run_path(identifier):
+    """Resolve only runner-owned IDs, rejecting traversal and symlinked records."""
+    if len(identifier) != 32 or any(c not in '0123456789abcdef' for c in identifier):
+        raise ValueError('invalid run ID; use check-run without arguments to see the latest run')
+    path = RUNS / identifier
+    if path.is_symlink() or not path.is_dir():
+        raise ValueError('run not found in this repository')
+    return path
+
+
+def read_status(path, check_inputs=False):
+    """Return durable status; a missing supervisor is never a successful result."""
+    record = load(path / 'result.json')
+    if record['state'] not in FINAL:
+        with (path / 'worker.lock').open('a') as lease:
+            try:
+                fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                if time.time() - record['created_at'] > 5:
+                    record = {**record, 'state': 'infrastructure_failure', 'error': 'supervisor unavailable; inspect log and owned process group before another check'}
+            except BlockingIOError:
+                pass
+    if check_inputs:
+        request = load(path / 'request.json')
+        current = fingerprint(request['inputs'], request['env_keys'])
+        record['inputs_current'] = (
+            record['state'] == 'passed' and record.get('inputs_stable') is True
+            and current == load(path / 'inputs-before.json')
+        )
+        if record['state'] == 'passed' and not record['inputs_current']:
+            record['state'] = 'stale'
+    return record
+
+
+def show(path, check_inputs=False):
+    """Expose a compact decision record, leaving verbose evidence in files."""
+    record = read_status(path, check_inputs)
+    fields = {'run': path.name, 'state': record['state'], 'exit_code': record.get('exit_code'), 'result': str(path / 'result.json')}
+    if 'inputs_current' in record:
+        fields['inputs_current'] = record['inputs_current']
+    if record.get('error'):
+        fields['error'] = record['error']
+    emit(**fields)
+    return 1 if record['state'] in FINAL - {'passed'} else 0
+
+
+def end_group(process):
+    """Terminate only the command's new process group with a bounded grace."""
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        # Reap our direct child before probing: macOS may return EPERM for
+        # a group containing only the unreaped zombie of that child.
+        process.poll()
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.05)
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+def supervise(identifier):
+    """Own execution independently of the terminal and always publish its result."""
+    path = run_path(identifier)
+    request = load(path / 'request.json')
+    record = load(path / 'result.json')
+    process = None
+    started = time.monotonic()
+    for signum in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(signum, lambda *_: (path / 'cancel').touch())
+    with (path / 'worker.lock').open('a') as lease, (path.parent / 'execution.lock').open('a') as exclusive:
+        # A status reader briefly probes the same lock. Wait for that probe
+        # (or another supervisor), then recheck state before executing once.
+        fcntl.flock(lease, fcntl.LOCK_EX)
+        record = load(path / 'result.json')
+        if record['state'] != 'starting':
+            return
+        try:
+            fcntl.flock(exclusive, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            record.update(state='infrastructure_failure', error='another check-run owns this repository; wait for its completion')
+            write_json(path / 'result.json', record)
+            return
+        try:
+            before = fingerprint(request['inputs'], request['env_keys'])
+            write_json(path / 'inputs-before.json', before)
+            if (path / 'cancel').exists():
+                record['state'] = 'cancelled'
+                return
+            record.update(state='running', supervisor_pid=os.getpid(), started_at=time.time())
+            write_json(path / 'result.json', record)
+            with (path / 'command.log').open('wb') as log:
+                process = subprocess.Popen(request['command'], cwd=ROOT, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True, pass_fds=(exclusive.fileno(),))
+                record['command_pid'] = process.pid
+                write_json(path / 'result.json', record)
+                deadline = time.monotonic() + request['timeout']
+                while process.poll() is None:
+                    if (path / 'cancel').exists():
+                        record['state'] = 'cancelled'
+                        break
+                    if time.monotonic() >= deadline:
+                        record['state'] = 'timeout'
+                        break
+                    time.sleep(0.1)
+                if record['state'] != 'running':
+                    end_group(process)
+                code = process.wait(timeout=5)
+                record['exit_code'] = code
+                if record['state'] == 'running':
+                    record['state'] = 'passed' if code == 0 else 'failed'
+                # Reclaim remaining members of the original command process group.
+                end_group(process)
+            after = fingerprint(request['inputs'], request['env_keys'])
+            write_json(path / 'inputs-after.json', after)
+            record['inputs_stable'] = before == after
+            if record['state'] == 'passed' and not record['inputs_stable']:
+                record['state'] = 'stale'
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            record.update(state='infrastructure_failure', error=f'check execution failed ({type(error).__name__}); inspect supervisor.log')
+            traceback.print_exc(file=sys.stderr)
+        finally:
+            if process is not None and process.poll() is None:
+                end_group(process)
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    record.update(state='infrastructure_failure', error='command cleanup did not finish; inspect owned process group')
+            record.update(finished_at=time.time(), duration_seconds=round(time.monotonic() - started, 3))
+            write_json(path / 'result.json', record)
+
+
+def start(args):
+    """Validate before launch, then detach a supervisor and return its durable ID."""
+    if not args.command or args.command[0] != '--' or len(args.command) < 2:
+        raise ValueError('start requires -- followed by a command and its arguments')
+    inputs = []
+    for value in args.input:
+        path = Path(value)
+        if path.is_absolute() or '..' in path.parts or value in ('', '.'):
+            raise ValueError('--input must be a file or directory relative to the repository root')
+        inputs.append(path.as_posix().rstrip('/'))
+    for key in args.env_key:
+        if not key.isidentifier() or not key.isascii():
+            raise ValueError('--env-key must name an environment variable')
+    # Prove the input set can be read before creating execution side effects.
+    fingerprint(inputs, args.env_key)
+    directory = RUNS
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path = directory / uuid.uuid4().hex
+    path.mkdir(mode=0o700)
+    request = {'label': args.label, 'command': args.command[1:], 'timeout': args.timeout, 'inputs': inputs, 'env_keys': args.env_key, 'cwd': str(ROOT), 'git_head': git('rev-parse', 'HEAD').decode().strip()}
+    write_json(path / 'request.json', request)
+    write_json(path / 'result.json', {'run': path.name, 'label': args.label, 'state': 'starting', 'created_at': time.time(), 'exit_code': None, 'log': str(path / 'command.log')})
+    with (path / 'supervisor.log').open('ab') as log:
+        subprocess.Popen([sys.executable, str(Path(__file__).resolve()), '_supervise', path.name], cwd=ROOT, stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
+    emit(run=path.name, state='starting', result=str(path / 'result.json'), next=f'check-run wait {path.name} --seconds 60')
+    return 0
+
+
+def main():
+    """Dispatch non-interactive commands with a concise default status view."""
+    global ROOT, RUNS
+    os.umask(0o077)
+    parser = Parser(description='Durable repository checks. Examples: start --label build -- ./gradlew build; status <id> --check-inputs; wait <id> --seconds 60.')
+    subs = parser.add_subparsers(dest='action')
+    command = subs.add_parser('start', help='launch one detached check with durable evidence')
+    command.add_argument('--label', required=True)
+    command.add_argument('--timeout', type=number, default=3600, help='command timeout in seconds (default: 3600)')
+    command.add_argument('--input', action='append', default=[], help='repeatable repo-relative input path; default: all Git-visible files')
+    command.add_argument('--env-key', action='append', default=[], help='additional environment key to hash without storing its value')
+    command.add_argument('command', nargs=argparse.REMAINDER, help='-- command [arguments]')
+    for name in ['status', 'wait', 'cancel', '_supervise']:
+        command = subs.add_parser(name, help='read or control a run by its ID' if name != '_supervise' else argparse.SUPPRESS)
+        command.add_argument('run')
+        if name == 'status':
+            command.add_argument('--check-inputs', action='store_true')
+        if name == 'wait':
+            command.add_argument('--seconds', type=number, default=60, help='bounded wait, at most 60 seconds')
+    args = parser.parse_args()
+    if args.action == 'wait' and args.seconds > 60:
+        parser.error('--seconds must be at most 60')
+    try:
+        ROOT = Path(git('rev-parse', '--show-toplevel').decode().strip())
+        RUNS = Path(git('rev-parse', '--absolute-git-dir').decode().strip()) / 'check-runs'
+        if not args.action:
+            emit(bin=str(Path(__file__).resolve()), description='Run checks with durable logs, exit codes and input hashes')
+            directory = RUNS
+            paths = sorted((p for p in directory.glob('*') if p.is_dir() and (p / 'result.json').is_file()), key=lambda p:p.stat().st_mtime)
+            if paths:
+                return show(paths[-1])
+            emit(runs=0, next='check-run start --label build -- ./gradlew build')
+            return 0
+        if args.action == 'start':
+            return start(args)
+        path = run_path(args.run)
+        if args.action == '_supervise':
+            supervise(args.run)
+            return 0
+        if args.action == 'cancel':
+            if read_status(path)['state'] not in FINAL:
+                (path / 'cancel').touch()
+            show(path)
+            return 0
+        if args.action == 'wait':
+            deadline = time.monotonic() + args.seconds
+            while read_status(path)['state'] not in FINAL and time.monotonic() < deadline:
+                time.sleep(min(0.2, max(0, deadline - time.monotonic())))
+        return show(path, getattr(args, 'check_inputs', False))
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        emit(error=str(error) if isinstance(error, ValueError) else 'cannot access repository or run evidence', help='check-run --help')
+        return 2
+
+
+if __name__ == '__main__':
+    sys.exit(main())

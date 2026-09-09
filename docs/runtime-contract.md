@@ -27,6 +27,11 @@ Hop-by-hop headers, authority, `Host` и `Content-Length` обрабатывае
 Принятый `Authorization` остаётся обычным end-to-end header и передаётся
 upstream с исходным значением без изменений.
 
+Нормативные границы этого пути: [request source](../spec/requirements/request-source.md)
+для quota/leases/replay и
+[REQUEST enforcement](../spec/requirements/request-enforcement.md) для
+selection/reactions/rewrite/handoff.
+
 Guardrail-enabled response, включая SSE, полностью удерживается в RAM до
 protocol completion и final response-policy decision. Клиент до этого не
 получает upstream status, headers или body. Ordinary JSON считается
@@ -39,6 +44,11 @@ JSON string literals; SSE span может пересекать нескольк�
 logical field. Остальные bytes сохраняются, а `BLOCK` скрывает весь
 upstream response.
 
+Нормативные atomic boundary, fragment/reaction matrix, source maps и ownership
+принадлежат [RESPONSE enforcement](../spec/requirements/response-enforcement.md).
+Transport, headers, timeouts, probes и shutdown принадлежат
+[HTTP gateway](../spec/requirements/http-gateway.md).
+
 Request URL, model и normalized identity сохраняются в request-scoped handoff.
 Response context использует тот же snapshot и отличается только phase
 `RESPONSE`; модель из upstream response его не переопределяет. Каждое textual
@@ -47,67 +57,33 @@ choice, semantic field, tool call или transcript boundaries.
 
 ## Bearer identity
 
-Startup выбирает ровно один общий Bearer extractor. `DUMMY` доступен только в
-`development`/`test`, проверяет representation header и возвращает configured
-normalized user/groups. `JWT` выполняет полностью локальную проверку RS256 по
-immutable pinned public JWK set. `EXTERNAL` передаёт non-empty opaque Bearer
-token trusted Bridge service и принимает normalized user/groups. JWT и
-`EXTERNAL` доступны во всех environments, включая `production`.
+Нормативные [mode/header/JWT/Bridge/cache matrices](../spec/requirements/identity-and-context.md)
+и [identity telemetry](../spec/requirements/observability.md#identity) доступны
+без completed tasks. Operator examples и env mapping находятся в
+[configuration](configuration.md).
 
-Каждый поддержанный request обязан содержать ровно один `Authorization` с
-case-insensitive scheme `Bearer`. Missing или другой scheme получает `401` с
-`WWW-Authenticate: Bearer realm="vigilant"`; duplicate или malformed
-representation получает safe `400`. В `DUMMY` token может быть пустым и
-игнорируется. В JWT compact token обязан иметь `alg=RS256` и точный `kid`,
-который выбирает одну configured key. Signature, exact `iss`, containing
-`aud`, обязательный неистёкший `exp` и optional `nbf` проверяются до чтения
-identity claims. Затем required string `sub` и optional top-level array
-`groups` нормализуются по общему identity contract; missing `groups` даёт
-empty set, а invalid/duplicate normalized values получают safe `400`.
+`AppComponent` выбирает Dummy, offline JWT или External. Shared
+`BearerHeaderParser` находится в `DummyIdentityExtractor.kt`; successful
+extractor передаёт только `NormalizedIdentity`. JWT проверяет pinned RS256
+trust локально. В EXTERNAL `CachingExternalIdentityLookup` стоит между
+extractor и `BridgeIdentityClient`: completed hit обходит Bridge, cold miss
+проходит его exact one-attempt HTTP boundary. Caffeine хранит successful
+identity с write TTL/maximumSize и full HMAC keys отдельного hasher.
 
-External после shared Bearer parsing использует process-local Caffeine cache.
-Ключом служит полный HMAC-SHA-256 UTF-8 token в lowercase hex, с отдельным
-32-byte случайным секретом на запуск. Cache хранит только normalized successful
-identity; raw token не удерживается. По умолчанию TTL равен `10m`, maximumSize
-равен `10000` completed entries. `expireAfterWrite` начинается при successful
-completion, hit не продлевает срок, возраст `>= TTL` даёт miss. Expired или
-evicted identity не используется даже при Bridge failure; idle не запускает refresh.
-Caffeine maintenance ограничивает число entries, без обещания точного heap budget.
+Decorator владеет caller futures и generations; Bridge - exchange, deadline,
+permit и CLIENT span. Cancellation одного caller сохраняет shared lookup для
+остальных, последнего - отменяет exchange. `OutboundClientResources` закрывает
+cache, Bridge и sole factory через общий cleanup helper. Defaults и exact
+terminal paths определены [identity owner](../spec/requirements/identity-and-context.md#lifecycle).
 
-Создатель cold miss выполняет ровно один `POST` на exact
-configured path/query с единственными provider headers `Authorization: Bearer
-<token>`, `Accept: application/json`, `Content-Length: 0` и без body. Redirect
-не follow-ится. Только `200 application/json` с object, required string `user`
-и required array-of-strings `groups` успешен; duplicate JSON keys, invalid или
-duplicate-after-normalization identity и больше 128 groups отклоняются.
-Неизвестные top-level fields игнорируются. Standard Armeria aggregate limit
-остаётся 10 MiB, отдельной identity response-size настройки нет.
-
-Один positive `identity-external-timeout`, default `1s`, начинается до client
-connection acquisition и охватывает acquisition, connect, request write,
-headers и полный response body. Immediate nonfair semaphore использует
-effective `inspection-max-concurrent-request-sources`; N+1 не ждёт в очереди и
-сразу получает unavailable. Decorator отдельно ограничивает тем же `N` всех
-ожидающих callers, включая joins. Miss при исчерпании waiter slots получает
-тот же `503 identity_unavailable`; ready hit не занимает slot или Bridge permit.
-Concurrent misses одного key делят exchange и исходный deadline. Отмена одного
-caller не влияет на остальных, отмена последнего отменяет Bridge exchange.
-Failure и cancellation не кешируются, следующий miss запускает новую попытку.
-Graceful drain позволяет shared lookup завершиться в исходном deadline; forced
-shutdown закрывает cache, затем Bridge и общий outbound factory. Cache close
-отменяет callers, удаляет entries/in-flight state и ссылку на hasher, повторный
-close безопасен; после close даже прежний hit возвращает cancelled future.
-Cache теряется при restart, новый запуск получает новый секрет.
-
-Все extractors запускаются на blocking-safe request executor до body demand;
-Dummy/JWT завершают локальный future, а External связывает его с async Armeria
-exchange. Каждая async continuation возвращается на тот же inspection executor
-и входит в контекст своего request, даже если shared lookup завершён под
-контекстом инициатора.
-Raw token и decoded claim values не сохраняются и не попадают в audit, logs,
-metrics, traces или errors; policy context получает только normalized
-user/groups. Принятый Authorization передаётся upstream с исходным значением
-без изменений.
+`PiiShadowProxyService` инициирует extraction до body demand на blocking-safe
+request executor. Continuation каждого caller возвращается на него под своим
+Armeria request context, даже при shared completion в контексте инициатора.
+Original accepted Authorization остаётся transport-owned и достигает upstream
+без изменений. `PolicyContextHandoff` сохраняет request snapshot и меняет
+только phase для response; body-derived model приходит из protocol parser.
+[Coverage](requirements-coverage.md#identity-evidence) отдельно фиксирует
+известную границу strict config validation и применимость existing tests.
 
 ## PII analysis outcome
 
@@ -126,31 +102,33 @@ MASK даёт whole-request 403. RESPONSE phase разрешает `ALLOW`, dete
 `BLOCK` блокирует весь response. `ERROR` не содержит reaction и публикует
 stable `error.code`.
 
+Полная schema, matching, overrides, deadlines и domain decision принадлежат
+[policy engine](../spec/requirements/policy-engine.md).
+
 Malformed JSON, неизвестный content discriminator и неоднозначная
 content-bearing structure обрабатываются fail-closed и не достигают upstream.
 
 ## Request-side errors
 
+Нормативные [descriptor и parse outcomes](../spec/requirements/http-gateway.md#request-parse-outcomes)
+и [inspection errors](../spec/requirements/http-gateway.md#inspection-error-matrix)
+имеют одного owner. Остальные runtime outcomes приведены ниже.
+
 | Ситуация | HTTP status | `Retry-After` | JSON body |
 |---|---:|---:|---|
 | Некорректный configured session ID | `400` | нет | `{"error":"invalid_session_id"}` |
-| Неподдерживаемые method, path, content type или schema | `400` | нет | `{"error":"unsupported_schema"}` |
-| Malformed supported message | `400` | нет | `{"error":"malformed_message"}` |
-| Ambiguous content | `400` | нет | `{"error":"ambiguous_content"}` |
-| External или unresolved context | `400` | нет | `{"error":"unresolved_context"}` |
 | Duplicate, malformed или invalid JWT identity | `400` | нет | `{"error":"invalid_identity"}` |
 | Missing или non-Bearer Authorization | `401` | нет | `{"error":"authentication_required"}` + Bearer challenge |
 | External provider status/protocol/transport/timeout/overload failure | `503` | `1` | `{"error":{"message":"Identity service unavailable.","type":"server_error","code":"identity_unavailable"}}` |
 | Некорректный request source, включая несовпадение `Content-Length` | `400` | нет | `{"error":"invalid_request_source"}` |
 | Per-request byte limit | `413` | нет | `{"error":"request_too_large"}` |
-| Owner/global retained capacity | `503` | `1` | `{"error":{"message":"Request inspection unavailable.","type":"server_error","code":"request_inspection_unavailable"}}` |
-| Inspection executor admission failure | `503` | `1` | `{"error":{"message":"Request inspection unavailable.","type":"server_error","code":"request_inspection_unavailable"}}` |
-| Detector error/deadline, invalid rewrite, request source или orchestration failure | `503` | `1` | `{"error":{"message":"Request inspection unavailable.","type":"server_error","code":"request_inspection_unavailable"}}` |
 
 Descriptor проверяется до identity и body demand. Некорректный session ID
 отклоняется ещё раньше, в tracing decorator. Identity, source, parser, context,
 empty policy selection и cancellation до detector execution не публикуют
-request audit. Когда после selection действительно начинается detector
+request audit. Полные trigger/absence/schema/privacy rules принадлежат
+[observability contract](../spec/requirements/observability.md#analysis-lifecycle-audit).
+Когда после selection действительно начинается detector
 execution, gateway best-effort публикует в existing non-blocking JSONL stdout
 ровно одну пару `policy.analysis_started` и `policy.analysis_completed`.
 Terminal event появляется до разрешённого upstream handoff, но request path не
@@ -164,7 +142,7 @@ Policy deadline или typed detector error отражается как outcome 
 stable `error.code` и без reaction, возвращает `503` с `Retry-After: 1` до
 upstream и имеет приоритет над PII BLOCK независимо от порядка fragments/policies.
 Непредвиденный сбой request source, orchestration или context assembly
-возвращает закрытый VIG-29 `503 request_inspection_unavailable` до upstream
+возвращает закрытый inspection outcome `503 request_inspection_unavailable` до upstream
 handoff и не раскрывает внутреннюю причину.
 
 Client cancellation до analysis отменяет ingest/inspection, освобождает
@@ -177,6 +155,11 @@ audit event. Original reservations освобождаются после termina
 upstream отправленный prefix и никогда не повторяется как unmasked fallback.
 
 ## Response enforcement
+
+Полный нормативный контракт, включая все fragments, gap/reaction cases,
+cross-event mapping и terminal paths, находится у
+[RESPONSE enforcement](../spec/requirements/response-enforcement.md). Ниже
+описано текущее runtime wiring.
 
 Ordinary JSON parser извлекает independent `content`, `refusal`, modern/deprecated
 function arguments и audio transcript fragments. SSE parser собирает
@@ -203,26 +186,14 @@ instruction или source-map/rewrite failure дают exact `503
 response_inspection_unavailable` с `Retry-After: 1`. Ни один из этих paths не
 раскрывает upstream status, headers или body.
 
-## Закрытая матрица VIG-29
+## Inspection errors
 
-Production encoder фиксирует пять исчерпывающих OpenAI-compatible errors из
-[VIG-29](../spec/issues/issue_29_openai_error_contract.md):
-
-| Outcome | HTTP status | `Retry-After` | Exact JSON body |
-|---|---:|---:|---|
-| Request `BLOCK` | `403` | нет | `{"error":{"message":"Request blocked: PII detected.","type":"policy_violation","code":"policy_blocked"}}` |
-| Response `BLOCK` | `403` | нет | `{"error":{"message":"Response blocked: PII detected.","type":"policy_violation","code":"policy_blocked"}}` |
-| Request inspection unavailable | `503` | `1` | `{"error":{"message":"Request inspection unavailable.","type":"server_error","code":"request_inspection_unavailable"}}` |
-| Response inspection unavailable | `503` | `1` | `{"error":{"message":"Response inspection unavailable.","type":"server_error","code":"response_inspection_unavailable"}}` |
-| Invalid upstream response | `502` | нет | `{"error":{"message":"Invalid upstream response.","type":"upstream_error","code":"invalid_upstream_response"}}` |
-
-Encoder принимает только закрытый outcome и не принимает body, headers,
-credentials, identity, policy references или внутренние причины. Поэтому JSON
-имеет ровно поле `error`, а оно ровно три string fields: `message`, `type`,
-`code`.
-
-Все пять outcomes подключены к runtime. Request BLOCK выбирается для policy
-BLOCK и structural MASK, technical refusal никогда не утверждает обнаружение PII.
+`OpenAiErrorResponses` кодирует [пять inspection outcomes](../spec/requirements/http-gateway.md#inspection-error-matrix)
+через один закрытый encoder. Он принимает только outcome и не принимает body,
+headers, credentials, identity, policy references или внутренние причины.
+Request BLOCK выбирается для policy BLOCK и structural MASK; technical refusal
+никогда не утверждает обнаружение PII. External identity unavailable -
+[отдельный identity contract](../spec/requirements/identity-and-context.md#external-bridge).
 
 ## Upstream errors
 
@@ -230,12 +201,8 @@ BLOCK и structural MASK, technical refusal никогда не утвержда
 проходят retention, protocol validation и response policy decision. `ALLOW` сохраняет
 их status/body, а `MASK`/`BLOCK` применяются так же, как для `200`. Malformed
 JSON/SSE, missing или malformed standalone `[DONE]`, upstream body interruption
-и transport-generated non-protocol body дают exact VIG-29 `502
+и transport-generated non-protocol body дают exact `502
 invalid_upstream_response` без upstream disclosure.
-
-| Ситуация | HTTP status | JSON body |
-|---|---:|---|
-| Invalid, incomplete или interrupted Chat Completions response | `502` | `{"error":{"message":"Invalid upstream response.","type":"upstream_error","code":"invalid_upstream_response"}}` |
 
 Низкоуровневый `BypassProxyService` по-прежнему кодирует connection failure как
 `502 upstream_unavailable` и timeout как `504 upstream_timeout`. На

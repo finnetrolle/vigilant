@@ -13,6 +13,8 @@ upstream и response до передачи клиенту. Для streaming resp
 весь ответ в retained in-memory response source до terminal event и решения
 policy. Response source не имеет application-level limit или shared quota;
 heap sizing и runtime OOM policy принадлежат deployment.
+Полная atomic/lifecycle matrix принадлежит
+[RESPONSE enforcement](requirements/response-enforcement.md#atomic-boundary).
 
 ## MVP-02. Fast PII
 
@@ -22,7 +24,13 @@ heap sizing и runtime OOM policy принадлежат deployment.
 
 Политика не выбирает отдельные PII types. Она включает весь detector либо не
 применяется. Только text content является inspectable; изображения, аудио,
-файлы и unknown content blocks передаются без изменения с safe inspection gap.
+файлы и schema-recognized provider-opaque content передаются без изменения с
+safe inspection gap. Unknown content discriminators и ambiguous shapes
+отклоняются по [protocol contract](requirements/chat-completions-protocol.md).
+
+Точные formats, boundaries, validation, findings и quality gates принадлежат
+[Fast PII](requirements/fast-pii.md#taxonomy); capability, UTF-8 offsets,
+aggregation и adapter semantics - [windowed inspection](requirements/windowed-inspection.md#contract).
 
 ## MVP-03. Реакции policy
 
@@ -38,7 +46,8 @@ heap sizing и runtime OOM policy принадлежат deployment.
 сохраняет valid OpenAI JSON, unknown fields и всю нетронутую структуру.
 
 Для request действует согласованное ограничение
-[VIG-34](issues/issue_34_request_pii_enforcement.md): если выбранный `MASK`
+[REQUEST enforcement](requirements/request-enforcement.md#field-classification):
+если выбранный `MASK`
 затрагивает структурное содержимое, весь request блокируется вместо его
 переписывания. Это имена инструментов, участников и схем; model-visible ключи
 JSON Schema; modern/deprecated function arguments и custom tool input;
@@ -47,8 +56,8 @@ JSON Schema; modern/deprecated function arguments и custom tool input;
 
 Маскируется свободный текст: сообщения и результаты инструментов, описания,
 заголовки, примеры, имена файлов, открытый reasoning и predicted output.
-Точный конечный перечень recognized fields принадлежит VIG-34. Наличие
-структурной находки только у `ALLOW` policy не вызывает блокировку. Этот request contract и его evidence принадлежат VIG-34.
+Точный конечный перечень recognized fields принадлежит REQUEST enforcement.
+Наличие структурной находки только у `ALLOW` policy не вызывает блокировку.
 
 При request `MASK` replacement занимает не больше UTF-8 bytes, чем selected
 decoded PII span. Помещающийся полный marker сохраняется; иначе внутреннее
@@ -56,41 +65,45 @@ decoded PII span. Помещающийся полный marker сохраняе�
 используются `*` или `**`. Заменяется весь PII span; сохранять часть исходного
 PII ради длины запрещено. Остальные raw JSON bytes не меняются, поэтому
 masked body не больше исходного и не отклоняется из-за роста marker.
-Полные типы findings сохраняются в safe aggregate metadata. Точный rendering
-contract принадлежит VIG-34; текущая RESPONSE representation не меняется.
+Полные типы findings сохраняются в safe aggregate metadata. Точный
+[rendering contract](requirements/request-enforcement.md#request-marker) не
+меняет текущую RESPONSE representation.
 
 В REQUEST policy реакция `clean` обязательна и допускает только `ALLOW` без
 transformations. Это вклад успешно завершённой чистой проверки одного
 fragment; он не отменяет `MASK` или `BLOCK` от других проверок. Невалидный
 `clean` отклоняется при startup, в том числе у disabled policies. Доменный
 engine и текущий RESPONSE contract сохраняют свои возможности; ограничение
-исполняемого REQUEST path определено VIG-34.
+исполняемого REQUEST path определено
+[постоянным owner](requirements/request-enforcement.md#request-reactions-and-priority).
 
 В REQUEST policy `error` обязательна и допускает только `BLOCK` без
-transformations. Ошибка или timeout настроенной проверки возвращает VIG-29
+transformations. Ошибка или timeout настроенной проверки возвращает HTTP inspection error
 `503` с `Retry-After: 1` до upstream handoff; обнаружение PII при этом не
 утверждается. `error = ALLOW` отклоняется при startup, в том числе у disabled
-policies. Переход на VIG-34 требует явного обновления прежних shadow policy
+policies. Переход на текущий contract требует явного обновления прежних shadow policy
 files; автоматический fallback на пропуск запроса отсутствует. Текущая
 RESPONSE configuration semantics этим request contract не изменяется.
 
 Точный HTTP status и OpenAI-compatible error body для `BLOCK` принадлежат
-[VIG-29](issues/issue_29_openai_error_contract.md).
+[HTTP inspection errors](requirements/http-gateway.md#inspection-error-matrix).
 
 При request aggregation technical error/timeout имеет приоритет над policy
 `BLOCK` и structural `MASK`: итог `503`. При отсутствии technical failure
 любой блокирующий результат даёт `403`; иначе применяются текстовые masks
-или original replay. Это согласованный приоритет VIG-34, не новый response
-contract.
+или original replay. Это
+[согласованный REQUEST priority](requirements/request-enforcement.md#request-reactions-and-priority),
+а не новый response contract.
 
 ## MVP-04. Policies и группы
 
-`politics.conf` загружается и строго валидируется при startup. VIG-34 сохраняет
-текущую полную policy schema: unique `id`, `version`, `enabled`, `match`,
+`politics.conf` загружается и строго валидируется при startup.
+[Policy engine](requirements/policy-engine.md#startup-snapshot-and-schema)
+сохраняет полную schema: unique `id`, `version`, `enabled`, `match`,
 `detectors`, `deadline`, `reactions` и `overrides`. Matching включает URL,
 model, phase `REQUEST|RESPONSE` и subject `USER|GROUP|*`; existing exact/wildcard
 rules и simultaneous overrides сохраняются. Замена этой schema на
-`direction`/`BOTH_WAYS` или упрощённый список groups не входит в VIG-34.
+`direction`/`BOTH_WAYS` или упрощённый список groups не входит в текущий MVP.
 
 Request и response выбирают независимые policy sets из одного immutable startup
 snapshot и одной resolved identity. Применение проверки выбирает администратор:
@@ -98,8 +111,11 @@ snapshot и одной resolved identity. Применение проверки 
 PII policy `fast-pii` не запускается. Identity, protocol validation и source
 admission при этом сохраняются. Файл остаётся обязательным; его полное
 содержимое не записывается в logs, используются safe policy references и
-validation diagnostics согласно audit/privacy contract. Эти изменения startup coverage принадлежат VIG-34;
-[реестр](WORK_ITEMS.md) фиксирует статус обязательного implementation evidence.
+validation diagnostics согласно audit/privacy contract. Selection и startup
+coverage принадлежат
+[REQUEST enforcement](requirements/request-enforcement.md#selection), а
+наблюдённое implementation evidence хранится в
+[closure ledger](../docs/request-enforcement-evidence.md).
 
 ## MVP-05. Identity
 
@@ -111,8 +127,8 @@ upstream byte-for-byte. Vigilant временно использует его т
 Результат lookup кэшируется отдельной bounded capability. Cache miss ожидает
 новый Bridge lookup; timeout или failure lookup возвращает `503`, не позволяя
 обойти policy или использовать stale identity.
-Детали extractor и cache принадлежат [VIG-30](issues/issue_30_external_identity_extractor.md)
-и [VIG-31](issues/issue_31_identity_lookup_cache.md).
+Детали mode selection, extractor, cache и handoff принадлежат
+[постоянному identity/context owner](requirements/identity-and-context.md).
 
 External lookup дополняет, а не заменяет offline JWT validation. Обязательный
 startup selector выбирает ровно одну реализацию общего async и
@@ -134,10 +150,10 @@ groups, headers и identity запрещены.
 Единственная queue - existing Logback `AsyncAppender` with `neverBlock=true`.
 Event может быть потерян при overload или stdout failure; это не меняет traffic.
 Application не создаёт file/WAL/Collector/own queue/worker/metric/drop alert.
-REQUEST pair принадлежит
-[VIG-32-01](issues/epic_32/issue_32_01_stdout_request_audit_migration.md),
-RESPONSE pair -
-[VIG-20-02](issues/epic_20/issue_20_02_response_inspection_enforcement.md).
+Общая schema, triggers, privacy и delivery boundary принадлежат
+[observability contract](requirements/observability.md#analysis-lifecycle-audit),
+а RESPONSE application boundary -
+[RESPONSE enforcement](requirements/response-enforcement.md#fragments-gaps-and-reactions).
 Текущая REQUEST inspection и ordinary JSON/SSE RESPONSE enforcement публикуют
 эту pair до transport handoff и не ждут durable acknowledgement.
 
@@ -146,7 +162,8 @@ RESPONSE pair -
 Vigilant является OpenAI-compatible gateway только для Chat Completions.
 Клиент подключает его заменой `base_url`; Bearer token прозрачно достигает
 LiteLLM или другого configured LLM upstream. Другие OpenAI APIs не входят в
-MVP.
+MVP. Descriptor, field maps и terminal semantics принадлежат
+[Chat Completions owner](requirements/chat-completions-protocol.md).
 
 ## Источники сравнения
 

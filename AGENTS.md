@@ -6,8 +6,7 @@ filename.
 
 Before planning or editing any task that adds or changes production code, load
 the installed TDD skill (`$tdd` in Codex, `/tdd` in Claude Code), even when the
-user did not invoke it explicitly. Follow the `Mandatory test-driven
-development` section in `CLAUDE.md`.
+user did not invoke it explicitly. Follow the `Behavior-first development and selective TDD` section in `CLAUDE.md`.
 
 Before coding, and again before requesting verification, follow the
 `Pre-verification defect prevention` section in `CLAUDE.md`. In particular:
@@ -25,9 +24,11 @@ Before coding, and again before requesting verification, follow the
   observation being asserted, use bounded waits, never reuse a released
   ephemeral port, and propagate every mandatory startup setting through the
   shared launch fixtures;
-- update issue, epic, dependent issues, and `spec/WORK_ITEMS.md` as one
-  consistency change, and do not mark work `Done` before its required dynamic
-  evidence exists and `./gradlew validateWorkItems` passes.
+- close issue, epic, dependent prerequisite references, and `spec/WORK_ITEMS.md`
+  as one consistency change under `Work-item completion` in `CLAUDE.md`; obtain
+  required evidence, transfer current requirements to permanent owners, remove
+  completed planning records, then run `./gradlew validateWorkItems` again.
+  Never infer completion from a missing file or reuse an ID from Git history.
 
 Before handing work to `verify-changes`, publish the exact
 `Pre-verification closure` summary required by `CLAUDE.md`. A green build does
@@ -38,3 +39,17 @@ When Codex uses RTK, use `rtk proxy` for machine-consumed output and for raw
 verification evidence. Do not pipe presentation-filtered paths or JSON into
 another command, and do not start a second Gradle command until the first
 yielded process has definitely exited.
+
+Use the existing `ast-index` first for semantic code navigation: symbols,
+outlines, references, usages, implementations, hierarchies, callers and module
+dependencies. Invoke it through `rtk proxy ast-index`. Keep `rg` first for
+literal text and file-name searches, documentation, configuration, comments,
+string literals and final completeness sweeps. Refresh the index after source
+edits or branch switches; treat index results as navigation, not verification.
+
+For one issue, implement inline unless a real model switch or explicit user
+delegation requires a worker. Preserve separate independent verification.
+Use the canonical testing mode, early lint/contract checks and durable runner
+described in CLAUDE.md. No automatic snapshot approvals or skipped required
+lifecycle/E2E evidence. Revalidate only changed inputs between remediation waves,
+and retain a complete current set of final verification results.
