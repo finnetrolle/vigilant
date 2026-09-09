@@ -381,9 +381,10 @@ horizontal logging subsystem.
 ALLOW/MASK/BLOCK, explicit policy selection, non-expanding exact patches и
 lifecycle/privacy matrices подтверждены полными HTTP/process/OCI checks,
 work-item validator и build. [Closure ledger](../docs/request-enforcement-evidence.md)
-содержит точные команды и независимые oracles. Следующий шаг - уточнение
-[VIG-36](issues/issue_36_superseded_requirements_cleanup.md), которая остаётся
-Draft. Историческая shadow-only веха сохраняется как baseline; текущий runtime
+содержит точные команды и независимые oracles. Следующий шаг - реализация
+[VIG-36-01](issues/epic_36/issue_36_01_completion_workflow.md) из согласованного
+[EPIC-36](epics/epic_36_current_requirements_and_work_item_lifecycle.md),
+`Ready for implementation`. Историческая shadow-only веха сохраняется как baseline; текущий runtime
 contract описан в [docs/runtime-contract.md](../docs/runtime-contract.md).
 
 Все implementation issues Stage 0 завершены: VIG-09-01..09 и EPIC-09 имеют

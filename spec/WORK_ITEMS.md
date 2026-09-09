@@ -126,7 +126,7 @@ Issue является листом mind map, если:
 | [VIG-33: Availability SLO and operational evidence](issues/issue_33_availability_slo_and_operations.md) | `Draft` | production SLO не определён | не оценено |
 | [VIG-34: Request-side PII enforcement](issues/issue_34_request_pii_enforcement.md) | `Done` | завершена; request/source/process/OCI evidence и build GREEN | 0 дней осталось |
 | [VIG-35: Выбор production identity mode](issues/issue_35_production_identity_mode.md) | `Done` | завершена | 0 дней осталось |
-| [VIG-36: Очистка superseded требований и архитектурных документов](issues/issue_36_superseded_requirements_cleanup.md) | `Draft` | требуется inventory и завершение contract dependencies | не оценено |
+| [EPIC-36: Действующие требования и жизненный цикл work items](epics/epic_36_current_requirements_and_work_item_lifecycle.md) | `Ready for implementation` | 0/8 | 12-21 инженерный день |
 | [EPIC-37: Predictable and faster test suite](epics/epic_37_predictable_test_throughput.md) | `Done` | 5/5 | 0 дней осталось |
 
 ## Active TODO: порядок следующей работы
@@ -234,14 +234,18 @@ Issue является листом mind map, если:
 
 ### Phase 6: финальная документация и operations
 
-- [ ] После VIG-20-04, VIG-32-02 и VIG-35 уточнить и выполнить
-  [VIG-36](issues/issue_36_superseded_requirements_cleanup.md), сохранив
-  исторические work items и evidence.
+- [ ] Выполнить [EPIC-36](epics/epic_36_current_requirements_and_work_item_lifecycle.md),
+  начиная с [VIG-36-01](issues/epic_36/issue_36_01_completion_workflow.md):
+  перенести действующие контракты в постоянные требования, удалить устаревшие
+  документы и completed issues/epics, оставив историю в Git. Все восемь
+  implementation issues согласованы и готовы; порядок задают их зависимости.
 - [ ] После стабилизации identity, enforcement и observability уточнить
   [VIG-33](issues/issue_33_availability_slo_and_operations.md).
 
-Текущий следующий шаг: уточнить inventory и acceptance
-[VIG-36](issues/issue_36_superseded_requirements_cleanup.md), `Draft`.
+Текущий следующий шаг: реализовать
+[VIG-36-01](issues/epic_36/issue_36_01_completion_workflow.md), `Ready for implementation`.
+После неё доступны VIG-36-02, VIG-36-03, VIG-36-04 и VIG-36-07;
+зависимости остальных issues указаны в [EPIC-36](epics/epic_36_current_requirements_and_work_item_lifecycle.md).
 [VIG-34](issues/issue_34_request_pii_enforcement.md) завершена: полный request,
 source, privacy и packaged lifecycle contract подтверждён, обязательные
 HTTP/process/OCI/validator/build gates GREEN; точное evidence находится в

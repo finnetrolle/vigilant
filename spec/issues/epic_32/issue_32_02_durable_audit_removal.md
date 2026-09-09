@@ -4,7 +4,7 @@
 **Epic:** [EPIC-32](../../epics/epic_32_best_effort_stdout_audit.md)
 **Ветка:** Contract old durable subsystem > remove all current consumers
 **Зависит от:** [VIG-32-01](issue_32_01_stdout_request_audit_migration.md)
-**Блокирует:** [VIG-36](../issue_36_superseded_requirements_cleanup.md)
+**Блокирует:** [EPIC-36](../../epics/epic_36_current_requirements_and_work_item_lifecycle.md)
 **Оценка:** 4-5 инженерных дней
 **Уверенность:** Medium
 
@@ -152,7 +152,7 @@ distribution seams:
   enforcement.
 - Удаление или изменение статуса completed epics/issues и historical evidence.
 - Полная cleanup всех superseded requirements/architecture snapshots beyond
-  direct durable-audit consumers. Более широкий inventory принадлежит VIG-36.
+  direct durable-audit consumers. Более широкий inventory принадлежит EPIC-36.
 
 ## Ambiguity Report
 

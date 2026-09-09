@@ -795,7 +795,7 @@ RPS/latency/SLO claim, benchmark suite и обязательный full performa
 request sequence/component diagrams и active roadmap frontier. Historical
 VIG-12, VIG-32-01 и response leaves сохраняют Done/evidence; добавляются
 точные successor pointers, а не переписывается прошлая реализация. Общая
-историческая очистка остаётся VIG-36. Ready spec не описывается как уже
+историческая очистка принадлежит [EPIC-36](../epics/epic_36_current_requirements_and_work_item_lifecycle.md). Ready spec не описывается как уже
 доступный runtime до выполнения acceptance evidence.
 
 ## Открытые решения
