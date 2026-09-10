@@ -202,7 +202,7 @@ internal API не доказывает implementation capability.
 | `ST1-10` | Не реализовано | Generated-code inspection и external analyzer adapter отсутствуют. |
 | `ST1-11` | Не реализовано | Token/cost/run-duration budgets не принадлежат gateway policy model. |
 | `ST1-12` | Не реализовано | Gateway не считает agent actions/retries и не предотвращает side-effect loops. |
-| `ST1-13` | Частично | Base HTTP, audit и identity telemetry есть; dedicated inspection instruments, finite error taxonomy и availability SLI/SLO отсутствуют. |
+| `ST1-13` | Частично | Base HTTP, audit и identity telemetry есть; dedicated inspection instruments, finite error taxonomy и измеряемый end-to-end availability SLI/SLO отсутствуют. [VIG-33](../spec/issues/issue_33_availability_slo_and_operations.md) согласована для подготовки первого Docker-релиза и операторской методики; это не реализация SLI или production evidence. |
 | `ST1-14` | Частично | OTel SDK формирует OTLP/JSON traces и metrics в stdout; complete operational export/collector evidence не повышается из наличия internal records. |
 | `ST1-15` | Не реализовано | Critical-event webhook и delivery lifecycle отсутствуют. |
 | `ST1-16` | Не реализовано | PII corpora не являются regression eval runner для каждой policy/model version. |

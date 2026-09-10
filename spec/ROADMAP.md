@@ -84,9 +84,13 @@ Delivery order определяется
    реализована поверх опубликованного task packet; semantic applicability
    остаётся ответственностью reviewers.
 
-[VIG-33](issues/issue_33_availability_slo_and_operations.md) остаётся `Draft`:
-численный SLI/SLO, ownership внешних failures и production evidence period ещё
-не выбраны. Отсутствие application-owned audit file не закрывает эти решения.
+[VIG-33](issues/issue_33_availability_slo_and_operations.md) имеет статус
+`Ready for implementation`: согласована подготовка первого Docker-релиза,
+включая операторский контракт, stdout boundary и методику availability evidence.
+Первая инсталляция допускает одну реплику при поддержке нескольких за внешним
+балансировщиком. Администратор настраивает telemetry chain на стендах.
+Численный SLO отложен до production review по процедуре VIG-33 и не блокирует
+подготовку выпуска. Это согласованный scope, а не новая runtime qualification.
 
 [EPIC-06](epics/epic_06_llm_message_parsing.md) остаётся `Draft` для future
 OpenAI Responses scope и не имеет implementation-ready leaves. Текущий Chat
