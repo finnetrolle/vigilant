@@ -1,5 +1,10 @@
 # Deployment
 
+Подготовка одной или нескольких production replicas, эксплуатационная приёмка,
+availability observations и review описаны в [operator reference](operations.md).
+Проверенные artifact/lifecycle/stdout observations находятся в
+[operations evidence](operations-evidence.md); внешний rollout проверяет администратор.
+
 ## Versioned artifact
 
 Формат приложения зафиксирован как reproducible Gradle application
@@ -117,11 +122,14 @@ Runtime обязан использовать non-blocking delivery, ротац�
 storage. Started request analysis публикует safe best-effort
 `policy.analysis_started`/`policy.analysis_completed` через existing Logback
 `AsyncAppender` с `neverBlock=true`; request не ждёт queue delivery или stdout write.
-Collector должен разделять записи по top-level `resourceSpans` и
-`resourceMetrics`; остальные JSON records являются application logs. Требования
+Consumer распознаёт traces по top-level `resourceSpans`, metrics по
+`resourceMetrics`, application logs по envelope Logback. Неизвестные или
+malformed records требуют отдельной диагностики, а не учёта как доставленный
+signal. Требования
 к delivery ownership определены в
 [observability contract](../spec/requirements/observability.md#stdout-topology-and-ownership),
-а пример pipeline приведён в [observability reference](observability.md).
+а описание трёх signal types и целевой внешней chain приведено в
+[observability reference](observability.md#otlp-json-stdout).
 
 ## OCI smoke test
 

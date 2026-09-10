@@ -152,7 +152,6 @@ context sources. Само решение хранится один раз в own
 | Work item | Статус | Прогресс | Оценка |
 |---|---|---:|---:|
 | [EPIC-06: OpenAI Responses protocol scope](epics/epic_06_llm_message_parsing.md) | `Draft` | 0/0 | Responses вне MVP; нет implementation-ready leaves |
-| [VIG-33: Эксплуатационная готовность первого Docker-релиза](issues/issue_33_availability_slo_and_operations.md) | `Ready for implementation` | scope согласован; production SLO отложен | 2-3 дня |
 
 ## Active TODO: порядок следующей работы
 
@@ -172,15 +171,13 @@ context sources. Само решение хранится один раз в own
 4. Не начинать новый пункт, пока предыдущий hard gate не завершён и
    `./gradlew validateWorkItems` не подтверждает согласованность реестра.
 
-### Phase 6: operations
-
-- [ ] Выполнить [VIG-33](issues/issue_33_availability_slo_and_operations.md):
-  подготовить операторский контракт и evidence первого Docker-релиза.
-
-Текущий следующий шаг:
-[VIG-33](issues/issue_33_availability_slo_and_operations.md),
-`Ready for implementation`. Отсутствие production telemetry не блокирует
-подготовку выпуска; численный SLO выбирается после первого production review.
+Готовых к реализации задач сейчас нет. Текущий следующий шаг: уточнить
+[EPIC-06](epics/epic_06_llm_message_parsing.md), который остаётся `Draft`;
+новый scope требует согласования и executable leaves.
+Эксплуатация Docker и дальнейший production review принадлежат
+[operations contract](requirements/operations.md) и
+[operator reference](../docs/operations.md); текущие app observations находятся в
+[operations evidence](../docs/operations-evidence.md).
 [Policy engine](requirements/policy-engine.md),
 [request source](requirements/request-source.md) и
 [REQUEST enforcement](requirements/request-enforcement.md) опубликованы.

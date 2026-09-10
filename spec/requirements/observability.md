@@ -47,6 +47,15 @@ Retention, rotation, bounded local buffering, захват stdout, external deli
 queue, process или delivery failure допустима; zero-loss guarantee отсутствует.
 Vigilant не является observability storage или SIEM.
 
+Целевая deployment chain первого Docker deployment: Docker stdout -> Fluentd
+-> OpenTelemetry Collector -> OpenObserve. Администратор настраивает и проверяет
+её на стендах, сохраняя application logs, traces и metrics как соответствующие
+signal types. Vigilant предоставляет описание JSONL envelopes, metric
+names/units/attributes и correlation в [operator reference](../../docs/observability.md).
+Конфигурации этой chain, endpoints и secrets не входят в поставку приложения.
+Наличие stdout records не доказывает external delivery; bounded non-blocking
+и best-effort semantics выше сохраняются.
+
 ## Analysis lifecycle audit
 
 Для каждого реально начатого направления анализа публикуется best-effort одна

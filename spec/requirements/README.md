@@ -55,6 +55,7 @@ Implementation facts принадлежат runtime references, а coverage от
 | REQUEST selection, reactions, masking и handoff | [REQUEST enforcement](request-enforcement.md#request-boundary) | [Runtime](../../docs/runtime-contract.md), [evidence](../../docs/request-enforcement-evidence.md) |
 | RESPONSE retention, JSON/SSE reactions, masking и disclosure | [RESPONSE enforcement](response-enforcement.md#atomic-boundary) | [Runtime](../../docs/runtime-contract.md), [masking headers](../../docs/response-masking-headers.md) |
 | Logs, audit pairs, metrics/traces, privacy и stdout ownership | [Observability](observability.md#stdout-topology-and-ownership) | [Runtime observability](../../docs/observability.md) |
+| Docker operations, availability SLI, внешний probe и production review | [Operations](operations.md#deployment-и-ответственность) | [Operator reference](../../docs/operations.md), [evidence](../../docs/operations-evidence.md) |
 
 ## Требования к последующим изменениям
 

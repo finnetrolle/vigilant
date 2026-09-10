@@ -84,13 +84,14 @@ Delivery order определяется
    реализована поверх опубликованного task packet; semantic applicability
    остаётся ответственностью reviewers.
 
-[VIG-33](issues/issue_33_availability_slo_and_operations.md) имеет статус
-`Ready for implementation`: согласована подготовка первого Docker-релиза,
-включая операторский контракт, stdout boundary и методику availability evidence.
-Первая инсталляция допускает одну реплику при поддержке нескольких за внешним
-балансировщиком. Администратор настраивает telemetry chain на стендах.
-Численный SLO отложен до production review по процедуре VIG-33 и не блокирует
-подготовку выпуска. Это согласованный scope, а не новая runtime qualification.
+Подготовка первого Docker deployment описана в
+[operations contract](requirements/operations.md) и
+[operator reference](../docs/operations.md). [Operations evidence](../docs/operations-evidence.md)
+фиксирует focused telemetry/health, process shutdown, OCI smoke и три stdout
+signal types на проверенном artifact. Приёмка нескольких replicas, внешнего
+probe и Fluentd/Collector/OpenObserve chain остаётся обязанностью администратора.
+Численный availability SLO отложен до production review; наличие operator
+checklist не означает выполненный production rollout или накопленные measurements.
 
 [EPIC-06](epics/epic_06_llm_message_parsing.md) остаётся `Draft` для future
 OpenAI Responses scope и не имеет implementation-ready leaves. Текущий Chat

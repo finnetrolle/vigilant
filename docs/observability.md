@@ -272,8 +272,25 @@ log и active-lookups gauge отсутствуют.
 - metric record имеет top-level `resourceMetrics`.
 
 Application log record имеет top-level `timestamp`, `level` и другие поля
-Logback JsonEncoder. Это позволяет Collector разделить два логических потока
-без сетевого подключения из Vigilant. `VIGILANT_OTLP_ENABLED=false` отключает
+Logback JsonEncoder. Consumer разбирает каждую строку как один JSON object:
+
+| Signal type | Признак envelope | Содержимое и reference |
+|---|---|---|
+| Application log | `timestamp`, `level`, `loggerName`, `formattedMessage` | Optional `kvpList` и `mdc`; [correlation](#correlation-в-application-logs) |
+| Trace | Массив `resourceSpans` | `scopeSpans[].spans[]`, trace/span/parent IDs и attributes по [tracing model](#span-model) |
+| Metric | Массив `resourceMetrics` | `scopeMetrics[].metrics[]`, instrument name/unit/data points/attributes из [таблицы instruments](#metrics) |
+
+Порядок полей не фиксирован. OTLP objects должны декодироваться как ExportRequest
+своего signal type; хранение их только как текста application log не доказывает
+доставку traces/metrics. Неизвестная или malformed строка отмечается как parse
+gap; её нельзя молча считать корректным application event. Docker driver может
+оборачивать строку собственным envelope: сначала извлекается исходный stdout
+record с сохранением границ JSONL. Не объединять несколько records в один JSON.
+
+Это позволяет разделить два логических потока без сетевого подключения из
+Vigilant. [Docker stdout evidence](operations-evidence.md#наблюдение-stdout-artifact)
+проверяет получение всех трёх envelopes на одном artifact.
+`VIGILANT_OTLP_ENABLED=false` отключает
 только OTLP/JSON records. Prometheus scrape endpoint отсутствует.
 
 На shutdown providers явно flush-ятся, затем закрываются после proxy drain.
@@ -298,17 +315,21 @@ services:
         max-file: "3"
 ~~~
 
-Для централизованного хранения нужен внешний OpenTelemetry Collector. Базовый
-pipeline приведён в [otel-collector.yaml](otel-collector.yaml). Он:
+Целевая chain принадлежит
+[stdout contract](../spec/requirements/observability.md#stdout-topology-and-ownership):
+Docker stdout -> Fluentd -> OpenTelemetry Collector -> OpenObserve.
+Администратор настраивает её на стендах, выбирает версии, routing, endpoints,
+auth и retention, сохраняет каждый signal в соответствующем представлении
+OpenObserve и выполняет [операторский checklist](operations.md#приёмка-на-стенде).
+Vigilant поставляет stdout boundary; готовой конфигурации этой chain нет.
 
-1. читает container stdout через `filelog`;
-2. направляет records с `resourceSpans`/`resourceMetrics` в `otlpjson`
-   connector;
-3. оставляет остальные records в application logs pipeline;
-4. передаёт traces, metrics и logs во внешние exporters.
+Существующий [otel-collector.yaml](otel-collector.yaml) остаётся отдельным
+иллюстративным примером прямого `filelog` -> `otlpjson` с `debug` exporter.
+Он не реализует целевую Fluentd/OpenObserve chain и не является production
+configuration или evidence доставки. Mapping `level`, `kvpList`, `mdc` в
+OpenTelemetry Log Record также выбирает и проверяет администратор.
 
-Пример использует `debug` exporter как безопасную заглушку. В deployment его
-нужно заменить отдельными exporters для Langfuse, MLflow и log storage с
-подходящими endpoint/auth settings. Для application logs также нужно добавить
-parser, который переносит `level`, `kvpList` и `mdc` в поля OpenTelemetry Log
-Record; конкретный mapping зависит от backend schema.
+Proxy counters наблюдают только дошедшие до приложения exchanges и status
+classes. Они не дают полного end-to-end availability SLI или атрибуции всех
+dependency failures; методика и missing-observation rules находятся в
+[operations contract](../spec/requirements/operations.md#request-based-availability-sli).

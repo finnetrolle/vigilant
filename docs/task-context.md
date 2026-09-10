@@ -1,6 +1,6 @@
 # Task context
 
-`rtk proxy ./scripts/task-context VIG-33` reads an exact active issue from the
+`rtk proxy ./scripts/task-context <active-issue-ID>` reads an exact active issue from the
 current Git repository, including when invoked from a subdirectory. Python 3
 and Git are required. With declared papercut tags it also uses the existing
 pinned `scripts/papercuts` 0.2.0 wrapper. `--help` is the only flag; no setup,

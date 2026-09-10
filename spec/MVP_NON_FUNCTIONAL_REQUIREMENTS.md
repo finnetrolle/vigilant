@@ -129,13 +129,12 @@ RESPONSE stdout pairs. Channel-specific разрешения и текущие c
 
 ## Deployment и stack
 
-- MVP поддерживает несколько stateless replicas за load balancer; первая
-  production-инсталляция допускает одну Docker-реплику с перерывом в обслуживании
-  при её остановке. Каждая replica владеет local identity cache и response
-  source; audit delivery идёт через container-managed stdout.
-- Численный availability SLO пока не задан. Подготовка первого выпуска и
-  процедура последующего выбора SLO по production telemetry принадлежат
-  [VIG-33](issues/issue_33_availability_slo_and_operations.md); накопление данных
-  не является prerequisite выпуска.
+- Поддерживаемая топология Docker replicas, local state и распределение
+  эксплуатационных обязанностей принадлежат
+  [operations contract](requirements/operations.md#deployment-и-ответственность).
+- Численный availability SLO, постоянное окно и error-budget policy пока не
+  выбраны. Накопление production данных не является prerequisite первого
+  выпуска; выбор выполняет владелец сервиса по
+  [production review](requirements/operations.md#первый-production-review).
 - Stack: Kotlin 2.4.10, Java 25, Armeria/Netty, Metro, Gradle Kotlin DSL и OCI
   image. Spring Boot и GraalVM Native Image не входят в MVP.

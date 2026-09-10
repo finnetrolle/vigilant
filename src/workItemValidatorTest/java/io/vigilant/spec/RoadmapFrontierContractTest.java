@@ -24,7 +24,7 @@ final class RoadmapFrontierContractTest {
         }
     }
 
-    /** The next step names executable work, or draft refinement when the graph has no ready issues. */
+    /** The next step names executable work, or an existing draft issue/epic when no issue is ready. */
     @Test
     void frontierResolvesToCurrentOpenWork() throws IOException {
         String roadmap = Files.readString(Path.of("spec/ROADMAP.md"));
@@ -33,8 +33,8 @@ final class RoadmapFrontierContractTest {
         String registry = Files.readString(Path.of("spec/WORK_ITEMS.md"));
         int next = registry.indexOf("Текущий следующий шаг:");
         assertTrue(next >= 0, "Registry must name its current next step");
-        Matcher link = Pattern.compile("\\[VIG-[^]]+]\\(([^)]+)\\)").matcher(registry.substring(next));
-        assertTrue(link.find(), "Next step must link directly to an issue");
+        Matcher link = Pattern.compile("\\[(?:VIG|EPIC)-[^]]+]\\(([^)]+)\\)").matcher(registry.substring(next));
+        assertTrue(link.find(), "Next step must link directly to a work item");
         Path issue = Path.of("spec").resolve(link.group(1)).normalize();
         WorkItemGraph graph = WorkItemGraph.discover(Path.of(".").toAbsolutePath().normalize());
         assertEquals(List.of(), graph.sortedDiagnostics());
@@ -47,7 +47,7 @@ final class RoadmapFrontierContractTest {
         if (executable.isEmpty()) {
             assertTrue(registry.contains("Готовых к реализации задач сейчас нет."));
             assertTrue(graph.workItems().stream().anyMatch(item -> item.path().equals(nextPath)
-                    && item.kind() != WorkItemKind.EPIC && item.status().value().equals("Draft")),
+                    && item.status().value().equals("Draft")),
                     "An empty execution queue must point to an existing draft for refinement");
         } else {
             assertTrue(executable.stream().anyMatch(item -> item.path().equals(nextPath)),

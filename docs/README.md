@@ -31,6 +31,8 @@
 - [Observability contract](../spec/requirements/observability.md) - stdout,
   analysis pairs, tracing, metrics, privacy и delivery ownership.
 - [Развёртывание](deployment.md) - дистрибутив, stateless OCI и lifecycle.
+- [Эксплуатация Docker](operations.md) - приёмка администратора, availability
+  observations, внешний probe и первый production review.
 - [Наблюдаемость](observability.md) - JSON Lines, трассировка, метрики и
   безопасный аудит.
 - [Разработка](development.md) - сборка, тесты, контроль качества и CI.
@@ -53,6 +55,8 @@
 
 ## Проверки и evidence
 
+- [Operations evidence](operations-evidence.md) - проверенный Docker artifact,
+  application/trace/metric stdout и текущие lifecycle checks; отдельно от стенда.
 - [Методика PERF-01](perf-01-load-test.md) описывает воспроизводимый benchmark,
   но не объявляет historical run текущей гарантией.
 - [Development guide](development.md) владеет current test, qualification,
