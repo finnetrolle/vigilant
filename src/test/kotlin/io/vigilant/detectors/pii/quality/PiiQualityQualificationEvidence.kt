@@ -23,12 +23,12 @@ internal fun qualityJson(
     currentSource: JsonNode,
     baselineSource: JsonNode,
 ): ObjectNode {
-    val sourceGates = sourceQualityGates(currentSource)
+    val sourceGates = sourceQualityGates(currentSource, baselineSource)
     val evaluation = evaluationJson(mapper, currentSource, baselineSource)
     return mapper.createObjectNode().apply {
         put("passed", sourceGates.all(QualificationGate::passed) && evaluation.path("passed").booleanValue())
         set<ObjectNode>(
-            "sourceAligned",
+            "fullCorpus",
             mapper.createObjectNode().apply {
                 set<ArrayNode>("gates", gatesJson(mapper, sourceGates))
                 set<JsonNode>("full", currentSource.at("/metrics/aggregate").deepCopy())
@@ -41,8 +41,8 @@ internal fun qualityJson(
     }
 }
 
-/** Creates the immutable source-aligned and IP quality floor conditions. */
-private fun sourceQualityGates(source: JsonNode): List<QualificationGate> {
+/** Enforces every aggregate and per-type floor on the same reference as the paired baseline. */
+private fun sourceQualityGates(source: JsonNode, baseline: JsonNode): List<QualificationGate> {
     val exact = source.at("/metrics/aggregate/exact")
     val relaxed = source.at("/metrics/aggregate/relaxed")
     val ipExact = perTypeMetric(source, "IP_ADDRESS").path("exact")
@@ -52,6 +52,16 @@ private fun sourceQualityGates(source: JsonNode): List<QualificationGate> {
         minimumGate("exact F1", exact.requiredDouble("f1"), 0.42),
         minimumGate("relaxed F1", relaxed.requiredDouble("f1"), 0.45),
         minimumGate("IP exact recall", ipExact.requiredDouble("recall"), 0.90),
+        minimumGate(
+            "IP exact precision",
+            ipExact.requiredDouble("precision"),
+            perTypeMetric(baseline, "IP_ADDRESS").path("exact").requiredDouble("precision"),
+        ),
+        minimumGate(
+            "PHONE exact precision",
+            perTypeMetric(source, "PHONE_NUMBER").path("exact").requiredDouble("precision"),
+            0.90,
+        ),
     )
 }
 

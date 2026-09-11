@@ -80,8 +80,10 @@ data class RedMadRobotCase(
     val text: String,
     val goldSpans: List<RedMadRobotGoldSpan>,
     val productAlignedGoldSpans: List<RedMadRobotGoldSpan> = goldSpans,
+    val nestedIpGoldSpans: List<RedMadRobotGoldSpan> = goldSpans,
     val productAlignmentAdjustments: Map<RedMadRobotProductAdjustment, Int> =
         RedMadRobotProductAdjustment.entries.associateWith { 0 },
+    val normalizedIpEndpointSpans: Int = 0,
 )
 
 /** Product-aligned expected spans and payload-free aggregate rule counts for one record. */
@@ -138,16 +140,7 @@ class RedMadRobotCorpusAdapter {
                     rejectedCases += RedMadRobotRejectedCase(caseId, failure.reason)
                     return@forEachIndexed
                 }
-            val sourceAlignedGoldSpans = mappedSpans(parsed.text, parsed.tags, tokenSpans)
-            val productAlignment = productAlignment(parsed.text, sourceAlignedGoldSpans)
-            processedCases +=
-                RedMadRobotCase(
-                    caseId = caseId,
-                    text = parsed.text,
-                    goldSpans = sourceAlignedGoldSpans,
-                    productAlignedGoldSpans = productAlignment.goldSpans,
-                    productAlignmentAdjustments = productAlignment.adjustments,
-                )
+            processedCases += alignedCase(caseId, parsed, tokenSpans)
         }
         return RedMadRobotCorpus(
             processedCases = processedCases,
@@ -156,6 +149,41 @@ class RedMadRobotCorpusAdapter {
             totalEntitySpans = totalEntitySpans,
             mappedEntitySpans = mappedEntitySpans,
             scoredMappedEntitySpans = processedCases.sumOf { case -> case.goldSpans.size },
+        )
+    }
+
+    /** Derives all three views from the same aligned BIO entities without mutating source annotations. */
+    private fun alignedCase(
+        caseId: String,
+        parsed: ParsedRecord,
+        tokenSpans: List<CharacterSpan>,
+    ): RedMadRobotCase {
+        val entities = sourceEntities(parsed.tags, tokenSpans)
+        val sourceAlignedGoldSpans = entities.mapNotNull { entity ->
+            RedMadRobotLabelMapping.typeFor(entity.label)?.let { type ->
+                RedMadRobotGoldSpan(
+                    type,
+                    parsed.text.substring(0, entity.start).toByteArray().size.toLong(),
+                    parsed.text.substring(0, entity.end).toByteArray().size.toLong(),
+                )
+            }
+        }
+        val nestedIpSpans = entities.filter { it.label == "URL" }.mapNotNull { entity ->
+            RedMadRobotNestedIpReference.hostSpan(parsed.text, entity.start, entity.end)
+        }
+        val canonicalSourceSpans = sourceAlignedGoldSpans.map { span ->
+            RedMadRobotNestedIpReference.normalizeEndpointSpan(parsed.text, span)
+        }
+        val productAlignment = productAlignment(parsed.text, sourceAlignedGoldSpans)
+        return RedMadRobotCase(
+            caseId = caseId,
+            text = parsed.text,
+            goldSpans = sourceAlignedGoldSpans,
+            productAlignedGoldSpans = productAlignment.goldSpans,
+            nestedIpGoldSpans = (canonicalSourceSpans + nestedIpSpans).distinct(),
+            productAlignmentAdjustments = productAlignment.adjustments,
+            normalizedIpEndpointSpans = sourceAlignedGoldSpans.zip(canonicalSourceSpans)
+                .count { (source, canonical) -> source != canonical },
         )
     }
 
@@ -267,13 +295,12 @@ class RedMadRobotCorpusAdapter {
         }
     }
 
-    /** Converts mapped BIO entities into source-text UTF-8 byte spans. */
-    private fun mappedSpans(
-        text: String,
+    /** Retains every upstream entity, including URL parents, in original character coordinates. */
+    private fun sourceEntities(
         tags: List<String>,
         tokenSpans: List<CharacterSpan>,
-    ): List<RedMadRobotGoldSpan> {
-        val spans = mutableListOf<RedMadRobotGoldSpan>()
+    ): List<SourceEntity> {
+        val spans = mutableListOf<SourceEntity>()
         var index = 0
         while (index < tags.size) {
             val tag = tags[index]
@@ -282,23 +309,18 @@ class RedMadRobotCorpusAdapter {
                 continue
             }
             val label = tag.removePrefix("B-")
-            val startCharacter = tokenSpans[index].start
             var endToken = index
             while (endToken + 1 < tags.size && tags[endToken + 1] == "I-$label") {
                 endToken += 1
             }
-            RedMadRobotLabelMapping.typeFor(label)?.let { type ->
-                spans +=
-                    RedMadRobotGoldSpan(
-                        type = type,
-                        startUtf8 = text.substring(0, startCharacter).toByteArray().size.toLong(),
-                        endUtf8 = text.substring(0, tokenSpans[endToken].end).toByteArray().size.toLong(),
-                    )
-            }
+            spans += SourceEntity(label, tokenSpans[index].start, tokenSpans[endToken].end)
             index = endToken + 1
         }
         return spans
     }
+
+    /** A BIO entity before label mapping or independent nested annotation. */
+    private data class SourceEntity(val label: String, val start: Int, val end: Int)
 
     /** Applies the complete version-one product alignment before any detector scoring. */
     private fun productAlignment(

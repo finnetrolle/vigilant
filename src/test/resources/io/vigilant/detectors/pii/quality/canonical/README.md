@@ -4,7 +4,9 @@ These fixtures are deterministic synthetic data created specifically for Vigilan
 They contain no production payloads, telemetry, RedMadRobot records, or values
 derived from user data.
 
-Each per-type `positive` and `hard-negative` TSV contains 100 records. Positive
+Each per-type `positive` and `hard-negative` TSV contains at least 100 records.
+The IP corpus contains 160 positive and 175 hard-negative records, including
+IPv4 ports before prose and invalid port continuations. Positive
 records cover supported representations, payload boundaries, ASCII, Cyrillic,
 emoji/supplementary UTF-8 offsets, checksum variants, email punctuation/IDN
 forms, Russian phone Unicode separators and contextual national forms, bounded

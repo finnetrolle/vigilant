@@ -27,6 +27,7 @@ data class RedMadRobotScoringCase(
     val predicted: List<RedMadRobotPredictedSpan>,
     val caseId: String,
     val productAlignedExpected: List<RedMadRobotGoldSpan> = expected,
+    val nestedIpExpected: List<RedMadRobotGoldSpan> = expected,
     val productAlignmentAdjustments: Map<RedMadRobotProductAdjustment, Int> =
         RedMadRobotProductAdjustment.entries.associateWith { 0 },
 )
@@ -80,6 +81,7 @@ data class RedMadRobotEvidenceContribution(
 data class RedMadRobotScoreReport(
     val sourceAligned: RedMadRobotAlignmentScoreView,
     val productAligned: RedMadRobotAlignmentScoreView,
+    val nestedIpAligned: RedMadRobotAlignmentScoreView,
     val productAlignmentAdjustments: Map<RedMadRobotProductAdjustment, Int>,
 )
 
@@ -162,6 +164,7 @@ class RedMadRobotScorer {
         return RedMadRobotScoreReport(
             sourceAligned = sourceAligned,
             productAligned = scoreView(productCases),
+            nestedIpAligned = scoreView(cases.map { it.copy(expected = it.nestedIpExpected) }),
             productAlignmentAdjustments = aggregateProductAdjustments(cases),
         )
     }

@@ -77,18 +77,47 @@ matrix находятся в [development guide](development.md#pii-contract-che
 
 | Target / invariant | Фактический source/test contract | Gap / evidence boundary |
 |---|---|---|
-| Fixed taxonomy, offsets, metadata, direct ordering, preflight/cancellation | `FastPiiDetector` и recognizer/public contract tests; canonical synthetic gate содержит по 100 positive/negative cases на type | ИНН поддержан только для физлиц, 12 digits; прежнее обещание 10 digits в runtime guide было ошибкой документации. Нового runtime run при переносе нет. |
-| IPv4 перед decimal port 1..65535 | `IpAddressCandidateBoundaryResolver.findIpv4EndBeforeTerminalPort` требует `candidateEnd == payload.length`; `IpAddressRecognizerTest` проверяет terminal-port cases | Согласованное правило отделения port не ограничено концом payload. Port с последующим prose/whitespace не подтверждён и текущим resolver не принимается; target не сужен. |
+| Fixed taxonomy, offsets, metadata, direct ordering, preflight/cancellation | `FastPiiDetector` и recognizer/public contract tests; canonical synthetic gate содержит минимум по 100 positive/negative cases на type; IP corpus расширен до 160 positive и 175 negative | ИНН поддержан только для физлиц, 12 digits; прежнее обещание 10 digits в runtime guide было ошибкой документации. IP regression evidence не закрывает полную detector matrix. |
+| IPv4 перед decimal port 1..65535 | `fast.ip_address@1.2.0` принимает port в EOF и перед token boundary. `Ipv4PortRecognizerTest` проверяет 60 positive combinations, 125 negative continuations и 5 terminal-colon cases. `Ipv4PortEnforcementE2eTest` проверяет real-Armeria REQUEST/JSON/SSE ALLOW/MASK/BLOCK с exact bytes и no-handoff/no-disclosure oracles | Подтверждаются только перечисленные port boundaries и существующий policy path. URL/DNS/CIDR и IPv6 host-and-port не добавлены; private improvement не является полной PII qualification. |
 | Plausible checksum-invalid SNILS под whole-word context | `SnilsCandidateRules.evidenceStrength` применяет issuance threshold до обоих evidence paths; tests сохраняют exact `снилс`, weak/partial keywords отвергают | Source contract явно сохраняет threshold для validated path, но не уточняет его применение к contextual path. Plausible contextual candidate ниже threshold не подтверждён; автоматического расширения surface нет. |
-| Finite evidence span для каждой current surface | `FastPiiWindowCapability.VERSIONED`: W=1 MiB, E=4096, context=4095 с каждой стороны; KDoc proof ссылается на старый 254-code-point email bound | Proof не перечисляет expanded email gaps/IDN source length, contextual phone/SNILS/OMS и новые IP boundaries. Полнота для текущих recognizer versions требует отдельного conformance evidence, без изменения bound при миграции. |
-| Каждая surface через ownership boundary и все Unicode widths | `WindowedFastPiiExecutorTest` содержит 30 исходных surface cases по всем 9 types; отдельный email case проверяет widths 1/2/3/4. Generic synthetic tests проверяют I/F/K, errors, ordering, cancellation, bounded execution | Window corpus не включает email gaps, national/contextual и Unicode phone, IP terminal punctuation/port, expanded/contextual SNILS/OMS. Direct recognizer/canonical tests этих forms не заменяют cross-window tests. |
+| Finite evidence span для каждой current surface | `FastPiiWindowCapability.VERSIONED`: W=1 MiB, E=4096, context=4095 с каждой стороны. KDoc дополняет IP port bound: максимум 29 UTF-8 bytes с обеими boundaries; capability остаётся `@2` | Остальной proof всё ещё ссылается на старый 254-code-point email bound и не перечисляет expanded email gaps/IDN source length, contextual phone/SNILS/OMS. Полнота для всех current recognizers требует отдельного conformance evidence. |
+| Каждая surface через ownership boundary и все Unicode widths | `WindowedFastPiiExecutorTest` содержит 30 исходных surface cases по всем 9 types и email widths 1/2/3/4. `Ipv4PortWindowTest` добавляет 12 случаев: widths 1/2/3/4 x boundary внутри IPv4, перед colon, внутри port; независимый oracle проверяет global offsets и одну finding | Window corpus ещё не включает email gaps, national/contextual и Unicode phone, IP terminal punctuation, expanded/contextual SNILS/OMS. Direct recognizer/canonical tests этих forms не заменяют cross-window tests. |
 | Complete error/adapter/lifecycle contract | `WindowedInspectionExecutorTest`, `WindowedFastPiiExecutorTest`, `FastPiiPolicyAdapterTest` проверяют typed errors, immutable aggregate, CPU handoff и cancellation; generic UTF-8 preflight также отвергает length > Int.MAX_VALUE как INVALID_FRAGMENT | Это ограничение текущей реализации, не новый global response/request limit. Exhaustive test-method matrix остаётся требованием; reviewed tests не объявляются новым process/load evidence. |
-| Canonical и external quality floors | Canonical/report/scorer tests и `piiQualityQualification` имеют отдельные models/views. Qualification код проверяет aggregate, IP recall и evaluation floors, публикует per-type deltas | PHONE precision >=0.90 и IP precision не ниже baseline требуют отдельной проверки per-type report: aggregate `passed` не автоматизирует эти два условия. Historical qualification не равна свежему report. |
+| Canonical и external quality floors | Canonical/report/scorer tests и `piiQualityQualification` сохраняют source/product views и используют independent `redmadrobot-ip-canonical-v2`: 10 nested URL-host spans и 8 нормализованных IPv4 endpoint spans. Baseline/current пересчитаны на общем gold; exact matching, IP/PHONE и aggregate floors сохранены | На canonical reference evaluation exact F1 вырос с 0.44918 до 0.45677; IP precision 0.98077 выше baseline 0.97931, IP recall 0.92727 и PHONE precision 0.93548 проходят. Qualification PASS относится к этому pinned reference; source-aligned отрицательные metrics сохранены. [Quality targets](../spec/requirements/fast-pii.md#quality) не снижены; исходный dataset и иные annotation gaps не объявлены исправленными. |
 | Current PERF-01/02 | JMH измеряет sync detect; existing inspection/load reports имеют собственный shadow profile | Ни старые numeric results, ни новые ссылки не доказывают current request/response enforcement latency. Статусы PERF-01/02 выше сохранены. |
 
-Неподтверждённые cases сохраняются как requirements. Их исправление/новая
-qualification не выполняются в documentation-only migration; source, corpora,
-report calculations и runtime defaults остаются неизменными.
+Неподтверждённые cases сохраняются как requirements. Focused IP correction
+обновляет recognizer и synthetic evidence; она не заявляет полную qualification
+остальных surfaces и не меняет runtime defaults. Отдельное расширение evaluation
+reference не добавляет URL type или URL parser в production detector.
+
+Tuning-only диагностика `fast.ip_address@1.2.0` через production detector и
+canonical adapter/split/matcher даёт 111 exact TP и 12 FP против прежних 111
+и 4. Восемь unmatched IPv4 findings перед валидным port с non-EOF suffix
+соответствуют контракту; у шести нет пересекающегося IP gold. При 155 gold
+во всём source-aligned scored subset даже perfect recall и устранение других
+FP дают precision не выше `155 / 161 = 0.962733`, ниже baseline `0.972414`.
+Это подтверждает несовместимость текущего recognition contract с данным
+precision floor при исходном flat gold, но не ошибочность upstream gold или невозможность улучшить
+evaluation F1. Evaluation cases не использовались для диагностики; публикуются
+только безопасные агрегаты с privacy floor 5.
+
+Исторический парный пересчёт `1aef8df59f3640148528e750e8213733` для reference
+`redmadrobot-url-ip-host-v1` сохранил исходные baseline metrics без изменений.
+Эталон v1 добавил 10 IP spans: full/tuning/evaluation scored spans `1910/1471/439`,
+processed cases и split не изменились. В том прогоне current IP имел
+`TP=150, FP=6, FN=15`, baseline `TP=142, FP=3, FN=23`. Пять оставшихся tuning
+FP содержали canonical IPv4; детальные buckets ниже privacy floor не раскрываются.
+Эталон v1 устранил конфликт вложенных URL-host labels, но не нормализовал
+IPv4 endpoint spans. Актуальные результаты v2 приведены в таблице выше.
+
+Historical Qualification run `7129e9a4e2854ed69e75127266c9b988` сохранил exit `1`:
+canonical 960 positive, 975 negative и 3 mixed cases прошли; 18 paired JMH
+cases прошли performance gate. Final build
+`8df71d6fba0d431198fc82a58cd08789` завершился exit `0`: 1508 regular, 57
+process и 55 work-item validator tests без failures/errors/skips. Эти
+наблюдения относятся к реализации IP/port; документационное закрытие не
+создаёт нового runtime или performance evidence.
 
 ## Policy, request source and request enforcement
 

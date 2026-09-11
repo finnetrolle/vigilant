@@ -1,1 +1,4 @@
 .papercuts.jsonl merge=union
+
+# pii-corpus-v1 negatives end with a tab for the required empty findings column.
+src/test/resources/io/vigilant/detectors/pii/quality/canonical/*.tsv whitespace=-blank-at-eol

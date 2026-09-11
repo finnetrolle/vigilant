@@ -20,7 +20,7 @@ class IpAddressRecognizerTest {
                     confidence = null,
                     evidenceStrength = EvidenceStrength.VALIDATED,
                     recognizerId = "fast.ip_address",
-                    recognizerVersion = "1.1.0",
+                    recognizerVersion = "1.2.0",
                 ),
             ),
             FastPiiDetector().detect(
@@ -42,7 +42,7 @@ class IpAddressRecognizerTest {
                     confidence = null,
                     evidenceStrength = EvidenceStrength.VALIDATED,
                     recognizerId = "fast.ip_address",
-                    recognizerVersion = "1.1.0",
+                    recognizerVersion = "1.2.0",
                 ),
             ),
             FastPiiDetector().detect(
@@ -160,7 +160,7 @@ class IpAddressRecognizerTest {
                     confidence = null,
                     evidenceStrength = EvidenceStrength.VALIDATED,
                     recognizerId = "fast.ip_address",
-                    recognizerVersion = "1.1.0",
+                    recognizerVersion = "1.2.0",
                 ),
                 PiiFinding(
                     type = PiiType.IP_ADDRESS,
@@ -169,7 +169,7 @@ class IpAddressRecognizerTest {
                     confidence = null,
                     evidenceStrength = EvidenceStrength.VALIDATED,
                     recognizerId = "fast.ip_address",
-                    recognizerVersion = "1.1.0",
+                    recognizerVersion = "1.2.0",
                 ),
             ),
             findings,

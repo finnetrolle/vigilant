@@ -105,7 +105,7 @@ Payload не подвергается global Unicode normalization, case folding
 | 1 | `EMAIL_ADDRESS` | `fast.email_address` | `1.1.0` | FORMAT_ONLY |
 | 2 | `PHONE_NUMBER` | `fast.phone_number.ru` | `1.1.0` | FORMAT_ONLY / CONTEXTUAL |
 | 3 | `PAYMENT_CARD` | `fast.payment_card.luhn` | `1.0.0` | VALIDATED |
-| 4 | `IP_ADDRESS` | `fast.ip_address` | `1.1.0` | VALIDATED |
+| 4 | `IP_ADDRESS` | `fast.ip_address` | `1.2.0` | VALIDATED |
 | 5 | `IBAN` | `fast.iban` | `1.0.0+iban-registry.102` | VALIDATED |
 | 6 | `RU_INN` | `fast.ru_inn` | `1.0.0` | VALIDATED |
 | 7 | `RU_SNILS` | `fast.ru_snils` | `1.1.0` | VALIDATED / CONTEXTUAL |
@@ -193,11 +193,15 @@ IPv4 boundary запрещает ASCII letter/digit, dot или colon слева
 IPv6 boundary запрещает hex digit/colon, а справа также `%`. Разрешённые
 terminal exceptions: одна завершающая dot/colon исключается из span, если
 оставшийся адрес строгий и нет address continuation; colon не расширяет
-существующий colon run. Валидный IPv4 перед decimal `:1..65535` возвращается
-без port. Пятый IPv4 octet, лишняя IPv6 group, второе `::`, следующий hex/digit
-token не разрешают усечение до валидного prefix. Неоднозначный unbracketed
-IPv6 suffix не интерпретируется как host-and-port. Runtime restriction port
-на конце payload отдельно отражён в [coverage](../../docs/requirements-coverage.md#pii-и-windowing).
+существующий colon run. Валидный IPv4 перед decimal `:1..65535` (от одной до
+пяти ASCII digits) возвращается без port как в EOF, так и перед разделителем
+token, включая space, tab, LF и CRLF с последующим текстом. Примыкающие к port
+ASCII letter/digit, dot, colon, `_` или `%` не разрешают усечение до валидного
+prefix. Нулевой, out-of-range и signed port (`:+443`, `:-443`) отклоняются.
+Одиночное terminal colon в EOF или перед whitespace остаётся пунктуацией,
+а не пустым port. Пятый IPv4 octet, лишняя IPv6 group, второе `::`, следующий
+hex/digit token не разрешают усечение до валидного prefix. Неоднозначный
+unbracketed IPv6 suffix не интерпретируется как host-and-port.
 
 ### IBAN
 
@@ -318,7 +322,23 @@ product-aligned view допускает только заранее заданн
 adjustments, с версиями и counts до scoring. Правила и воспроизведение:
 [external methodology](../../docs/development.md#external-pii-benchmark).
 
-Для qualification сохраняются source-aligned floors полного scored subset:
+Qualification использует отдельный canonical reference `redmadrobot-ip-canonical-v2`:
+исходный mapped gold с нормализацией целых upstream `IP_ADDRESS` entities вида
+canonical IPv4 + decimal port до address-only span, плюс независимо размеченные
+IP-literal hosts внутри upstream URL entities. Нормализация меняет только end
+offset в canonical view; тип, start и число исходных entities сохраняются.
+Source-aligned и product-aligned gold не изменяются; predictions не удаляются.
+Правила фиксируются до evaluation и не используют detector outputs; версия,
+provenance, полный reference digest, added и normalized counts публикуются.
+Baseline и current необходимо пересчитать одним evaluator на одинаковых dataset,
+reference и frozen split; legacy v1, отсутствующие или несовпадающие artifacts
+отклоняются. Исходные source-aligned metrics остаются отдельным диагностическим
+view, включая прежний отрицательный verdict. Product-aligned INN/passport
+adjustments в qualification reference не применяются. Точная annotation policy
+и воспроизведение находятся в
+[external methodology](../../docs/development.md#external-pii-benchmark).
+
+Все числовые floors сохраняются для полного scored subset нового reference:
 
 | Метрика | Условие |
 |---|---:|

@@ -13,6 +13,10 @@ object FastPiiWindowCapability {
      * recognizer's 64-code-point lookaround on both sides at four bytes per code
      * point. The detector input preflight fixes the one-window limit at 1 MiB;
      * version 2 reserves this evidence context on both sides of each ownership core.
+     * IPv4 with a decimal port in `fast.ip_address@1.2.0` needs at most 29 bytes:
+     * 15 address bytes, one colon, five port digits, and two four-byte boundary
+     * code points. The port may precede prose; it does not enlarge E or C.
+     * This IP bound does not qualify the other surfaces' outstanding evidence gaps.
      */
     val VERSIONED =
         WindowedCapability(

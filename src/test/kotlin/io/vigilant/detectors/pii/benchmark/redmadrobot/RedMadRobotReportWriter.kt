@@ -120,6 +120,11 @@ private data class ReportContent(
     val productAlignedMetrics: ReportMetrics,
     val productAlignedPartitions: ReportPartitions,
     val productAdjustments: List<ReportProductAdjustment>,
+    val nestedIpMetrics: ReportMetrics,
+    val nestedIpPartitions: ReportPartitions,
+    val referenceSha256: String,
+    val addedIpSpans: Int,
+    val normalizedIpEndpointSpans: Int,
     val diagnosticPrivacyFloor: Int,
     val notes: List<String>,
 )
@@ -177,6 +182,11 @@ class RedMadRobotReportWriter {
                     expectedSpans = RedMadRobotCase::productAlignedGoldSpans,
                 ),
             productAdjustments = reportProductAdjustments(scores),
+            nestedIpMetrics = reportMetrics(scores.nestedIpAligned.full),
+            nestedIpPartitions = reportPartitions(corpus, scores.nestedIpAligned, RedMadRobotCase::nestedIpGoldSpans),
+            referenceSha256 = RedMadRobotNestedIpReference.fingerprint(corpus.processedCases),
+            addedIpSpans = corpus.processedCases.sumOf { it.nestedIpGoldSpans.size - it.goldSpans.size },
+            normalizedIpEndpointSpans = corpus.processedCases.sumOf(RedMadRobotCase::normalizedIpEndpointSpans),
             diagnosticPrivacyFloor = RedMadRobotBenchmarkMetadata.DIAGNOSTIC_PRIVACY_FLOOR,
             notes =
                 listOf(
@@ -274,6 +284,18 @@ class RedMadRobotReportWriter {
         root.set<ObjectNode>(
             "productAligned",
             productAlignmentViewJson(content),
+        )
+        root.set<ObjectNode>(
+            "nestedIpAligned",
+            alignmentViewJson(content.nestedIpMetrics, content.nestedIpPartitions).apply {
+                set<ObjectNode>("reference", OBJECT_MAPPER.createObjectNode().apply {
+                    put("id", RedMadRobotNestedIpReference.ID)
+                    put("sha256", content.referenceSha256)
+                    put("provenance", RedMadRobotNestedIpReference.PROVENANCE)
+                    put("addedIpSpans", content.addedIpSpans)
+                    put("normalizedIpEndpointSpans", content.normalizedIpEndpointSpans)
+                })
+            },
         )
         root.putArray("notes").apply {
             content.notes.forEach(::add)
@@ -495,6 +517,7 @@ class RedMadRobotReportWriter {
             appendFrozenSplit(content)
             appendCoverageAndMetrics(content)
             appendProductAlignedView(content)
+            appendNestedIpAlignedView(content)
             appendSafeDiagnostics(content)
             content.notes.forEach(::appendLine)
         }
@@ -603,6 +626,31 @@ class RedMadRobotReportWriter {
             "product-aligned evaluation",
             content.productAlignedPartitions.evaluation.evidenceContributions,
         )
+        appendLine()
+    }
+
+    /** Publishes canonical IP transformations and all partitions while retaining both original views unchanged. */
+    private fun StringBuilder.appendNestedIpAlignedView(content: ReportContent) {
+        appendLine("## Nested IP reference")
+        appendLine()
+        appendLine("Reference: `${RedMadRobotNestedIpReference.ID}`; SHA-256: `${content.referenceSha256}`.")
+        appendLine("${RedMadRobotNestedIpReference.PROVENANCE} Added IP spans: `${content.addedIpSpans}`.")
+        appendLine("Normalized IP endpoint spans: `${content.normalizedIpEndpointSpans}`.")
+        appendLine()
+        appendLine("| Partition | Processed cases | Scored mapped spans |")
+        appendLine("|---|---:|---:|")
+        val partitions = listOf(
+            "full" to content.nestedIpPartitions.full,
+            "tuning" to content.nestedIpPartitions.tuning,
+            "evaluation" to content.nestedIpPartitions.evaluation,
+        )
+        partitions.forEach { (name, partition) -> appendPartitionCoverageRow(name, partition.coverage) }
+        appendLine()
+        partitions.forEach { (name, partition) ->
+            appendPartitionMetrics("nested IP $name", partition.metrics)
+            appendEvidenceContributions("nested IP $name", partition.evidenceContributions)
+            appendPartitionDiagnostics("nested IP $name", partition.diagnostics)
+        }
         appendLine()
     }
 

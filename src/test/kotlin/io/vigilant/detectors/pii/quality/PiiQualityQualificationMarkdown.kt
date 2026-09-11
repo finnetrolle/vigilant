@@ -11,7 +11,13 @@ internal fun qualificationMarkdown(report: JsonNode): String =
         appendLine("Overall result: `${if (report.path("passed").booleanValue()) "PASS" else "FAIL"}`.")
         appendLine()
         appendProvenance(report.path("provenance"))
-        appendQuality(report.path("quality"))
+        appendLine("Qualification reference: `${report.at("/reference/id").textValue()}`; " +
+            "SHA-256: `${report.at("/reference/sha256").textValue()}`.")
+        appendLine("Added IP spans: `${report.at("/reference/addedIpSpans").intValue()}`; " +
+            "normalized IP endpoint spans: `${report.at("/reference/normalizedIpEndpointSpans").intValue()}`.")
+        appendLine()
+        appendQuality(report.path("quality"), "Canonical IP reference quality")
+        appendQuality(report.path("sourceAlignedQuality"), "Original source-aligned quality (diagnostic)")
         appendProduct(report.path("productAligned"))
         appendCanonical(report.path("canonical"))
         appendPerformance(report.path("performance"))
@@ -34,12 +40,12 @@ private fun StringBuilder.appendProvenance(provenance: JsonNode) {
 }
 
 /** Appends source gates, evaluation comparison, all types, and evidence contributions. */
-private fun StringBuilder.appendQuality(quality: JsonNode) {
-    appendLine("## Source-aligned quality")
+private fun StringBuilder.appendQuality(quality: JsonNode, heading: String) {
+    appendLine("## $heading")
     appendLine()
     appendLine("| Gate | Actual | Requirement | Result |")
     appendLine("|---|---:|---|---|")
-    quality.at("/sourceAligned/gates").forEach { gate ->
+    quality.at("/fullCorpus/gates").forEach { gate ->
         appendLine(
             "| ${gate.path("name").textValue()} | ${format(gate.path("actual").doubleValue())} | " +
                 "${gate.path("requirement").textValue()} | ${passLabel(gate.path("passed").booleanValue())} |",

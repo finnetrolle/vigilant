@@ -36,6 +36,16 @@ Netty.
 Точные layouts, separators, context windows, false-positive boundaries и
 текущие версии перечислены в [полной taxonomy](../spec/requirements/fast-pii.md#taxonomy).
 
+`fast.ip_address@1.2.0` распознаёт IPv4 перед корректным decimal port и
+последующим текстом, например `connect 192.0.2.1:443 now`. Finding покрывает
+только адрес. REQUEST и ordinary JSON/SSE RESPONSE используют этот finding
+в существующих ALLOW/MASK/BLOCK policies: ALLOW сохраняет исходные bytes,
+MASK меняет адрес и сохраняет port/prose, BLOCK возвращает safe policy error.
+Request marker подчиняется существующему shortening, response marker -
+[правилам response masking](response-masking-headers.md). Обычное terminal
+colon сохраняет значение пунктуации; signed и invalid port не открывают
+валидный IP prefix.
+
 ## Контракт срабатывания
 
 Срабатывание содержит только:
@@ -88,6 +98,14 @@ targets остаются в [MVP NFR](../spec/MVP_NON_FUNCTIONAL_REQUIREMENTS.md
 Windowing не заменяет эти ограничения. [Coverage](requirements-coverage.md#pii-и-windowing)
 отмечает неподтверждённые части current capability proof и boundary corpus.
 
+Для IPv4 с port достаточен evidence span не более 29 UTF-8 bytes:
+15 bytes адреса, colon и до пяти digits, плюс по одному code point границы
+слева и справа (до четырёх bytes каждый). Это укладывается в текущий E=4096;
+численные параметры и версия capability не меняются. Проверки IP port
+пересекают ownership boundary внутри адреса, перед colon и внутри port с
+Unicode padding и независимыми global offsets. Эти случаи не закрывают
+остальные gaps полной window matrix.
+
 ## Детерминизм и отмена
 
 Прямой `PiiDetector.detect` сортирует по фиксированному порядку типов, затем
@@ -127,7 +145,12 @@ adapter сохраняет именно этот global order и всегда д
 
 Ориентированная на продукт квалификация качества фиксирует точные и ослабленные
 метрики относительно источника, неизменяемое разбиение и парные свидетельства
-производительности. Эти отчёты измеряют конкретную таксономию и набор данных и
+производительности. Отдельный версионированный эталон добавляет IP-literal host
+внутри размеченного URL независимо от detector и нормализует целые исходные
+метки IPv4:port до address-only spans. Source/product gold сохраняется; версия
+эталона и число преобразований публикуются. Baseline и current пересчитываются
+на этом общем эталоне; исходные метрики сохраняются, все числовые пороги действуют.
+Эти отчёты измеряют конкретную таксономию и набор данных и
 не доказывают качество семантического NER вне перечисленных форматов.
 Pinned counts/split, product-aligned adjustments, privacy suppression,
 qualification commands и полная test matrix находятся в

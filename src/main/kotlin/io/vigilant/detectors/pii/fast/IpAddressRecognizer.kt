@@ -91,8 +91,8 @@ internal object IpAddressRecognizer : PiiRecognizer {
     /** Stable rule identifier. */
     private const val RECOGNIZER_ID = "fast.ip_address"
 
-    /** Rule version with terminal punctuation and IPv4 port boundary support. */
-    private const val RECOGNIZER_VERSION = "1.1.0"
+    /** Rule version accepting IPv4 ports before prose and rejecting signed port continuations. */
+    private const val RECOGNIZER_VERSION = "1.2.0"
 
 }
 
@@ -106,10 +106,10 @@ private object IpAddressCandidateBoundaryResolver {
     ): Int {
         val wholeCandidateIsValid =
             IpAddressCandidateValidator.isValid(payload, startCharacter, candidateEnd)
-        val terminalPortEnd = findIpv4EndBeforeTerminalPort(payload, startCharacter, candidateEnd)
+        val ipv4PortEnd = findIpv4EndBeforePort(payload, startCharacter, candidateEnd)
         return when {
             wholeCandidateIsValid -> candidateEnd
-            terminalPortEnd >= 0 -> terminalPortEnd
+            ipv4PortEnd >= 0 -> ipv4PortEnd
             else -> findEndBeforeTerminalDelimiter(payload, startCharacter, candidateEnd)
         }
     }
@@ -136,7 +136,7 @@ private object IpAddressCandidateBoundaryResolver {
         return if (validAddress) addressEnd else -1
     }
 
-    /** Rejects an absent delimiter and a colon that extends an existing colon run. */
+    /** Rejects absent punctuation, extended colon runs and signed IPv4 port continuations. */
     private fun isUnambiguousTerminalDelimiter(
         payload: String,
         startCharacter: Int,
@@ -147,11 +147,25 @@ private object IpAddressCandidateBoundaryResolver {
         }
         val delimiter = payload[addressEnd]
         return delimiter.isTerminalIpDelimiter() &&
-            (delimiter != ':' || payload[addressEnd - 1] != ':')
+            (delimiter != ':' || payload[addressEnd - 1] != ':') &&
+            !hasSignedIpv4PortContinuation(payload, startCharacter, addressEnd)
     }
 
-    /** Returns the IPv4 end before one terminal in-range decimal port, or `-1`. */
-    private fun findIpv4EndBeforeTerminalPort(
+    /** Distinguishes a signed IPv4 port from ordinary colon punctuation without altering IPv6. */
+    private fun hasSignedIpv4PortContinuation(
+        payload: String,
+        startCharacter: Int,
+        addressEnd: Int,
+    ): Boolean {
+        val portStart = addressEnd + 1
+        return payload[addressEnd] == ':' && portStart + 1 < payload.length &&
+            (payload[portStart] == '+' || payload[portStart] == '-') &&
+            payload[portStart + 1] in '0'..'9' &&
+            findSingleColon(payload, startCharacter, addressEnd + 1) == addressEnd
+    }
+
+    /** Returns the IPv4 end before an in-range decimal port at EOF or a token boundary, or `-1`. */
+    private fun findIpv4EndBeforePort(
         payload: String,
         startCharacter: Int,
         candidateEnd: Int,
@@ -159,7 +173,7 @@ private object IpAddressCandidateBoundaryResolver {
         val separator = findSingleColon(payload, startCharacter, candidateEnd)
         val validPort =
             separator > startCharacter &&
-                candidateEnd == payload.length &&
+                hasTokenBoundary(payload, candidateEnd) &&
                 isValidDecimalPort(payload, separator + 1, candidateEnd)
         val validAddress =
             validPort &&

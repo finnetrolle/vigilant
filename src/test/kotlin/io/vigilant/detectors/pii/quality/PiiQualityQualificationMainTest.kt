@@ -1,6 +1,7 @@
 package io.vigilant.detectors.pii.quality
 
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.databind.node.ObjectNode
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
@@ -29,7 +30,9 @@ class PiiQualityQualificationMainTest {
         assertEquals("baseline-revision", json.at("/provenance/baselineGitRevision").textValue())
         assertEquals("dataset-sha", json.at("/provenance/datasetSha256").textValue())
         assertEquals("pii-corpus-v1", json.at("/provenance/corpusVersion").textValue())
-        assertTrue(json.at("/quality/sourceAligned/gates").size() >= 5)
+        assertEquals(7, json.at("/quality/fullCorpus/gates").size())
+        assertEquals("redmadrobot-ip-canonical-v2", json.at("/reference/id").textValue())
+        assertEquals(6, json.at("/reference/normalizedIpEndpointSpans").intValue())
         assertTrue(json.at("/quality/evaluation/passed").booleanValue())
         assertEquals(2, json.at("/performance/scenarios").size())
         assertTrue(json.at("/performance/environmentMatched").booleanValue())
@@ -58,6 +61,37 @@ class PiiQualityQualificationMainTest {
         assertFalse(json.at("/performance/passed").booleanValue())
     }
 
+    /** A passing aggregate must not hide an IP precision regression against the paired baseline. */
+    @Test
+    fun `qualification rejects IP precision regression`(@TempDir directory: Path) {
+        rejectsTypePrecision(directory, "IP_ADDRESS", 0.95)
+    }
+
+    /** The documented phone floor applies independently of aggregate and evaluation improvement. */
+    @Test
+    fun `qualification rejects phone precision below floor`(@TempDir directory: Path) {
+        rejectsTypePrecision(directory, "PHONE_NUMBER", 0.89)
+    }
+
+    /** Runs the public qualification entry point with one deliberately failing per-type metric. */
+    private fun rejectsTypePrecision(directory: Path, type: String, precision: Double) {
+        val inputs = writeInputs(directory, currentP99 = 100.0)
+        val mapper = ObjectMapper()
+        val current = mapper.readTree(inputs.currentExternal.toFile())
+        val metric = current.at("/nestedIpAligned/metrics/perType").first { it.path("type").textValue() == type }
+        (metric.path("exact") as ObjectNode).put("precision", precision)
+        mapper.writeValue(inputs.currentExternal.toFile(), current)
+
+        assertFailsWith<IllegalStateException> {
+            PiiQualityQualificationMain.main(inputs.arguments(directory.resolve("reports")))
+        }
+        val report = mapper.readTree(directory.resolve("reports/pii-quality-qualification.json").toFile())
+        assertFalse(report.at("/quality/passed").booleanValue())
+        val failed = report.at("/quality/fullCorpus/gates").filter { !it.path("passed").booleanValue() }
+        assertEquals(listOf(if (type == "IP_ADDRESS") "IP exact precision" else "PHONE exact precision"),
+            failed.map { it.path("name").textValue() })
+    }
+
     /** Writes one complete synthetic qualification input set. */
     private fun writeInputs(
         directory: Path,
@@ -70,8 +104,8 @@ class PiiQualityQualificationMainTest {
         val currentJmh = directory.resolve("current-jmh.json")
         val baselineEnvironment = directory.resolve("baseline.properties")
         val currentEnvironment = directory.resolve("current.properties")
-        Files.writeString(currentExternal, currentExternalJson())
-        Files.writeString(baselineExternal, baselineExternalJson())
+        Files.writeString(currentExternal, withReference(currentExternalJson()))
+        Files.writeString(baselineExternal, withReference(baselineExternalJson()))
         Files.writeString(canonical, canonicalJson())
         Files.writeString(baselineJmh, jmhJson(p99 = 100.0))
         Files.writeString(currentJmh, jmhJson(p99 = currentP99))
@@ -86,6 +120,116 @@ class PiiQualityQualificationMainTest {
             baselineEnvironment,
             currentEnvironment,
         )
+    }
+
+    /** Supplies an independent synthetic common reference; it is never derived from detector predictions. */
+    private fun withReference(json: String): String {
+        val mapper = ObjectMapper()
+        val root = mapper.readTree(json) as ObjectNode
+        val source = if (root.has("sourceAligned")) root.path("sourceAligned") else root.deepCopy()
+        val nested = source.deepCopy<ObjectNode>()
+        nested.set<ObjectNode>("reference", mapper.createObjectNode().apply {
+            put("id", "redmadrobot-ip-canonical-v2")
+            put("sha256", "a".repeat(64))
+            put("addedIpSpans", 5)
+            put("normalizedIpEndpointSpans", 6)
+        })
+        listOf("full", "tuning", "evaluation").forEach { partition ->
+            val multiplier = if (partition == "full") 2 else 1
+            (nested.at("/partitions/$partition") as ObjectNode).set<ObjectNode>("coverage",
+                mapper.createObjectNode().put("processedCases", 10 * multiplier)
+                    .put("scoredMappedEntitySpans", 20 * multiplier))
+        }
+        root.set<ObjectNode>("nestedIpAligned", nested)
+        root.set<ObjectNode>("dataset", mapper.createObjectNode()
+            .put("revision", "dataset-revision").put("sha256", "dataset-sha"))
+        root.set<ObjectNode>("split", mapper.createObjectNode().apply {
+            put("algorithm", "SHA-256")
+            put("version", 1)
+            put("salt", "synthetic-split")
+            put("inputFormat", "synthetic")
+            put("evaluationBoundary", 64)
+            put("bucketCount", 256)
+        })
+        return mapper.writeValueAsString(root)
+    }
+
+    /** Missing or changed reference inputs fail before any incomparable score can be accepted. */
+    @Test
+    fun `qualification rejects legacy and mismatched baseline references`(@TempDir directory: Path) {
+        val mapper = ObjectMapper()
+        val examples = listOf(
+            "/nestedIpAligned", "/nestedIpAligned/reference/id", "/nestedIpAligned/reference/sha256",
+            "/nestedIpAligned/reference/normalizedIpEndpointSpans",
+            "/dataset/sha256", "/dataset/revision", "/split/salt", "/split/version",
+            "/nestedIpAligned/partitions/evaluation/coverage/scoredMappedEntitySpans",
+        )
+        examples.forEachIndexed { index, path ->
+            val scenario = Files.createDirectory(directory.resolve(index.toString()))
+            val inputs = writeInputs(scenario, currentP99 = 100.0)
+            val baseline = mapper.readTree(inputs.baselineExternal.toFile())
+            val parent = baseline.at(path.substringBeforeLast('/')) as ObjectNode
+            val field = path.substringAfterLast('/')
+            val original = parent.path(field)
+            parent.remove(field)
+            mapper.writeValue(inputs.baselineExternal.toFile(), baseline)
+            assertFailsWith<IllegalStateException>(path) {
+                PiiQualityQualificationMain.main(inputs.arguments(scenario.resolve("reports")))
+            }
+            if (original.isValueNode) {
+                if (original.isInt) parent.put(field, original.intValue() + 1) else parent.put(field, "different")
+                mapper.writeValue(inputs.baselineExternal.toFile(), baseline)
+                assertFailsWith<IllegalStateException>(path) {
+                    PiiQualityQualificationMain.main(inputs.arguments(scenario.resolve("reports")))
+                }
+            }
+        }
+    }
+
+    /** A source-aligned failure stays visible even when the paired nested reference meets its gates. */
+    @Test
+    fun `qualification retains failing source diagnostics alongside passing nested reference`(
+        @TempDir directory: Path,
+    ) {
+        val inputs = writeInputs(directory, currentP99 = 100.0)
+        val mapper = ObjectMapper()
+        val current = mapper.readTree(inputs.currentExternal.toFile())
+        (current.at("/sourceAligned/metrics/aggregate/exact") as ObjectNode).put("precision", 0.5)
+        mapper.writeValue(inputs.currentExternal.toFile(), current)
+        val output = directory.resolve("reports")
+
+        PiiQualityQualificationMain.main(inputs.arguments(output))
+
+        val report = mapper.readTree(output.resolve("pii-quality-qualification.json").toFile())
+        assertTrue(report.path("passed").booleanValue())
+        assertFalse(report.at("/sourceAlignedQuality/passed").booleanValue())
+        assertEquals(0.5, report.at("/sourceAlignedQuality/fullCorpus/full/exact/precision").doubleValue())
+        assertTrue(Files.readString(output.resolve("pii-quality-qualification.md"))
+            .contains("Original source-aligned quality (diagnostic)"))
+    }
+
+    /** Even identical artifacts cannot qualify with the retired v1 policy or invalid normalization metadata. */
+    @Test
+    fun `qualification rejects shared legacy reference and invalid normalization counts`(@TempDir directory: Path) {
+        val mapper = ObjectMapper()
+        listOf("legacy", "missing-count", "negative-count", "text-count").forEach { scenario ->
+            val folder = Files.createDirectory(directory.resolve(scenario))
+            val inputs = writeInputs(folder, currentP99 = 100.0)
+            listOf(inputs.currentExternal, inputs.baselineExternal).forEach { path ->
+                val root = mapper.readTree(path.toFile())
+                val reference = root.at("/nestedIpAligned/reference") as ObjectNode
+                when (scenario) {
+                    "legacy" -> reference.put("id", "redmadrobot-url-ip-host-v1")
+                    "missing-count" -> reference.remove("normalizedIpEndpointSpans")
+                    "negative-count" -> reference.put("normalizedIpEndpointSpans", -1)
+                    "text-count" -> reference.put("normalizedIpEndpointSpans", "6")
+                }
+                mapper.writeValue(path.toFile(), root)
+            }
+            assertFailsWith<IllegalStateException>(scenario) {
+                PiiQualityQualificationMain.main(inputs.arguments(folder.resolve("reports")))
+            }
+        }
     }
 
     /** Builds a passing current external report with product and evidence sections. */
@@ -151,6 +295,11 @@ class PiiQualityQualificationMainTest {
                         "precision":0.85,"recall":0.34,"f1":$relaxedF1}
           },
           "perType": [
+            {"type":"PHONE_NUMBER",
+             "exact":{"truePositives":9,"falsePositives":1,"falseNegatives":1,
+                      "precision":0.9,"recall":0.9,"f1":0.9},
+             "relaxed":{"truePositives":9,"falsePositives":1,"falseNegatives":1,
+                        "precision":0.9,"recall":0.9,"f1":0.9}},
             {"type":"IP_ADDRESS",
              "exact":{"truePositives":9,"falsePositives":0,"falseNegatives":1,
                       "precision":1.0,"recall":0.9,"f1":0.947},

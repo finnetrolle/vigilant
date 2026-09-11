@@ -433,6 +433,36 @@ Checksum-invalid CARD/SNILS/OMS не удаляются ни одним adjustme
 Aggregate и per-type P/R/F1 нельзя сравнивать с headline model leaderboard:
 здесь восемь structured types без model threshold, с другим scope/aggregation.
 
+Отдельный `nestedIpAligned` view использует reference `redmadrobot-ip-canonical-v2`.
+До scoring adapter добавляет к source gold IP-literal **host** каждой upstream
+BIO URL entity. Полный URI разбирается JDK `URI`, без DNS или production recognizer:
+разрешены scheme authority и schemeless authority, canonical IPv4 из четырёх
+decimal octets `0..255` без leading zeros либо unscoped IPv6; embedded IPv4
+подчиняется тем же octet rules. Необязательный port содержит `1..5` ASCII digits,
+число `1..65535`. Userinfo, brackets, port, path, query и fragment исключены из
+UTF-8 span. Invalid URI, domain host и IP-подобный текст в userinfo/path/query
+этим правилом не размечаются. Совпадающий source gold не дублируется. Исходные
+source/product views и source coverage сохраняются; product INN/passport rules
+не переносятся в nested view.
+
+V2 также нормализует **целую** upstream `IP_ADDRESS` entity, если она состоит из
+canonical IPv4, одного colon и port из `1..5` ASCII digits со значением `1..65535`.
+В canonical view end offset переносится на конец адреса; type, start и число
+исходных entities сохраняются. IPv6 endpoints, другие labels, invalid octets,
+leading-zero octets, signed/empty/out-of-range ports, whitespace, URL prefix,
+path/query/fragment и prose внутри entity не нормализуются. Подстрока валидного
+endpoint внутри более длинной метки не извлекается. Source/product gold остаётся
+исходным; ни один prediction не отфильтровывается. Exact matching остаётся строгим.
+
+Аннотатор не читает predictions и одинаково обрабатывает все entities обеих
+frozen partitions. Rule ID/provenance, `addedIpSpans`, `normalizedIpEndpointSpans`
+и SHA-256 всего reference (dataset digest, rule, case IDs и type/offset tuples,
+без публикации индивидуальных hashes) позволяют проверить общий denominator.
+Изменение policy требует новой версии и повторного scoring обоих detector-ов.
+V1 artifacts сохраняются как исходная evidence, но не принимаются для v2
+qualification. Это ограниченная канонизация разметки, не исправление всех
+upstream annotation gaps.
+
 Safe diagnostics классифицируют unmatched gold/prediction для обоих matching
 modes: `NO_OVERLAPPING_FINDING`, `SPAN_MISMATCH`, `TYPE_MISMATCH`,
 `EXTRA_PREDICTION`. Bucket totals сохраняются; breakdown `(bucket,type)`
@@ -463,7 +493,7 @@ public seam, synthetic fixtures, точные offsets и независимый 
 | EMAIL | Весь dot-atom symbol set; min/max local/label/254 length; strict ASCII/IDN и IDN punctuation/dots; каждый gap 1/2/3 и 4+ rejection до/после @/dots; invalid dots/quoted/comments/literals/Unicode local/single-label; exact prose boundaries, long adversarial run | `EmailAddressRecognizerTest` |
 | PHONE | +7 и 8; compact/separated/area parentheses; каждый из семи separators; 10-digit national и 7-prefixed contextual; все шесть keywords на обеих сторонах и exact 32-code-point boundary; weak/partial/distant words, extensions, timestamp/version/order/long-digit negatives; repeated/edge/unsupported separator и bad parentheses | `PhoneNumberRecognizerTest` |
 | PAYMENT_CARD | Каждая длина 13..19, compact/space/hyphen; Luhn generation и checksum mutations, repeated digit/zero, longer run, edge/repeated separators | `PaymentCardRecognizerTest` |
-| IP | IPv4 octets 0/255 и invalid/leading zero; full/unique-compressed/embedded IPv4 IPv6, all address classes, brackets/zone; terminal dot/colon, IPv4 ports 1/65535 и invalid; fifth octet/extra group/second ::/hex continuation; ambiguous IPv6 suffix; invalid then valid, Unicode spans | `IpAddressRecognizerTest` |
+| IP | IPv4 octets 0/255 и invalid/leading zero; full/unique-compressed/embedded IPv4 IPv6, all address classes, brackets/zone; terminal dot/colon; ports 1/443/65535 в EOF и перед space/tab/LF/CRLF с prose, widths 1/2/3/4; zero/out-of-range/signed/letter/colon port negatives; fifth octet/extra group/second ::/hex continuation; ambiguous IPv6 suffix; invalid then valid, Unicode spans | `IpAddressRecognizerTest`, `Ipv4PortRecognizerTest` |
 | IBAN | Все страны pinned registry и lengths, compact/canonical groups/last group 1..4/lowercase; unknown country, mod97 mutation, repeated/unsupported separators и adjacent alphanumeric boundaries; no runtime registry I/O | `IbanRecognizerTest`, `IbanCountryLengthsTest` |
 | RU_INN | Exactly 12 и отказ на 10; обе checksum formulas и mutations, no separators, immediate adjacent digits, start/end payload | `RuInnRecognizerTest` |
 | RU_SNILS | Все separator triples; threshold и modulo101/100->00; valid с/без context; invalid с exact keyword на обеих сторонах, 32 code points и за пределом; standalone/repeated/partial/unsupported negatives; mixed contextual+valid и validated priority | `RuSnilsRecognizerTest` |
@@ -634,18 +664,36 @@ numeric latency release gate; он не подтверждает current enforce
 ~~~
 
 Directory обязан содержать `redmadrobot-pii-benchmark.json`, `jmh.json`,
-`environment.properties`, `revision.txt`; baseline нельзя пересоздавать после
-просмотра evaluation ради улучшения результата. Task запускает external и
+`environment.properties`, `revision.txt`; baseline detector нельзя выбирать заново
+после просмотра evaluation ради улучшения результата. При смене reference
+сохранить старые artifacts и создать новый baseline directory: скопировать
+неизменные paired JMH/environment/revision, собрать production `jar` из этой
+точной Git-ревизии в отдельном checkout и сохранить его как `detector.jar`.
+Пересчитать старый detector текущим adapter/scorer:
+
+~~~bash
+./gradlew redMadRobotPiiBaselineBenchmark \
+  -PpiiQualificationBaselineDirectory=/absolute/path/to/rescored-baseline
+~~~
+
+Task исключает current main output из runtime classpath и использует frozen
+`detector.jar`. Reference должен совпадать с current по ID/digest, dataset,
+split и partition coverage. Старые reports без nested reference не принимаются.
+Qualification task запускает external и
 canonical reports и 18 paired JMH cases: 3 backgrounds x 3 sizes x
 `NO_MATCH_FULL_SCAN,FULL_SCAN`. Сравнение median p95/p99 использует одинаковые
 environment/JVM/forks/warmup/iterations и
 [согласованные floors](../spec/requirements/fast-pii.md#quality).
 JSON/Markdown в `build/reports/pii/qualification/` фиксируют baseline/current
 Git revision и dirty state, dataset revision/checksum, corpus version, JMH
-environment, команды, full/tuning/evaluation и отдельный product-aligned view.
+environment, команды, reference ID/digest, added/normalized counts,
+full/tuning/evaluation и отдельный
+product-aligned view. Все aggregate, IP и PHONE floors и strict evaluation
+improvement проверяются на общем nested reference; исходные source-aligned
+metrics и их verdict публикуются отдельно как diagnostics.
 Historical numbers не переносятся в normative contract и не являются свежим
-enforcement evidence. Текущий aggregate gate не автоматизирует каждый per-type
-floor; эта граница указана в [coverage](requirements-coverage.md#pii-и-windowing).
+enforcement evidence. Текущий статус зафиксирован в
+[coverage](requirements-coverage.md#pii-и-windowing).
 
 ### Gateway performance
 

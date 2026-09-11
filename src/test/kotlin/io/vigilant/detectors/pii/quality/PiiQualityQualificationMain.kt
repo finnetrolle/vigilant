@@ -76,7 +76,9 @@ private fun evaluateQualification(inputs: QualificationInputs): ObjectNode {
     val canonical = mapper.readTree(inputs.canonical.toFile())
     val currentSource = sourceAlignedView(currentExternal)
     val baselineSource = sourceAlignedView(baselineExternal)
-    val quality = qualityJson(mapper, currentSource, baselineSource)
+    val reference = qualificationReference(mapper, currentExternal, baselineExternal)
+    val sourceQuality = qualityJson(mapper, currentSource, baselineSource)
+    val quality = qualityJson(mapper, currentExternal.path("nestedIpAligned"), baselineExternal.path("nestedIpAligned"))
     val product = productAlignedJson(mapper, currentExternal)
     val canonicalGate = canonicalJson(mapper, canonical)
     val performance = performanceJson(mapper, inputs)
@@ -90,7 +92,9 @@ private fun evaluateQualification(inputs: QualificationInputs): ObjectNode {
                 performance.path("passed").booleanValue(),
         )
         set<ObjectNode>("provenance", provenance)
+        set<ObjectNode>("reference", reference)
         set<ObjectNode>("quality", quality)
+        set<ObjectNode>("sourceAlignedQuality", sourceQuality)
         set<ObjectNode>("productAligned", product)
         set<ObjectNode>("canonical", canonicalGate)
         set<ObjectNode>("performance", performance)
@@ -124,6 +128,7 @@ private fun reproductionJson(mapper: ObjectMapper): ArrayNode =
 
 private val REPRODUCTION_COMMANDS =
     listOf(
+        "./gradlew redMadRobotPiiBaselineBenchmark -PpiiQualificationBaselineDirectory=<baseline-directory>",
         "./gradlew redMadRobotPiiBenchmark",
         "./gradlew piiQualityReport",
         "./gradlew runPiiQualificationJmh",

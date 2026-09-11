@@ -35,6 +35,7 @@ object RedMadRobotBenchmarkMain {
                     predicted = predicted,
                     caseId = benchmarkCase.caseId,
                     productAlignedExpected = benchmarkCase.productAlignedGoldSpans,
+                    nestedIpExpected = benchmarkCase.nestedIpGoldSpans,
                     productAlignmentAdjustments = benchmarkCase.productAlignmentAdjustments,
                 )
             }

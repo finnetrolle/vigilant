@@ -15,8 +15,8 @@ class CanonicalQualityReportMainTest {
         CanonicalQualityReportMain.main(arrayOf(output.toString()))
 
         val json = ObjectMapper().readTree(Files.readString(output.resolve("pii-quality-report.json")))
-        assertEquals(900, json.at("/corpus/positiveCases").intValue())
-        assertEquals(900, json.at("/corpus/hardNegativeCases").intValue())
+        assertEquals(960, json.at("/corpus/positiveCases").intValue())
+        assertEquals(975, json.at("/corpus/hardNegativeCases").intValue())
         assertEquals(3, json.at("/corpus/mixedCases").intValue())
         assertEquals(13, json.at("/metrics/aggregate/exact/truePositives").intValue())
         assertEquals(13, json.at("/metrics/aggregate/relaxed/truePositives").intValue())

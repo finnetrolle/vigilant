@@ -28,7 +28,7 @@ METADATA = {
     "EMAIL_ADDRESS": Metadata("FORMAT_ONLY", "fast.email_address", "1.1.0"),
     "PHONE_NUMBER": Metadata("FORMAT_ONLY", "fast.phone_number.ru", "1.1.0"),
     "PAYMENT_CARD": Metadata("VALIDATED", "fast.payment_card.luhn", "1.0.0"),
-    "IP_ADDRESS": Metadata("VALIDATED", "fast.ip_address", "1.1.0"),
+    "IP_ADDRESS": Metadata("VALIDATED", "fast.ip_address", "1.2.0"),
     "IBAN": Metadata("VALIDATED", "fast.iban", "1.0.0+iban-registry.102"),
     "RU_INN": Metadata("VALIDATED", "fast.ru_inn", "1.0.0"),
     "RU_SNILS": Metadata("VALIDATED", "fast.ru_snils", "1.1.0"),
@@ -95,10 +95,10 @@ def positive_record(
 
 
 def write_corpus(pii_type: str, category: str, records: list[str]) -> None:
-    """Write one deterministic corpus with the exact v1 header and final newline."""
+    """Write a deterministic corpus with at least 100 records, the v1 header and final newline."""
 
-    if len(records) != 100:
-        raise ValueError(f"{pii_type}-{category} must contain exactly 100 records")
+    if len(records) < 100:
+        raise ValueError(f"{pii_type}-{category} must contain at least 100 records")
     target = CORPUS_ROOT / f"{pii_type.lower()}.{category}.tsv"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(HEADER + "\n" + "\n".join(records) + "\n", encoding="utf-8")
@@ -319,7 +319,7 @@ def payment_card_corpora() -> tuple[list[str], list[str]]:
 
 
 def ip_corpora() -> tuple[list[str], list[str]]:
-    """Create IPv4/IPv6 syntax variants and malformed address hard negatives."""
+    """Create strict IP forms plus port/prose boundaries with independent UTF-8 span oracles."""
 
     positives = []
     negatives = []
@@ -368,6 +368,22 @@ def ip_corpora() -> tuple[list[str], list[str]]:
         negative_payload, _ = wrapped(index, invalid)
         positives.append(positive_record(f"ip-positive-{index + 1:03d}", "IP_ADDRESS", payload, value))
         negatives.append(record(f"ip-hard-negative-{index + 1:03d}", "IP_ADDRESS", negative_payload))
+    for width, prefix in enumerate(("x ", "я ", "€ ", "😀 "), 1):
+        for port in ("1", "443", "65535"):
+            for suffix_index, suffix in enumerate(("", " now", "\tnow", "\nnow", "\r\nnow")):
+                positives.append(positive_record(
+                    f"ip-port-{width}-{port}-{suffix_index}", "IP_ADDRESS",
+                    f"{prefix}192.0.2.1:{port}{suffix}", "192.0.2.1",
+                ))
+    invalid_ports = (
+        "192.0.2.1:0", "192.0.2.1:65536", "192.0.2.1:+443", "192.0.2.1:-443",
+        "192.0.2.1:abc", "192.0.2.1:443a", "192.0.2.1:443g", "192.0.2.1:443:1",
+        "192.0.2.1::443", "192.0.2.1:443_tag", "192.0.2.1:443%zone",
+        "256.0.2.1:443", "192.00.2.1:443", "192.0.2.1.5:443", "g192.0.2.1:443",
+    )
+    for index, invalid in enumerate(invalid_ports):
+        for suffix_index, suffix in enumerate(("", " now", "\tnow", "\nnow", "\r\nnow")):
+            negatives.append(record(f"ip-port-negative-{index}-{suffix_index}", "IP_ADDRESS", invalid + suffix))
     return positives, negatives
 
 

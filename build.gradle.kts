@@ -364,6 +364,24 @@ tasks.register<JavaExec>("redMadRobotPiiBenchmark") {
     )
 }
 
+tasks.register<JavaExec>("redMadRobotPiiBaselineBenchmark") {
+    dependsOn(prepareRedMadRobotPiiCorpus, tasks.named("testClasses"))
+    group = "verification"
+    description = "Rescores a frozen baseline detector.jar using the current independent reference and scorer."
+    mainClass.set("io.vigilant.detectors.pii.benchmark.redmadrobot.RedMadRobotBenchmarkMain")
+    doFirst {
+        val directory = piiQualificationBaselineDirectory.orNull?.let(::file)
+            ?: error("Set -PpiiQualificationBaselineDirectory to the frozen baseline artifacts")
+        val detectorJar = directory.resolve("detector.jar")
+        check(detectorJar.isFile && directory.resolve("revision.txt").isFile) {
+            "Rescoring requires the frozen production detector.jar and its revision.txt"
+        }
+        // The current main output must not shadow the frozen detector. Dependencies contain no project output.
+        classpath = files(sourceSets.test.get().output, detectorJar, configurations.testRuntimeClasspath)
+        setArgs(listOf(redMadRobotPreparedDataset.get().asFile.absolutePath, directory.absolutePath))
+    }
+}
+
 tasks.register<JavaExec>("piiQualityReport") {
     dependsOn(tasks.named("testClasses"))
     group = "verification"
