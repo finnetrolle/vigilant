@@ -2,7 +2,7 @@
 
 - **ID:** `VIG-43`
 - **Тип:** Issue
-- **Статус:** In progress
+- **Статус:** Blocked
 - **Приоритет:** P1
 - **Зависит от:** нет
 - **Блокирует:** нет
@@ -44,6 +44,19 @@ Secret value не печатать и не передавать в argv.
 - [ ] Сохранены `./gradlew build`, runtimeClasspath scan, действующий CVSS gate, trigger PR/push main, reports и минимальные permissions. Нельзя скрыть failure через continue-on-error или убрать проверки ради GREEN.
 - [ ] После публикации изменения GitHub run содержит реально выполненный успешный build job; key-enabled OWASP подтверждён, если key доступен. Недоступную ветку нельзя объявлять PASS по одному YAML review.
 - [ ] Development guide точно отражает фактическую skip/scan схему; каталог и ссылки валидны.
+
+## Блокер выполнения
+
+[GitHub run 34640816211](https://github.com/finnetrolle/vigilant/actions/runs/34640816211)
+на commit `88e266643448d57a2b14d27017ea2c33c82e915d` создал обе jobs, но ни одна
+не начала steps. Обе check-run annotations сообщают, что аккаунт заблокирован
+из-за billing issue. Требуется восстановить доступ аккаунта к GitHub Actions,
+затем запустить CI на актуальном commit и получить успешный build.
+
+Локально actionlint воспроизвёл исходную ошибку и принял исправление;
+55 fixtures work-item validator и проверка каталога/ссылок прошли.
+Repository secrets отсутствуют: key-enabled OWASP остаётся непроверенным,
+а billing failure не доказывает выполнение skip branch.
 
 ## Проверки
 
