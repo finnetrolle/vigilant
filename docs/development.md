@@ -782,7 +782,20 @@ Sonar остаётся отдельным обязательным gate, ког�
 pull request и push в `main`:
 
 - обязательный `build` job;
-- OWASP dependency-check job при наличии repository secret `NVD_API_KEY`.
+- `dependency-check` job, который выполняет OWASP scan только при доступном
+  secret `NVD_API_KEY`.
+
+Ключ передаётся через environment job; условия отдельных steps проверяют
+`env.NVD_API_KEY`. При доступном ключе выполняются checkout, Java/Gradle setup,
+NVD cache и `./gradlew dependencyCheckAnalyze`; CVE report загружается и при
+ошибке scan. Действуют [runtimeClasspath scope и CVSS gate](#owasp-dependency-check).
+
+Если ключ не предоставлен, включая fork PR или Dependabot run без доступного
+secret, job публикует notice в журнале и `SKIPPED` в GitHub step summary.
+Setup, cache, scan и upload CVE report пропускаются. Успех такого job означает
+успешное сообщение о пропуске, а не пройденный security scan. Обязательный
+`./gradlew build` выполняется независимо от доступности ключа; его reports
+загружаются при failure. Значение ключа не выводится и не передаётся в argv.
 
 Mutation testing, PII report/внешний benchmark, OCI smoke, JMH baseline,
 PERF-01, inspection phase/load и SonarQube

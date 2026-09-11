@@ -152,7 +152,7 @@ context sources. Само решение хранится один раз в own
 | Work item | Статус | Прогресс | Оценка |
 |---|---|---:|---:|
 | [EPIC-06: OpenAI Responses protocol scope](epics/epic_06_llm_message_parsing.md) | `Draft` | 0/0 | Responses вне MVP; нет implementation-ready leaves |
-| [VIG-43: Восстановить выполнение GitHub CI](issues/issue_43_restore_github_ci.md) | `Ready for implementation` | не начато | 0.5-1 дня |
+| [VIG-43: Восстановить выполнение GitHub CI](issues/issue_43_restore_github_ci.md) | `In progress` | проверка CI | 0.5-1 дня |
 
 ## Active TODO: порядок следующей работы
 

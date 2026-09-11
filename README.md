@@ -196,7 +196,8 @@ ownership определены в [observability contract](spec/requirements/obs
 
 `build` также проверяет, что JMH не попал в production runtime classpath.
 CI на каждый push в `main` и pull request запускает `build`. OWASP job
-запускается только при наличии секрета `NVD_API_KEY`. Mutation testing в
+выполняет scan при доступном секрете `NVD_API_KEY`, иначе явно сообщает
+`SKIPPED` в журнале и step summary. Mutation testing в
 текущий CI не входит. Полное описание reports, CVE threshold и локальных
 проверок находится в [development guide](docs/development.md).
 
