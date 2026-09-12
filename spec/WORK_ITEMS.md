@@ -152,6 +152,7 @@ context sources. Само решение хранится один раз в own
 | Work item | Статус | Прогресс | Оценка |
 |---|---|---:|---:|
 | [EPIC-06: OpenAI Responses protocol scope](epics/epic_06_llm_message_parsing.md) | `Draft` | 0/0 | Responses вне MVP; нет implementation-ready leaves |
+| [VIG-42: Безопасная диагностика transport failures в traces](issues/issue_42_trace_exception_privacy.md) | `Draft` | replacement schema открыта | 2-3 дня после уточнения |
 
 ## Active TODO: порядок следующей работы
 
@@ -172,8 +173,10 @@ context sources. Само решение хранится один раз в own
    `./gradlew validateWorkItems` не подтверждает согласованность реестра.
 
 Готовых к реализации задач сейчас нет. Текущий следующий шаг: уточнить
-[EPIC-06](epics/epic_06_llm_message_parsing.md), который остаётся `Draft`;
-новый scope требует согласования и executable leaves.
+[VIG-42](issues/issue_42_trace_exception_privacy.md).
+Уточнение VIG-42 разрешено в Draft;
+implementation начинается только после закрытия readiness.
+[EPIC-06](epics/epic_06_llm_message_parsing.md) остаётся вне MVP и `Draft`.
 Эксплуатация Docker и дальнейший production review принадлежат
 [operations contract](requirements/operations.md) и
 [operator reference](../docs/operations.md); текущие app observations находятся в

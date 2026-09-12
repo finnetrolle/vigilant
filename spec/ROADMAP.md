@@ -77,15 +77,15 @@ qualification без fallback. Historical durations или percentage improvemen
 Delivery order определяется
 [active registry](WORK_ITEMS.md#active-todo-порядок-следующей-работы):
 
-1. [Task packet](../docs/task-context.md#contract) выдаёт компактный
-   детерминированный task packet на основе
-   [issue template](ISSUE_TEMPLATE.md#context-sources).
-2. [Reusable verification evidence](../docs/development.md#контракт-reusable-evidence)
-   реализована поверх опубликованного task packet; semantic applicability
-   остаётся ответственностью reviewers.
-
+Уточнить безопасные trace failures в Draft
+[VIG-42](issues/issue_42_trace_exception_privacy.md).
 Локальная проверка исправленного workflow и недоступность GitHub execution
 отражены в [наблюдениях CI](../docs/development.md#наблюдения-ci).
+
+Это выбранный delivery order, а не искусственная hard dependency.
+[Task packet](../docs/task-context.md#contract) и
+[reusable verification evidence](../docs/development.md#контракт-reusable-evidence)
+уже реализованы; они поддерживают эту работу и не заменяют runtime evidence.
 
 Подготовка первого Docker deployment описана в
 [operations contract](requirements/operations.md) и
