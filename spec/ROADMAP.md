@@ -84,6 +84,9 @@ Delivery order определяется
    реализована поверх опубликованного task packet; semantic applicability
    остаётся ответственностью reviewers.
 
+Локальная проверка исправленного workflow и недоступность GitHub execution
+отражены в [наблюдениях CI](../docs/development.md#наблюдения-ci).
+
 Подготовка первого Docker deployment описана в
 [operations contract](requirements/operations.md) и
 [operator reference](../docs/operations.md). [Operations evidence](../docs/operations-evidence.md)

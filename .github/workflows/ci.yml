@@ -37,27 +37,35 @@ jobs:
   dependency-check:
     name: OWASP CVE scan
     runs-on: ubuntu-latest
-    # Skipped silently when the repository has no NVD_API_KEY secret configured.
-    if: ${{ github.secret_source == 'Actions' && secrets.NVD_API_KEY != '' }}
+    env:
+      NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
     steps:
+      - name: Report skipped dependency check
+        if: ${{ env.NVD_API_KEY == '' }}
+        run: |
+          echo '::notice::OWASP dependency check skipped: NVD_API_KEY is unavailable.'
+          echo 'OWASP dependency check: **SKIPPED** (NVD_API_KEY is unavailable).' >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/checkout@v5
+        if: ${{ env.NVD_API_KEY != '' }}
       - uses: actions/setup-java@v5
+        if: ${{ env.NVD_API_KEY != '' }}
         with:
           distribution: temurin
           java-version: 25
       - uses: gradle/actions/setup-gradle@v5
+        if: ${{ env.NVD_API_KEY != '' }}
       - name: Cache NVD database
+        if: ${{ env.NVD_API_KEY != '' }}
         uses: actions/cache@v4
         with:
           path: ~/.owasp/dependency-check/data
           key: nvd-db-${{ github.run_id }}
           restore-keys: nvd-db-
       - name: Run dependency check
-        env:
-          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+        if: ${{ env.NVD_API_KEY != '' }}
         run: ./gradlew dependencyCheckAnalyze
       - name: Upload CVE report
-        if: always()
+        if: ${{ always() && env.NVD_API_KEY != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: dependency-check-report

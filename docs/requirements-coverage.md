@@ -28,6 +28,12 @@ coverage и external-data freshness между задачами из hashes не
 [Cycle ledger](development.md#метрики-verification-cycle) позволяет собрать
 следующие 3-5 наблюдений; измеренная wall-clock экономия пока unavailable.
 
+[CI workflow и его локальная приёмка](development.md#локальная-приёмка-workflow)
+различают проверку конфигурации, локальную сборку и фактическое выполнение
+GitHub jobs. Локальное evidence не подтверждает доступность GitHub Actions
+или актуальный OWASP scan; внешние ограничения остаются явными в
+[наблюдениях CI](development.md#наблюдения-ci).
+
 ## Назначение
 
 Эта карта отделяет согласованный MVP contract от текущей runtime реализации.
