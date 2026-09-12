@@ -1,8 +1,8 @@
-# VIG-43: Восстановить выполнение GitHub CI
+# VIG-43: Исправить GitHub CI workflow
 
 - **ID:** `VIG-43`
 - **Тип:** Issue
-- **Статус:** Blocked
+- **Статус:** In progress
 - **Приоритет:** P1
 - **Зависит от:** нет
 - **Блокирует:** нет
@@ -12,10 +12,12 @@
 
 ## Результат
 
-Workflow `.github/workflows/ci.yml` валиден и запускает обязательный build на
-PR и push в main. Отсутствие `NVD_API_KEY` не ломает workflow validation;
-OWASP выполняется при доступном ключе, а недоступность ключа имеет явный
-безопасный skip status.
+Workflow `.github/workflows/ci.yml` валиден и сохраняет обязательный build
+для PR и push в main. Отсутствие `NVD_API_KEY` не ломает workflow validation;
+условия steps предусматривают OWASP только при доступном ключе и явный skip
+при его отсутствии. Исправление принимается по локальному workflow validator,
+проверке условий и полному локальному build на commit из PR.
+GitHub execution недоступен из-за биллинга аккаунта и не объявляется успешным.
 
 ## Контекст
 
@@ -40,35 +42,40 @@ Secret value не печатать и не передавать в argv.
 ## Критерии готовности
 
 - [ ] Workflow validator (например actionlint) воспроизводит недопустимый secrets context и принимает исправленный workflow без ошибок.
-- [ ] Матрица key present / absent / недоступен для fork или Dependabot: обязательный build остаётся исполним; dependency scan выполняется только с доступным ключом, отсутствие ключа явно отмечено без вывода значения.
+- [ ] Локально проверены условия workflow для двух разных входов: пустой и непустой `env.NVD_API_KEY`. Build независим; scan выбран только для непустого ключа, skip-step только для пустого. Точный skip shell-step публикует notice/summary без значения. Fork/Dependabot без предоставленного secret документированы как пустой вход; это не выдаётся за реальный запуск таких событий.
 - [ ] Сохранены `./gradlew build`, runtimeClasspath scan, действующий CVSS gate, trigger PR/push main, reports и минимальные permissions. Нельзя скрыть failure через continue-on-error или убрать проверки ради GREEN.
-- [ ] После публикации изменения GitHub run содержит реально выполненный успешный build job; key-enabled OWASP подтверждён, если key доступен. Недоступную ветку нельзя объявлять PASS по одному YAML review.
+- [ ] Полный локальный `./gradlew build` на commit из PR успешен; сохранены exact commit, run ID и reports. Недоступные GitHub execution и key-enabled OWASP явно отмечены и не объявляются PASS; hosted run не является условием закрытия этого исправления.
 - [ ] Development guide точно отражает фактическую skip/scan схему; каталог и ссылки валидны.
 
-## Блокер выполнения
+## Согласованная локальная приёмка
 
-[GitHub run 34640816211](https://github.com/finnetrolle/vigilant/actions/runs/34640816211)
-на commit `88e266643448d57a2b14d27017ea2c33c82e915d` создал обе jobs, но ни одна
-не начала steps. Обе check-run annotations сообщают, что аккаунт заблокирован
-из-за billing issue. Требуется восстановить доступ аккаунта к GitHub Actions,
-затем запустить CI на актуальном commit и получить успешный build.
+2026-09-11 владелец сообщил: «я не смогу разблокировать аккаунт». На предложение
+выполнить полный локальный build на commit из PR, изменить критерий приёмки,
+зафиксировать недоступность GitHub execution и закрыть исправление YAML
+владелец ответил: «выполняй». Это явное изменение границы приёмки VIG-43;
+общие quality gates проекта и scope других задач не меняются.
 
-Локально actionlint воспроизвёл исходную ошибку и принял исправление;
-55 fixtures work-item validator и проверка каталога/ссылок прошли.
-Repository secrets отсутствуют: key-enabled OWASP остаётся непроверенным,
-а billing failure не доказывает выполнение skip branch.
+[GitHub run 34641245206](https://github.com/finnetrolle/vigilant/actions/runs/34641245206)
+на commit `96a4e7be1854ab3a88296f70378fa44fc2410c2a` создал обе jobs, но ни одна
+не начала steps. Обе check-run annotations сообщают о блокировке аккаунта
+из-за billing issue. Repository secrets отсутствуют; фактические hosted
+build/skip/scan остаются неподтверждёнными.
 
 ## Проверки
 
-Локальный workflow validator, `./gradlew workItemValidatorTest --rerun
-validateWorkItems`, `git diff --check`; после обычной публикации -
-`gh run view <run-id>` и job outcomes на exact commit. Полный локальный runtime
-build не повторять для одной правки YAML без отдельной причины.
+Локальный actionlint; выполнение условий workflow через GitHub expression
+evaluator для пустого/непустого env без настоящего ключа; точный skip shell-step;
+`./gradlew build` на опубликованном commit через `scripts/check-run`;
+`./gradlew workItemValidatorTest --rerun validateWorkItems` после окончательного
+обновления каталога; `git diff --check`. Локальные результаты не подтверждают
+исполнение workflow GitHub runner или актуальный vulnerability scan.
 
 ## Не входит
 
 - Новые CI gates, release publication, dependency upgrades, ротация secrets,
   изменение branch protection, релиз runtime, обход approval/push workflow.
+- Восстановление биллинга GitHub, перенос CI на другую платформу и заявление
+  об успешных GitHub build/scan без их выполнения.
 
 ## Ambiguity Report
 
