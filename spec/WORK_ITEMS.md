@@ -152,7 +152,6 @@ context sources. Само решение хранится один раз в own
 | Work item | Статус | Прогресс | Оценка |
 |---|---|---:|---:|
 | [EPIC-06: OpenAI Responses protocol scope](epics/epic_06_llm_message_parsing.md) | `Draft` | 0/0 | Responses вне MVP; нет implementation-ready leaves |
-| [VIG-43: Исправить GitHub CI workflow](issues/issue_43_restore_github_ci.md) | `In progress` | локальная приёмка согласована | 0.5-1 дня |
 
 ## Active TODO: порядок следующей работы
 
@@ -172,9 +171,8 @@ context sources. Само решение хранится один раз в own
 4. Не начинать новый пункт, пока предыдущий hard gate не завершён и
    `./gradlew validateWorkItems` не подтверждает согласованность реестра.
 
-Текущий следующий шаг: завершить локальную приёмку
-[VIG-43](issues/issue_43_restore_github_ci.md), согласованную владельцем.
-[EPIC-06](epics/epic_06_llm_message_parsing.md) остаётся `Draft`;
+Готовых к реализации задач сейчас нет. Текущий следующий шаг: уточнить
+[EPIC-06](epics/epic_06_llm_message_parsing.md), который остаётся `Draft`;
 новый scope требует согласования и executable leaves.
 Эксплуатация Docker и дальнейший production review принадлежат
 [operations contract](requirements/operations.md) и

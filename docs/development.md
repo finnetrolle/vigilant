@@ -778,8 +778,8 @@ Sonar остаётся отдельным обязательным gate, ког�
 
 ## CI
 
-[GitHub Actions workflow](../.github/workflows/ci.yml) запускается для каждого
-pull request и push в `main`:
+[GitHub Actions workflow](../.github/workflows/ci.yml) настроен на события
+pull request и push в `main` и предусматривает:
 
 - обязательный `build` job;
 - `dependency-check` job, который выполняет OWASP scan только при доступном
@@ -800,6 +800,54 @@ Setup, cache, scan и upload CVE report пропускаются. Успех т�
 Mutation testing, PII report/внешний benchmark, OCI smoke, JMH baseline,
 PERF-01, inspection phase/load и SonarQube
 pipeline в текущий CI не входят.
+
+### Локальная приёмка workflow
+
+Валидность workflow проверяется actionlint. Условия steps можно проверить
+локально через `@actions/expressions`, используя пустое значение
+`env.NVD_API_KEY` и непустую синтетическую строку, которая не является ключом.
+Для пустого входа выбран только skip-step; для непустого выбраны checkout,
+Java/Gradle setup, NVD cache, dependency scan и upload report.
+Сам skip shell-step должен публиковать notice и summary без значения ключа.
+Fork/Dependabot без предоставленного secret соответствуют пустому входу;
+такая локальная проверка не является запуском этих событий в GitHub.
+
+Полный локальный `./gradlew build` через [durable runner](#устойчивый-запуск-проверок)
+подтверждает сборку, tests и detekt на записанном commit и toolchain. Он не
+подтверждает GitHub runner execution или актуальный OWASP scan.
+Недоступность внешнего CI записывается отдельно от результатов локальных checks.
+
+### Наблюдения CI
+
+2026-09-11 [GitHub run 34641245206](https://github.com/finnetrolle/vigilant/actions/runs/34641245206)
+на commit `96a4e7be1854ab3a88296f70378fa44fc2410c2a` создал build и OWASP jobs,
+но обе завершились до первого step: GitHub сообщил о блокировке аккаунта
+из-за billing issue. Реальный hosted build, skip-step и scan не подтверждены.
+Repository secret `NVD_API_KEY` отсутствует; key-enabled scan не объявляется PASS.
+
+Actionlint `1.7.12` воспроизвёл недопустимый secrets context исходного workflow
+и принял исправленный YAML. Локальная проверка через `@actions/expressions`
+`0.3.61` и YAML parser `2.8.1` подтвердила выбор steps для пустого/непустого
+синтетического env. Точный skip shell-step выполнился с exit 0 и ожидаемыми
+notice/summary. Эти результаты ограничены локальной конфигурацией и shell;
+они не являются выполнением GitHub jobs или проверкой vulnerability database.
+
+2026-09-12 полный локальный build commit
+`96a4e7be1854ab3a88296f70378fa44fc2410c2a` прошёл на macOS с JDK `25.0.2`
+и Gradle `9.7.1`: `/usr/bin/caffeinate -i ./gradlew build`, run
+`b56cb6ac5ac84b829f74f63b79afc3fb`, exit 0. Reports содержат 57 process tests,
+1520 остальных tests и 55 work-item validator tests, без failures/errors/skips.
+Detekt и проверка отсутствия JMH в production runtimeClasspath прошли.
+Команда `caffeinate` ограничивает автоматический сон временем build;
+закрытие крышки она не предотвращает.
+
+Первый полный run получил один ответ 503 вместо 200 в process test во время
+интервала со сном macOS. Точный тест затем прошёл на неизменённом коде, как и
+полный повторный build. Причина конкретного 503 не установлена; временное
+совпадение со сном не считается доказанной причиной.
+Проверка build относится к указанному commit; последующие изменения только
+документации и каталога проверяются отдельно. Hosted execution и актуальный
+OWASP scan этими результатами не подтверждаются.
 
 ## Поддержка документации
 
