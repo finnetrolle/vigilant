@@ -78,7 +78,8 @@ Delivery order определяется
 [active registry](WORK_ITEMS.md#active-todo-порядок-следующей-работы):
 
 Уточнить безопасные trace failures в Draft
-[VIG-42](issues/issue_42_trace_exception_privacy.md).
+[VIG-42](issues/issue_42_trace_exception_privacy.md) и исследовать strict
+parsing в Draft [VIG-44](issues/issue_44_strict_parsing_investigation.md).
 Локальная проверка исправленного workflow и недоступность GitHub execution
 отражены в [наблюдениях CI](../docs/development.md#наблюдения-ci).
 
