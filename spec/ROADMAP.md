@@ -93,7 +93,8 @@ parsing в Draft [VIG-44](issues/issue_44_strict_parsing_investigation.md).
 [operator reference](../docs/operations.md). [Operations evidence](../docs/operations-evidence.md)
 фиксирует focused telemetry/health, process shutdown, OCI smoke и три stdout
 signal types на проверенном artifact. Приёмка нескольких replicas, внешнего
-probe и Fluentd/Collector/OpenObserve chain остаётся обязанностью администратора.
+probe и Fluentd/Collector/OpenObserve chain владелец продукта проверяет сам;
+эта стендовая работа исключена из агентской очереди по его решению 2026-09-10.
 Численный availability SLO отложен до production review; наличие operator
 checklist не означает выполненный production rollout или накопленные measurements.
 

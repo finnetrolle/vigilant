@@ -179,6 +179,10 @@ context sources. Само решение хранится один раз в own
 [VIG-44](issues/issue_44_strict_parsing_investigation.md) разрешены в Draft;
 их implementation начинается только после закрытия readiness.
 [EPIC-06](epics/epic_06_llm_message_parsing.md) остаётся вне MVP и `Draft`.
+
+Стендовую приёмку production identity, external probe и telemetry chain
+владелец продукта 2026-09-10 взял на себя; отдельная агентская задача на неё
+не создаётся и в эту очередь она не входит. Это не отметка выполненной приёмки.
 Эксплуатация Docker и дальнейший production review принадлежат
 [operations contract](requirements/operations.md) и
 [operator reference](../docs/operations.md); текущие app observations находятся в
