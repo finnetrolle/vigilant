@@ -17,12 +17,12 @@ import dev.zacsweers.metro.Inject
 import dev.zacsweers.metro.SingleIn
 import io.vigilant.gateway.tracing.RequestTracing
 import io.vigilant.gateway.tracing.RequestTraceContext
+import io.vigilant.gateway.tracing.TransportFailure
 import io.vigilant.gateway.tracing.configuredPropagationHeaderName
 import io.vigilant.gateway.tracing.pathWithoutQuery
 import io.vigilant.gateway.tracing.withRequestTracingMdc
 import io.opentelemetry.api.trace.Span
 import io.opentelemetry.api.trace.SpanKind
-import io.opentelemetry.api.trace.StatusCode
 import io.opentelemetry.api.trace.propagation.W3CTraceContextPropagator
 import io.opentelemetry.context.propagation.TextMapSetter
 import java.net.URI
@@ -67,8 +67,9 @@ class BypassProxyService(
      *
      * Request routing, tracing and canonical response-header filtering are shared by streaming
      * bypass and retained guardrail paths. The handoff also enables upstream latency observation.
-     * Transport failures remain exceptional so each caller
-     * can choose its stable pre-disclosure mapping.
+     * Transport failures remain exceptional so each caller can choose its stable pre-disclosure
+     * mapping. The terminal upstream response completes the CLIENT span once, publishing only a
+     * finite tracing category before ending it; diagnostic causes remain outside traces.
      */
     internal fun exchange(
         ctx: ServiceRequestContext,
@@ -93,8 +94,7 @@ class BypassProxyService(
         upstreamResponse.whenComplete().whenComplete { _, cause ->
             try {
                 if (cause != null) {
-                    clientSpan?.setStatus(StatusCode.ERROR)
-                    clientSpan?.recordException(cause)
+                    clientSpan?.let { TransportFailure.from(cause).record(it) }
                     val failure = observeUpstreamFailure(ctx, cause)
                     logUpstreamFailure(ctx, request, cause, failure, clientSpan)
                 }

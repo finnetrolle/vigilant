@@ -152,7 +152,6 @@ context sources. Само решение хранится один раз в own
 | Work item | Статус | Прогресс | Оценка |
 |---|---|---:|---:|
 | [EPIC-06: OpenAI Responses protocol scope](epics/epic_06_llm_message_parsing.md) | `Draft` | 0/0 | Responses вне MVP; нет implementation-ready leaves |
-| [VIG-42: Безопасная диагностика transport failures в traces](issues/issue_42_trace_exception_privacy.md) | `Draft` | replacement schema открыта | 2-3 дня после уточнения |
 | [VIG-44: Исследовать и исправить нарушения strict parsing](issues/issue_44_strict_parsing_investigation.md) | `Draft` | нужна rejection matrix и декомпозиция | 1 день исследования |
 
 ## Active TODO: порядок следующей работы
@@ -173,12 +172,16 @@ context sources. Само решение хранится один раз в own
 4. Не начинать новый пункт, пока предыдущий hard gate не завершён и
    `./gradlew validateWorkItems` не подтверждает согласованность реестра.
 
-Готовых к реализации задач сейчас нет. Текущий следующий шаг: уточнить
-[VIG-42](issues/issue_42_trace_exception_privacy.md).
-Уточнение VIG-42 и исследование
-[VIG-44](issues/issue_44_strict_parsing_investigation.md) разрешены в Draft;
-их implementation начинается только после закрытия readiness.
+Готовых к реализации задач сейчас нет. Текущий следующий шаг: исследовать
+[VIG-44](issues/issue_44_strict_parsing_investigation.md).
+Безопасная transport-диагностика traces принадлежит
+[observability owner](requirements/observability.md#transport-failure-tracing);
+[проверки](../docs/transport-trace-evidence.md) разделяют SDK, exporter и installed stdout.
 [EPIC-06](epics/epic_06_llm_message_parsing.md) остаётся вне MVP и `Draft`.
+
+Исследование strict parsing в [VIG-44](issues/issue_44_strict_parsing_investigation.md)
+остаётся открытым в `Draft`: до реализации нужны exact rejection matrix и
+решение о декомпозиции. Завершение transport tracing не закрывает эту задачу.
 
 Стендовую приёмку production identity, external probe и telemetry chain
 владелец продукта 2026-09-10 взял на себя; отдельная агентская задача на неё

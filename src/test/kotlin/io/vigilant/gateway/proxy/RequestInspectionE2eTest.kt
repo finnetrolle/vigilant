@@ -1366,22 +1366,6 @@ internal class RequestInspectionE2eTest : GatewayE2eTestSupport() {
             }
     }
 
-    /** Waits for and verifies the canonical zero-reservation request-source invariant. */
-    private fun assertSourceReservationsReleased(
-        quota: RequestSourceQuota,
-        terminalEvent: String,
-    ) {
-        assertTrue(
-            fixture.awaitUntil(Duration.ofSeconds(2)) {
-                quota.activeOwners == 0 && quota.retainedBytes == 0L && quota.retainedSegments == 0
-            },
-            "$terminalEvent left source reservations retained",
-        )
-        assertEquals(0, quota.activeOwners)
-        assertEquals(0L, quota.retainedBytes)
-        assertEquals(0, quota.retainedSegments)
-    }
-
     /** Controlled sink that holds its async worker after observing the first audit event. */
     private class BlockingAuditSink : AppenderBase<ILoggingEvent>() {
         /** Signals that the asynchronous worker attempted the first delivery. */

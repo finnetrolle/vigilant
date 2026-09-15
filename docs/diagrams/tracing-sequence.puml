@@ -36,7 +36,13 @@ Server -> UpstreamSpan : создать непосредственный доч�
 activate UpstreamSpan
 UpstreamSpan -> Upstream : запрос с итоговым контекстом трассы
 Upstream --> UpstreamSpan : response удерживается до terminal state
-UpstreamSpan --> Server : gateway-owned complete response
+UpstreamSpan -> UpstreamSpan : terminal upstream response:\nfinite failure/status, then end once
+note right of UpstreamSpan
+  timeout / transport_error: ERROR
+  cancelled: UNSET; no exception event
+  Late cancellation preserves finished CLIENT.
+end note
+UpstreamSpan --> Server : retained response / upstream failure
 deactivate UpstreamSpan
 Server -> ResponseInspect : создать непосредственный дочерний span
 activate ResponseInspect
@@ -46,5 +52,12 @@ ResponseInspect --> Server : exact forward / masked forward / safe reject
 deactivate ResponseInspect
 end
 Server --> Client : ответ с итоговым сеансом и SERVER traceparent
+Server -> Server : final RequestLog:\nHTTP status + actual transport outcome, then end once
+note right of Server
+  Safe delivered 502/504: no transport category.
+  Post-headers failure: actual cause.
+  Before handoff cancellation: no upstream CLIENT.
+  Peer cancellation: cancelled / UNSET.
+end note
 deactivate Server
 @enduml

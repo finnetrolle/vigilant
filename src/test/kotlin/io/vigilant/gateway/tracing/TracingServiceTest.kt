@@ -540,7 +540,7 @@ class TracingServiceTest {
 
     /**
      * Waits for and returns the single SERVER span without coupling callers to
-     * additional child spans produced by the proxy exchange.
+     * additional child spans produced by the proxy exchange, retaining its diagnostic-free schema.
      */
     private fun awaitSingleSpan(): SpanData {
         assertTrue(
@@ -549,7 +549,12 @@ class TracingServiceTest {
             },
             "no server span was exported",
         )
-        return InMemorySpanExporter.spans.single { span -> span.kind == SpanKind.SERVER }
+        return InMemorySpanExporter.spans.single { span -> span.kind == SpanKind.SERVER }.also { span ->
+            assertTrue(span.events.isEmpty())
+            assertTrue(span.links.isEmpty())
+            assertEquals("", span.status.description)
+            assertTrue(span.attributes.asMap().keys.none { it.key.startsWith("exception.") })
+        }
     }
 
     /** Waits until [expected] spans are exported and returns their stable snapshot. */

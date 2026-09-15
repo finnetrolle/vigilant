@@ -77,9 +77,11 @@ qualification без fallback. Historical durations или percentage improvemen
 Delivery order определяется
 [active registry](WORK_ITEMS.md#active-todo-порядок-следующей-работы):
 
-Уточнить безопасные trace failures в Draft
-[VIG-42](issues/issue_42_trace_exception_privacy.md) и исследовать strict
-parsing в Draft [VIG-44](issues/issue_44_strict_parsing_investigation.md).
+Исследование strict parsing остаётся открытым в Draft
+[VIG-44](issues/issue_44_strict_parsing_investigation.md).
+Безопасная transport-диагностика SERVER/CLIENT следует
+[finite tracing contract](requirements/observability.md#transport-failure-tracing),
+с раздельным [SDK/exporter/process evidence](../docs/transport-trace-evidence.md).
 Локальная проверка исправленного workflow и недоступность GitHub execution
 отражены в [наблюдениях CI](../docs/development.md#наблюдения-ci).
 

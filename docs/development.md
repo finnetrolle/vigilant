@@ -1095,6 +1095,16 @@ in-memory SDK observations и packaged stdout. Один канал или test h
   tracestate, valid/empty/invalid session, UUIDv7 generation, client/upstream
   propagation, SERVER/request INTERNAL/upstream CLIENT/response INTERNAL tree,
   External cold miss parent retention and no hit/join span.
+- Transport tracing: independently observe finished SDK spans, production OTLP
+  stdout and installed Main stdout. Exercise bypass and retained JSON/SSE
+  success, HTTP errors, policy blocks, refused connection, controlled DNS,
+  pre/post-headers timeout, truncated body, cancellation before handoff/during
+  upstream/during inspection/during replay and SERVER-only timeout. Check
+  exact HTTP bytes/status/headers, span counts/IDs/tree/session/durations,
+  finite category/status, empty description and no events/links/diagnostics.
+  Type/wrapper cases include the 16/17 transition boundary and identity cycle;
+  causal terminal barriers cover both timeout/cancel orders and a simultaneous
+  race. See [transport evidence](transport-trace-evidence.md) for suite owners.
 - Metrics: every proxy name/unit, 2xx/4xx/5xx, pre/mid-response timeout,
   transport failure, cancellation, active baseline and no-upstream duration;
   every External lookup/cache outcome and exact hit/miss/coalesced/removal
@@ -1113,14 +1123,18 @@ in-memory SDK observations и packaged stdout. Один канал или test h
 `PiiShadowProxyProcessTest`, `TracingServiceTest`, `OtlpExportTest`,
 `MetricsServiceTest`, `OtlpMetricsExportTest`, `BridgeIdentityClientTest` и
 `CachingExternalIdentityLookupTest`.
+Transport suites: `TransportTracePrivacyE2eTest`, `TransportTraceCauseE2eTest`,
+`TransportTraceServerE2eTest`, `TransportTraceHttpE2eTest`,
+`TransportTraceLifecycleE2eTest`, `TransportTraceRaceE2eTest` and installed
+`TransportTracePrivacyProcessTest` (registered in `ProcessTestInventoryTest`).
 
 Пример focused run без packaged/process lane:
 
 ```bash
-rtk proxy ./gradlew test -x processTest --tests 'io.vigilant.gateway.LoggingConfigurationTest' --tests 'io.vigilant.gateway.tracing.*' --tests 'io.vigilant.gateway.metrics.*'
+./gradlew test -x processTest --tests 'io.vigilant.gateway.LoggingConfigurationTest' --tests 'io.vigilant.gateway.tracing.*' --tests 'io.vigilant.gateway.metrics.*'
 ```
 
 Source review при documentation migration не становится новым runtime
-evidence. Текущие mismatches, включая raw exception span events и отсутствующие
+evidence. Текущие mismatches, включая arbitrary metric error class и отсутствующие
 inspection instruments, перечислены в
 [coverage](requirements-coverage.md#observability-evidence).

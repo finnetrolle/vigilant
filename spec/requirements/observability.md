@@ -164,6 +164,82 @@ Operational request-scoped MDC может содержать effective `session_
 trace/span/parent identifiers и safe flags. Audit correlation относится к
 current INTERNAL span, upstream failure к CLIENT, completion к SERVER.
 
+### Transport failure tracing
+
+SERVER и HTTP CLIENT upstream используют один optional string attribute
+`vigilant.transport.failure` с exact значениями:
+
+| Terminal outcome | Attribute | Span status |
+|---|---|---|
+| Transport timeout | `timeout` | `ERROR` |
+| Cancellation | `cancelled` | `UNSET` |
+| Остальная transport failure | `transport_error` | `ERROR` |
+| Завершённый HTTP exchange | отсутствует | существующий `UNSET` |
+
+`none`, `success`, `unknown` и пустое значение не используются. Status description
+пустой. SERVER/HTTP CLIENT не имеют events или links; `exception` events и
+`exception.*` attributes запрещены. Exception class, message, stack, cause chain
+и suppressed details не записываются в name, attributes, resource/scope или иной
+trace field. Correlation session разрешён по общему channel contract.
+
+CLIENT описывает только начатый upstream exchange и завершается по terminal
+upstream response. SERVER завершается по final `RequestLog`, включая failure
+после headers. HTTP status из этого log независим от transport outcome;
+Armeria `UNKNOWN` не является HTTP status и не добавляется в span. Подготовленные
+headers при cancelled delivery не доказывают, что клиент их получил.
+
+- Доставленный safe `502`/`504` сохраняет HTTP status на SERVER без transport
+  category; исходная upstream failure остаётся на CLIENT.
+- Обрыв уже раскрываемого bypass response помечает оба затронутых span
+  фактической причиной; cleanup cancellation не заменяет timeout/transport error.
+- Отмена клиентом при активном upstream помечает оба затронутых span
+  `cancelled` / `UNSET`. До handoff CLIENT не создаётся. После terminal upstream
+  изменяется только ещё активный SERVER, включая отмену inspection или replay.
+- Normal EOF с upstream `200`, `4xx`/`5xx`, policy BLOCK и safe protocol/inspection
+  rejection сами по себе не являются transport failure. HTTP-код не выводит
+  category. HTTP status/body/headers, lineage, session и durations сохраняются.
+- INTERNAL inspection и External identity CLIENT сохраняют собственные contracts;
+  `vigilant.transport.failure` на них не добавляется.
+
+Первая причина, фактически завершившая операцию владельца, фиксирует её outcome.
+Category/status публикуются до единственного `end()`; поздние timeout, cancellation
+и cleanup не меняют законченный span. Порядок exporter/log callbacks не выбирает
+победителя. SERVER и CLIENT могут иметь разные terminal outcomes. При одновременных
+terminal stimuli допустим любой фактический победитель, но результат после выбора
+неизменен. Позднего сброса `ERROR` в `UNSET` нет.
+
+Classifier используется только tracing. HTTP error mapping, metric classification
+и application log schema остаются отдельными contracts. Он проверяет типы и
+подтверждённую причину операции, без matching message, `toString`, class-name strings
+или diagnostic/suppressed graph. Подтверждённое закрытие клиентом stream/connection
+при активном HTTP exchange является cancellation; upstream premature close является
+transport error.
+
+| Причина | Category |
+|---|---|
+| Armeria `ResponseTimeoutException`, `WriteTimeoutException`, `DnsTimeoutException`, `RequestTimeoutException`, `StreamTimeoutException` | `timeout` |
+| Netty `ConnectTimeoutException`, `ReadTimeoutException`, `WriteTimeoutException`; JDK `SocketTimeoutException`, `java.util.concurrent.TimeoutException` | `timeout` |
+| Armeria cancellation без timeout; `CancelledSubscriptionException`; JDK `CancellationException` | `cancelled` |
+| DNS failure без timeout, connection refused, premature upstream close, неизвестное transport exception | `transport_error` |
+
+Timeout проверяется раньше cancellation: Armeria `TimeoutException` наследуется
+от `CancellationException`. Только `CompletionException`, `ExecutionException` и
+`UnprocessedRequestException` являются transparent wrappers. Не более 16
+последовательных раскрытий: terminal cause после шестнадцатого классифицируется;
+необходимость семнадцатого перехода, missing cause или object-identity cycle дают
+`transport_error`. Неизвестный непрозрачный wrapper также даёт `transport_error`,
+даже с nested timeout. Suppressed exceptions не меняют category и не обходятся.
+Это внутренний защитный предел без настройки.
+
+Единственные SERVER attribute keys: `http.request.method`, `url.path`,
+`http.response.status_code`, `upstream.duration_ms`, `gateway.duration_ms`,
+`session.id`, `session.id.generated`, `trace.context.generated`,
+`trace.context.replaced`, `vigilant.transport.failure`. Для HTTP CLIENT upstream:
+`http.request.method`, `url.path`, `http.response.status_code`, `session.id`,
+`vigilant.transport.failure`. HTTP status, durations и failure category добавляются
+только при наличии соответствующего наблюдения; durations неотрицательны,
+`endEpochNanos >= startEpochNanos`.
+
 ## Gateway metrics
 
 | Instrument | Type | Unit | Единственные attributes |
@@ -204,10 +280,9 @@ finite allowlist; фактическая граница отмечена в cove
 | Metrics | Fixed instrument names, units and finite allowlisted attributes | Body, query, headers, session, identity/user/groups, PII values/spans, policy/user/tenant cardinality, raw exception class/message |
 | Traces | Defined lineage, session ID, method, path without query, status, durations, finite outcome flags | Body/preview, query, headers/credentials, PII values/spans, identity/user/groups, raw exception event/message/stack |
 
-Текущий SERVER и upstream CLIENT implementation вызывает `recordException`
-для некоторых transport failures. Поэтому запрет raw exception details в
-traces является сохраняемым target с явным implementation/evidence gap; он не
-ослабляется до фактического поведения этой documentation migration.
+SERVER и HTTP CLIENT transport diagnostics следуют
+[finite tracing contract](#transport-failure-tracing). Его выполнение не закрывает
+privacy/evidence gaps других каналов и внешнего telemetry storage.
 
 ## OTLP output and lifecycle
 

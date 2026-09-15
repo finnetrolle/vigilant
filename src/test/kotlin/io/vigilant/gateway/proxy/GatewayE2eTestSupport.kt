@@ -210,6 +210,8 @@ internal abstract class GatewayE2eTestSupport {
      * @param responseSseRewrite optional SSE rewriter used by source-map failure-mapping tests.
      * @param requestTransform optional server-side request replacement for transport-failure tests.
      * @param detectorBindings optional test-owned detector contributions for independent policy outcome fixtures.
+     * @param upstreamClient optional external transport seam; defaults to the fixture-owned client.
+     * @param tracer optional independently observed production or SDK tracer.
      * @param configureServer optional Armeria settings for lifecycle scenarios.
      */
     @Suppress("LongMethod", "LongParameterList")
@@ -252,6 +254,8 @@ internal abstract class GatewayE2eTestSupport {
         )? = null,
         requestTransform: ((HttpRequest) -> HttpRequest)? = null,
         detectorBindings: Map<DetectorId, Detector>? = null,
+        upstreamClient: WebClient? = null,
+        tracer: io.opentelemetry.api.trace.Tracer? = null,
         configureServer: ServerBuilder.() -> Unit = {},
     ): com.linecorp.armeria.server.Server {
         val requestExecutor =
@@ -277,7 +281,7 @@ internal abstract class GatewayE2eTestSupport {
         val responseAnalysisLifecycle = ResponseAnalysisLifecycle()
         val shadowService =
             PiiShadowProxyService(
-                bypassProxyService = BypassProxyService(upstreamUri, isolatedUpstreamClient()),
+                bypassProxyService = BypassProxyService(upstreamUri, upstreamClient ?: isolatedUpstreamClient()),
                 requestSourceQuota = quota,
                 protocol = protocol,
                 workflow = ShadowInspectionWorkflow(protocol, policyEngine, auditLogger,
@@ -300,10 +304,10 @@ internal abstract class GatewayE2eTestSupport {
                         source
                     },
             )
-        val tracerProvider = SdkTracerProvider.builder()
+        val effectiveTracer = tracer ?: SdkTracerProvider.builder()
             .addSpanProcessor(SimpleSpanProcessor.builder(spanExporter).build())
             .build()
-            .also(closeables::add)
+            .also(closeables::add).get("io.vigilant.gateway.test")
         val observedService =
             observeShadowService(
                 shadowService,
@@ -314,7 +318,7 @@ internal abstract class GatewayE2eTestSupport {
                 requestTransform,
             )
         val tracedService =
-            TracingService(observedService, tracerProvider.get("io.vigilant.gateway.test"))
+            TracingService(observedService, effectiveTracer)
         val publicService = meter?.let { MetricsService(tracedService, it) } ?: tracedService
         return fixture.startServer(
             publicService,
@@ -558,6 +562,22 @@ internal abstract class GatewayE2eTestSupport {
             reactions = PolicyReactions(detected, allow, allow),
             overrides = emptyList(),
         )
+    }
+
+    /** Waits for and verifies the canonical zero-reservation request-source invariant. */
+    protected fun assertSourceReservationsReleased(
+        quota: RequestSourceQuota,
+        terminalEvent: String,
+    ) {
+        assertTrue(
+            fixture.awaitUntil(Duration.ofSeconds(2)) {
+                quota.activeOwners == 0 && quota.retainedBytes == 0L && quota.retainedSegments == 0
+            },
+            "$terminalEvent left source reservations retained",
+        )
+        assertEquals(0, quota.activeOwners)
+        assertEquals(0L, quota.retainedBytes)
+        assertEquals(0, quota.retainedSegments)
     }
 
     /** Shared exact audit and HTTP contract constants for multiple behavior groups. */

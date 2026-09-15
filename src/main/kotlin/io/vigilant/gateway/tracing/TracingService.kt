@@ -1,5 +1,6 @@
 package io.vigilant.gateway.tracing
 
+import com.linecorp.armeria.common.ClosedSessionException
 import com.linecorp.armeria.common.HttpRequest
 import com.linecorp.armeria.common.HttpResponse
 import com.linecorp.armeria.common.HttpStatus
@@ -8,12 +9,12 @@ import com.linecorp.armeria.common.ResponseHeaders
 import com.linecorp.armeria.common.ResponseHeadersBuilder
 import com.linecorp.armeria.common.logging.RequestLog
 import com.linecorp.armeria.common.logging.RequestLogProperty
+import com.linecorp.armeria.common.stream.ClosedStreamException
 import com.linecorp.armeria.server.HttpService
 import com.linecorp.armeria.server.ServiceRequestContext
 import io.opentelemetry.api.common.AttributeKey
 import io.opentelemetry.api.trace.Span
 import io.opentelemetry.api.trace.SpanKind
-import io.opentelemetry.api.trace.StatusCode
 import io.opentelemetry.api.trace.Tracer
 import io.opentelemetry.api.trace.propagation.W3CTraceContextPropagator
 import io.opentelemetry.context.Context
@@ -139,8 +140,9 @@ class TracingService(
 
     /**
      * Completes the exchange from the final [RequestLog]: fills the response
-     * status and duration attributes, ends the span, and emits the single
-     * structured `request_completed` log line with the trace ID in the MDC.
+     * status and duration attributes, classifies terminal transport failure independently of
+     * headers, and ends the span once. A delivered safe HTTP response has no transport cause.
+     * The single structured `request_completed` log keeps its existing schema and correlation.
      */
     private fun completeExchange(ctx: ServiceRequestContext, span: Span, log: RequestLog) {
         val method = log.requestHeaders().method().name
@@ -156,11 +158,19 @@ class TracingService(
         span.setAttribute(GATEWAY_DURATION_MS, gatewayDurationMs)
 
         val status = if (log.isAvailable(RequestLogProperty.RESPONSE_HEADERS)) {
-            log.responseHeaders().status().code().toLong().also { span.setAttribute(STATUS, it) }
+            log.responseHeaders().status().takeUnless { it == HttpStatus.UNKNOWN }
+                ?.code()?.toLong()?.also { span.setAttribute(STATUS, it) }
         } else {
-            span.setStatus(StatusCode.ERROR)
-            log.responseCause()?.let(span::recordException)
             null
+        }
+        val failure = log.responseCause() ?: log.requestCause().takeIf { status == null }
+        failure?.let {
+            val outcome = if (isPeerClose(it) && isPeerClose(ctx.cancellationCause())) {
+                TransportFailure.CANCELLED
+            } else {
+                TransportFailure.from(it)
+            }
+            outcome.record(span)
         }
         span.end()
 
@@ -175,6 +185,10 @@ class TracingService(
                 .log("request completed: $method $path")
         }
     }
+
+    /** Identifies transport closure only at the accepted HTTP connection's cancellation boundary. */
+    private fun isPeerClose(cause: Throwable?): Boolean =
+        cause is ClosedStreamException || cause is ClosedSessionException
 
     /**
      * Builds the human-readable span name from the method and the query-free

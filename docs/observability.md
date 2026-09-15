@@ -170,7 +170,7 @@ Bridge spans или links. Shared span сохраняет parent инициат�
 Оба INTERNAL span и upstream CLIENT являются прямыми children SERVER span. External
 identity CLIENT является child request inspection span. Request inspection
 завершается на terminal request workflow;
-CLIENT span живёт до завершения upstream exchange, response inspection span — до final
+CLIENT span живёт до завершения upstream exchange, response inspection span - до final
 response outcome. Основные SERVER, request/response INTERNAL и upstream CLIENT
 spans одного HTTP request несут его trace ID и attribute `session.id`; shared
 identity CLIENT сохраняет trace ID создателя lookup и finite identity attributes.
@@ -182,11 +182,19 @@ SERVER span также содержит method, path без query, status,
 добавляются. Gateway-owned health/readiness probes не проходят через tracing
 decorator.
 
-При transport failure current SERVER и upstream CLIENT paths вызывают OTel
-`recordException`, поэтому exporter может получить exception type/message/stack.
-Это фактический privacy gap относительно
-[channel matrix](../spec/requirements/observability.md#privacy-by-channel), а не
-разрешённое исключение из target.
+Transport diagnostics записываются через tracing-only `TransportFailure`:
+`vigilant.transport.failure=timeout|cancelled|transport_error`. Timeout и transport
+error имеют `ERROR`, cancellation имеет `UNSET`; description пустой. Raw exception
+recording отсутствует. Exact schema, type/wrapper bounds и terminal semantics
+принадлежат [tracing owner](../spec/requirements/observability.md#transport-failure-tracing).
+
+`BypassProxyService` публикует CLIENT outcome из terminal upstream response;
+`TracingService` отдельно читает final `RequestLog` SERVER. Доставленный safe HTTP
+response не переносит upstream failure на SERVER. Обрыв после headers остаётся
+transport failure; peer closure подтверждается cancellation cause серверного
+context. Завершённый CLIENT не меняется при поздней отмене response inspection
+или replay. Runtime использует существующие once-only futures владельцев,
+без дополнительной очереди, executor или exporter wrapper.
 
 ### Correlation в application logs
 

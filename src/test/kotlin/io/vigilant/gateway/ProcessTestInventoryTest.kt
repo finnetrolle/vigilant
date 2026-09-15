@@ -333,6 +333,8 @@ class ProcessTestInventoryTest {
 
         /** Suites whose every JUnit method or dynamic descendant owns child-process execution. */
         val classOwners = mapOf(
+            "src/test/kotlin/io/vigilant/gateway/TransportTracePrivacyProcessTest.kt" to
+                "TransportTracePrivacyProcessTest",
             "src/test/kotlin/io/vigilant/gateway/ExternalIdentityProcessTest.kt" to "ExternalIdentityProcessTest",
             "src/test/kotlin/io/vigilant/gateway/MainTest.kt" to "MainTest",
             "src/test/kotlin/io/vigilant/gateway/PiiShadowProxyProcessTest.kt" to "PiiShadowProxyProcessTest",
