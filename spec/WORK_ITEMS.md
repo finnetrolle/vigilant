@@ -154,7 +154,6 @@ context sources. Само решение хранится один раз в own
 | [EPIC-06: OpenAI Responses protocol scope](epics/epic_06_llm_message_parsing.md) | `Draft` | 0/0 | Responses вне MVP; нет implementation-ready leaves |
 | [VIG-44: Исследовать и исправить нарушения strict parsing](issues/issue_44_strict_parsing_investigation.md) | `Draft` | нужна rejection matrix и декомпозиция | 1 день исследования |
 | [VIG-45: Проверять текстовый reasoning в ответах Chat Completions](issues/issue_45_response_reasoning_inspection.md) | `In progress` | audit type R10 согласован; privacy assertions ожидают полный набор spans | 2-3 дня |
-| [VIG-46: Оценить текущее качество детекции PII](issues/issue_46_current_pii_quality_evaluation.md) | `Ready for implementation` | Pinned inputs и reporting seams проверены; общий замер определён | 1-2 дня |
 
 ## Active TODO: порядок следующей работы
 
@@ -183,13 +182,10 @@ context sources. Само решение хранится один раз в own
 [проверки](../docs/transport-trace-evidence.md) разделяют SDK, exporter и installed stdout.
 [EPIC-06](epics/epic_06_llm_message_parsing.md) остаётся вне MVP и `Draft`.
 
-После VIG-45 следует выполнить
-[VIG-46: оценку текущего детектора](issues/issue_46_current_pii_quality_evaluation.md).
-[HiveTrace benchmark](../docs/development.md#hivetrace-pii-benchmark) и
-[AdvPIIBench](../docs/development.md#advpiibench-adversarial-benchmark) доступны;
-их подключение завершено. Hard dependencies VIG-46 выполнены; readiness общего
-замера проверена 2026-09-16, статус `Ready for implementation`. Общий snapshot,
-матрица отчётов и правила интерпретации закреплены в issue.
+Текущий [baseline качества детектора](../docs/pii-quality-evaluation.md)
+зафиксирован 2026-09-16: четыре свежих корпуса на общем snapshot, полные
+агрегированные таблицы, ограничения и приоритеты последующего исследования.
+Он не меняет runtime rules и не закрывает оставшуюся проверку reasoning.
 
 Исследование strict parsing в [VIG-44](issues/issue_44_strict_parsing_investigation.md)
 остаётся открытым в `Draft`: до реализации нужны exact rejection matrix и

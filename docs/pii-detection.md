@@ -122,6 +122,13 @@ adapter сохраняет именно этот global order и всегда д
 
 ## Свидетельства качества
 
+[Baseline от 16 сентября 2026](pii-quality-evaluation.md) фиксирует свежие
+canonical, RedMadRobot, HiveTrace и AdvPIIBench reports одной реализации:
+полные per-type/scoped метрики, document FPR, provenance и воспроизведение.
+Source-aligned exact recall: RedMadRobot 32,32%, HiveTrace 88,13%; AdvPIIBench
+baseline 72,51%, атакованные варианты 0%. Это прямой detector benchmark;
+он не подтверждает gateway completeness, production traffic quality или JMH.
+
 Обычная задача `test` включает канонический синтетический набор положительных
 и сложных отрицательных примеров, а также контрактные тесты и тесты свойств.
 Читаемый человеком отчёт создаётся командой:
