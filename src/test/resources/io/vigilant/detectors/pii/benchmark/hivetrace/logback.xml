@@ -1,0 +1,4 @@
+<configuration>
+    <!-- External-data libraries may log source metadata; explicit benchmark processes emit only safe stdout summaries. -->
+    <root level="OFF"/>
+</configuration>

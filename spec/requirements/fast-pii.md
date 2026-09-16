@@ -322,6 +322,19 @@ product-aligned view допускает только заранее заданн
 adjustments, с версиями и counts до scoring. Правила и воспроизведение:
 [external methodology](../../docs/development.md#external-pii-benchmark).
 
+HiveTrace PII-Bench RU - отдельный pinned external/non-gating benchmark.
+Source-aligned view сохраняет опубликованные mapped spans и исходные границы.
+Product-aligned v1 исключает только десятизначный ASCII INN gold как
+`LEGAL_ENTITY_INN_TAXONOMY_MISMATCH`; checksum-invalid значения и паспортные
+spans сохраняются, predictions не фильтруются. Clean subset определяется
+исходным пустым `entities`, до mapping/adjustments. Document FPR публикуется
+с numerator/denominator и `null` при нулевом denominator. Entity/domain и
+каждый domain code оцениваются отдельно; Full суммирует TP/FP/FN до ratios,
+не представляет production traffic и не создаёт tuning/evaluation partitions.
+Обычные build/test не скачивают corpus и не выполняют benchmark. Точная
+адаптация, pinned integrity/coverage и воспроизведение принадлежат
+[HiveTrace methodology](../../docs/development.md#hivetrace-pii-benchmark).
+
 Qualification использует отдельный canonical reference `redmadrobot-ip-canonical-v2`:
 исходный mapped gold с нормализацией целых upstream `IP_ADDRESS` entities вида
 canonical IPv4 + decimal port до address-only span, плюс независимо размеченные

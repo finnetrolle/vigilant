@@ -1,6 +1,7 @@
 package io.vigilant.gateway.tracing
 
 import com.linecorp.armeria.client.ClientFactory
+import com.linecorp.armeria.client.ClientRequestContext
 import com.linecorp.armeria.client.WebClient
 import com.linecorp.armeria.common.HttpData
 import com.linecorp.armeria.common.HttpResponse
@@ -131,11 +132,15 @@ internal class TransportTraceLifecycleE2eTest : GatewayE2eTestSupport() {
         } finally { response.abort() }
     }
 
-    /** Finite HTTP/2 receive window and demand hold SERVER replay while the upstream span is finished. */
+    /**
+     * Finite HTTP/2 receive window and demand hold SERVER replay while the upstream span is finished.
+     * The 512 KiB payload exceeds the 64 KiB connection window and limits fixture source-map allocations.
+     * Client-loop cancellation cannot race the decoder into rejecting an in-flight DATA frame.
+     */
     private fun replayCancellation(route: TraceRoute) {
         val probe = TransportTraceProbe().also(closeables::add)
         val source = CompletableFuture<RetainedResponseSource>()
-        val body = route.body().replace("synthetic-response-42", "synthetic-response-42" + "a".repeat(2 * 1024 * 1024))
+        val body = route.body().replace("synthetic-response-42", "synthetic-response-42" + "a".repeat(512 * 1024))
         val upstream = fixture.startServer {
             HttpResponse.of(ResponseHeaders.builder(200).contentType(route.mediaType()).build(), HttpData.ofUtf8(body))
         }
@@ -144,21 +149,27 @@ internal class TransportTraceLifecycleE2eTest : GatewayE2eTestSupport() {
             identitySettings = DummyIdentitySettings("synthetic-user-42", setOf("synthetic-group-42")))
         val factory = ClientFactory.builder().http2InitialStreamWindowSize(1024)
             .http2InitialConnectionWindowSize(65535).build().also(closeables::add)
+        val clientContext = CompletableFuture<ClientRequestContext>()
         val session = "replay-$route"
-        val response = WebClient.builder("h2c://127.0.0.1:${server.activeLocalPort()}").factory(factory).build()
+        val response = WebClient.builder("h2c://127.0.0.1:${server.activeLocalPort()}").factory(factory)
+            .decorator { delegate, ctx, request ->
+                clientContext.complete(ctx)
+                delegate.execute(ctx, request)
+            }.build()
             .execute(traceRequest(route, session))
         val observation = TransportTraceStream(response, demand = 2)
         try {
+            val status = observation.headers.get(5, TimeUnit.SECONDS).status().code()
+            assertEquals(200, status, "H14 $route must reach replay")
             val prefix = observation.firstBody.get(5, TimeUnit.SECONDS)
             assertTrue(body.startsWith(prefix))
             assertTrue(prefix.length < body.length)
-            assertEquals(200, observation.headers.get(5, TimeUnit.SECONDS).status().code())
             assertTrue(fixture.awaitUntil(Duration.ofSeconds(5)) {
                 probe.records(session).any { it.kind == "CLIENT" }
             })
             val old = probe.records(session).single()
             assertEquals("CLIENT", old.kind)
-            response.abort()
+            clientContext.get(5, TimeUnit.SECONDS).eventLoop().submit { response.abort() }.get(5, TimeUnit.SECONDS)
             assertNotNull(observation.terminal.get(5, TimeUnit.SECONDS))
             val records = probe.await(fixture, session, 2)
             assertEquals(old, records.single { it.kind == "CLIENT" })

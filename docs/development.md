@@ -478,6 +478,107 @@ Reports `redmadrobot-pii-benchmark.json` и `.md` находятся тольк�
 Preparation/benchmark не запускаются стандартными `build`/`test`, не требуют
 сети от обычных tests и не vendor-ят внешний dataset.
 
+### HiveTrace PII benchmark
+
+`prepareHiveTracePiiCorpus` и `hiveTracePiiBenchmark` - явные external/non-gating
+seams для [HiveTrace PII-Bench RU](https://huggingface.co/datasets/hivetrace/pii-bench).
+Они не запускаются обычными `build`/`test`, не меняют recognizer behavior и не
+задают release threshold. Apache Parquet reader и его Hadoop dependencies
+доступны только в test classpath; `piiProductionRuntimeClasspathCheck`
+проверяет их отсутствие в production. Dataset остаётся только под `build/`
+либо во внешнем offline-каталоге, без добавления в Git.
+
+~~~bash
+./gradlew hiveTracePiiBenchmark
+./gradlew hiveTracePiiBenchmark \
+  -PhiveTracePiiCorpusDirectory=/absolute/path/to/hivetrace
+~~~
+
+Offline-каталог должен содержать оба файла:
+`entity-00000-of-00001.parquet` и `domain-00000-of-00001.parquet`.
+[Metadata resource](../src/test/resources/io/vigilant/detectors/pii/benchmark/hivetrace/metadata.properties)
+владеет immutable revision `cd6a18ace16daf23e79247ccf1e2b245d4054654`, exact URL,
+size, SHA-256 и независимо квалифицированными counts каждого файла.
+Upstream license declaration `Apache-2.0` и attribution `HiveTrace PII-Bench RU`
+являются metadata, а не юридической оценкой.
+
+Download, offline import и повторное использование кеша выполняют одинаковую
+проверку size/SHA-256 до parsing. Каждый файл публикуется через временный файл
+и атомарный rename там, где filesystem поддерживает его; неудачная загрузка
+удаляет временный файл. Валидный первый split может остаться в кеше после сбоя
+второго, но полный benchmark требует оба корректных файла и повторно проверяет
+их перед открытием первого reader. Offline input с ошибкой не заменяется
+скачиванием. HTTP connection и streams закрываются на каждом пути завершения;
+размер загрузки ограничен закреплённым размером, connect/read timeouts заданы.
+
+Adapter проверяет точную Parquet schema: `id`, `domain`, `text` как UTF-8 strings
+и `entities: list<struct<end:int64,start:int64,text:string,type:string>>`.
+Null required values, повторный ID внутри split, неизвестный label/domain,
+неверные границы или несовпадение `entities[].text` отклоняют целую запись.
+Offsets - Unicode code-point indices, которые переводятся в исходные UTF-8
+byte offsets; case folding, Unicode normalization и реконструкция текста
+отсутствуют. `L-DIALOG` передаётся детектору как целая строка, без разбора
+вложенного JSON. Нечитаемый файл/схема дают safe failure; сообщения и causes
+библиотек не публикуются. В явных benchmark processes библиотечные логи отключены
+[отдельной конфигурацией](../src/test/resources/io/vigilant/detectors/pii/benchmark/hivetrace/logback.xml).
+
+Mapping: `EMAIL -> EMAIL_ADDRESS`, `PHONE_NUMBER -> PHONE_NUMBER`,
+`BANK_CARD_NUMBER -> PAYMENT_CARD`, `INN -> RU_INN`, `SNILS -> RU_SNILS`,
+`PASSPORT_NUMBER -> RU_PASSPORT`. `NAME`, `ADDRESS`, `CVC`, `KPP`, `OGRN`,
+`OGRNIP`, `TOKEN` остаются unsupported с явными source counts.
+`IP_ADDRESS`, `IBAN`, `RU_OMS` обозначаются `not covered`.
+`FastPiiDetector.detect` получает исходный text, `stopOnFirst=false` и ровно
+шесть mapped types. Эти enabled types опубликованы для metrics и clean FPR.
+
+Source-aligned gold сохраняет все mapped source spans, включая checksum-invalid
+значения и все опубликованные паспортные формы. Product-aligned v1 применяет
+только `LEGAL_ENTITY_INN_TAXONOMY_MISMATCH`: исключает gold `INN`, состоящий
+ровно из десяти ASCII digits. Двенадцатизначные ИНН остаются независимо от
+checksum; паспортные spans не меняются и не объединяются. Predictions
+сохраняются в обоих views. Версия, provenance и zero/nonzero counts adjustment
+публикуются. RedMadRobot passport merge и frozen partitions сюда не переносятся.
+
+| Split | Total / processed | Rejected | Clean | Source spans | Mapped | Unsupported | Product |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| entity | 910 | 0 | 0 | 910 | 420 | 490 | 420 |
+| domain | 900 | 0 | 378 | 757 | 397 | 360 | 369 |
+| Full | 1810 | 0 | 378 | 1667 | 817 | 850 | 789 |
+
+Полный прогон проверяет эти counts, source-type counts из metadata и по 100
+записей каждого domain code: `L-CHAT`, `L-DIALOG`, `S-AUTO`, `S-BANK`,
+`S-DELIVERY`, `S-HR`, `S-RE`, `S-SUPPORT`, `S-TELECOM`. Расхождение не позволяет
+опубликовать прогон как полный. Coverage отдельно показывает total/processed,
+rejected reasons, mapped/unsupported/product spans; source-span counts относятся
+к processed records, invalid rows не участвуют в частичном scoring.
+
+`PiiQualityScorer` применяет общий [exact/relaxed contract](../spec/requirements/fast-pii.md#quality):
+maximum-cardinality one-to-one matching внутри case/type, per-type и micro
+aggregate TP/FP/FN/P/R/F1 для обоих views. Отдельные scopes - `entity`, `domain`
+и каждый domain code. Дополнительный `Full` суммирует confusion counts до
+вычисления ratios; F1 разных splits не усредняются. Состав смеси явно указан,
+она не объявляется распределением production traffic или tuning/evaluation split.
+
+Clean subset определяется только исходным пустым `entities`, до mapping и
+adjustments. Document FPR = clean records с хотя бы одним finding / processed
+clean records. Для полного `domain` denominator равен 378; у каждого domain
+свой clean count. Для `entity` denominator 0 и ratio `null`/`N/A`. Entity FP
+публикуются отдельно. Unsupported-only records не считаются чистыми.
+
+`build/reports/pii/hivetrace/hivetrace-pii-benchmark.json` и `.md` строятся
+из одной aggregate-only модели. Они содержат provenance, mapping, enabled types,
+coverage, adjustments и metrics, без case IDs, raw text, matched values,
+индивидуальных spans, tokens, candidates или обратимых fingerprints.
+Дополнительный mismatch breakdown отсутствует; при его добавлении применяется
+[privacy floor external methodology](#external-pii-benchmark).
+
+Synthetic fixtures создают настоящие Parquet-файлы без внешних данных:
+
+~~~bash
+./gradlew test -x processTest \
+  --tests 'io.vigilant.detectors.pii.benchmark.hivetrace.*' \
+  --tests 'io.vigilant.detectors.pii.quality.PiiQualityScorerTest'
+~~~
+
 ### PII contract checks
 
 Обязательная matrix ниже задаёт проверяемые cases, а не утверждает наличие

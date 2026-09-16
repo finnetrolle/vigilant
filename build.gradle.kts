@@ -58,6 +58,9 @@ dependencies {
     implementation(libs.typesafe.config)
 
     testImplementation(kotlin("test"))
+    testImplementation(libs.parquet.hadoop)
+    testImplementation(libs.hadoop.client.api)
+    testRuntimeOnly(libs.hadoop.client.runtime)
     add("gatlingImplementation", libs.armeria)
 }
 
@@ -329,6 +332,35 @@ tasks.register<JavaExec>("inspectionResourceQualification") {
     outputs.upToDateWhen { false }
 }
 
+val hiveTracePreparedDirectory = layout.buildDirectory.dir("hivetrace-pii")
+val hiveTraceOfflineDirectory = providers.gradleProperty("hiveTracePiiCorpusDirectory")
+val prepareHiveTracePiiCorpus = tasks.register<JavaExec>("prepareHiveTracePiiCorpus") {
+    dependsOn(tasks.named("testClasses"))
+    group = "verification"
+    description = "Downloads or imports and verifies both pinned HiveTrace Parquet files."
+    classpath = sourceSets.test.get().runtimeClasspath
+    systemProperty("logback.configurationFile", "io/vigilant/detectors/pii/benchmark/hivetrace/logback.xml")
+    mainClass.set("io.vigilant.detectors.pii.benchmark.hivetrace.HiveTraceCorpusPreparationMain")
+    inputs.file("src/test/resources/io/vigilant/detectors/pii/benchmark/hivetrace/metadata.properties")
+    inputs.property("offlineDirectory", hiveTraceOfflineDirectory.orElse(""))
+    outputs.dir(hiveTracePreparedDirectory)
+    outputs.upToDateWhen { false }
+    args(hiveTracePreparedDirectory.get().asFile.absolutePath, hiveTraceOfflineDirectory.orNull.orEmpty())
+}
+
+tasks.register<JavaExec>("hiveTracePiiBenchmark") {
+    dependsOn(prepareHiveTracePiiCorpus)
+    group = "verification"
+    description = "Runs the explicit non-gating HiveTrace PII benchmark."
+    classpath = sourceSets.test.get().runtimeClasspath
+    systemProperty("logback.configurationFile", "io/vigilant/detectors/pii/benchmark/hivetrace/logback.xml")
+    mainClass.set("io.vigilant.detectors.pii.benchmark.hivetrace.HiveTraceBenchmarkMain")
+    args(
+        hiveTracePreparedDirectory.get().asFile.absolutePath,
+        layout.buildDirectory.dir("reports/pii/hivetrace").get().asFile.absolutePath,
+    )
+}
+
 val redMadRobotMetadataFile =
     layout.projectDirectory.file(
         "src/test/resources/io/vigilant/detectors/pii/benchmark/redmadrobot/metadata.properties",
@@ -498,7 +530,7 @@ tasks.register<JavaExec>("piiQualityQualification") {
 
 val piiProductionRuntimeClasspathCheck = tasks.register("piiProductionRuntimeClasspathCheck") {
     group = "verification"
-    description = "Verifies that JMH remains absent from the production runtime classpath."
+    description = "Verifies that benchmark dependencies remain absent from the production runtime classpath."
 
     doLast {
         val forbiddenComponents =
@@ -512,14 +544,15 @@ val piiProductionRuntimeClasspathCheck = tasks.register("piiProductionRuntimeCla
                 .filter { module ->
                     module.group == "org.openjdk.jmh" ||
                         module.group == "me.champeau.jmh" ||
-                        module.name.startsWith("jmh-")
+                        module.name.startsWith("jmh-") ||
+                        module.group == "org.apache.parquet" || module.group == "org.apache.hadoop"
                 }.map { module -> "${module.group}:${module.name}:${module.version}" }
                 .sorted()
 
         check(forbiddenComponents.isEmpty()) {
-            "JMH leaked into production runtimeClasspath: ${forbiddenComponents.joinToString()}"
+            "Benchmark dependency leaked into production runtimeClasspath: ${forbiddenComponents.joinToString()}"
         }
-        logger.lifecycle("Production runtimeClasspath contains no JMH components.")
+        logger.lifecycle("Production runtimeClasspath contains no JMH, Parquet or Hadoop components.")
     }
 }
 
