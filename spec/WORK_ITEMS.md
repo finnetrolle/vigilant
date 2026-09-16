@@ -153,6 +153,7 @@ context sources. Само решение хранится один раз в own
 |---|---|---:|---:|
 | [EPIC-06: OpenAI Responses protocol scope](epics/epic_06_llm_message_parsing.md) | `Draft` | 0/0 | Responses вне MVP; нет implementation-ready leaves |
 | [VIG-44: Исследовать и исправить нарушения strict parsing](issues/issue_44_strict_parsing_investigation.md) | `Draft` | нужна rejection matrix и декомпозиция | 1 день исследования |
+| [VIG-45: Проверять текстовый reasoning в ответах Chat Completions](issues/issue_45_response_reasoning_inspection.md) | `Ready for implementation` | scope согласован; JSON/SSE contract и evidence matrix готовы | 2-3 дня |
 | [VIG-46: Оценить текущее качество детекции PII](issues/issue_46_current_pii_quality_evaluation.md) | `Draft` | HiveTrace и AdvPIIBench готовы; нужен единый snapshot и раздельные отчёты | 1-2 дня |
 
 ## Active TODO: порядок следующей работы
@@ -173,14 +174,15 @@ context sources. Само решение хранится один раз в own
 4. Не начинать новый пункт, пока предыдущий hard gate не завершён и
    `./gradlew validateWorkItems` не подтверждает согласованность реестра.
 
-Готовых к реализации задач сейчас нет. Текущий следующий шаг: исследовать
-[VIG-44](issues/issue_44_strict_parsing_investigation.md).
-Безопасная transport-диагностика traces принадлежит
+Текущий следующий шаг: реализовать
+[VIG-45](issues/issue_45_response_reasoning_inspection.md), проверку reasoning
+для подключения Filin. Scope согласован, задача готова к реализации
+без hard dependencies. Безопасная transport-диагностика traces принадлежит
 [observability owner](requirements/observability.md#transport-failure-tracing);
 [проверки](../docs/transport-trace-evidence.md) разделяют SDK, exporter и installed stdout.
 [EPIC-06](epics/epic_06_llm_message_parsing.md) остаётся вне MVP и `Draft`.
 
-Следует уточнить и выполнить
+После VIG-45 следует уточнить и выполнить
 [VIG-46: оценку текущего детектора](issues/issue_46_current_pii_quality_evaluation.md).
 [HiveTrace benchmark](../docs/development.md#hivetrace-pii-benchmark) и
 [AdvPIIBench](../docs/development.md#advpiibench-adversarial-benchmark) доступны;

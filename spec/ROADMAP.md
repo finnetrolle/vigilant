@@ -77,6 +77,8 @@ qualification без fallback. Historical durations или percentage improvemen
 Delivery order определяется
 [active registry](WORK_ITEMS.md#active-todo-порядок-следующей-работы):
 
+Реализовать проверку reasoning в
+[VIG-45](issues/issue_45_response_reasoning_inspection.md).
 Исследование strict parsing остаётся открытым в Draft
 [VIG-44](issues/issue_44_strict_parsing_investigation.md).
 Безопасная transport-диагностика SERVER/CLIENT следует
