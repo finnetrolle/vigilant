@@ -1181,10 +1181,10 @@ partial result/source preview. Правила KDoc и lifecycle tests дейст
   method/path/media/transport/version и no source access при mismatch.
   Invalid UTF-8/JSON, duplicate keys на каждом уровне, missing/invalid types,
   ambiguity, exact depth/fragment boundaries и cancellation.
-- Ordinary response: content/refusal/calls/audio, missing/null/empty branches,
+- Ordinary response: content/refusal/reasoning_content/calls/audio, missing/null/empty branches,
   canonical order, gaps/coverage и every malformed/ambiguous shape.
 - SSE: LF/CRLF, comments, empty и multi-line data, interleaved choices и tool
-  calls, content/refusal/modern/deprecated arguments; canonical concatenation,
+  calls, content/refusal/reasoning_content/modern/deprecated arguments; canonical concatenation,
   standalone DONE, EOF, incomplete/mixed/extra terminal, duplicate/missing
   indices, repeated incompatible shapes, unknown event/content, provider error,
   transport error и cancellation без partial state.
@@ -1233,11 +1233,11 @@ ephemeral port не резервируется повторно.
 - Atomic response: ordinary EOF и standalone SSE `[DONE]`; отсутствие client
   status/header/body до upstream terminal и detector decision; `ALLOW`, `MASK`,
   `BLOCK`, invalid upstream и inspection failure без partial disclosure.
-- Ordinary JSON: `200`/`429`/`500`; content, refusal, modern/deprecated
+- Ordinary JSON: `200`/`429`/`500`; content, refusal, reasoning_content, modern/deprecated
   arguments и audio transcript; only-gap, clean+gap, detected+gap MASK/BLOCK;
   Unicode, escapes, unknown fields/order/formatting, source maps и invalid
   locators/boundaries.
-- SSE: все четыре logical field classes, interleaved choice/tool indexes,
+- SSE: все пять logical field classes, interleaved choice/tool indexes,
   inside-event и cross-event spans, multiple/adjacent/overlapping masks,
   LF/CRLF, comments, multi-line data, empty covered values, Unicode/escapes,
   unknown metadata и deterministic repeat.

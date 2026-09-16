@@ -96,11 +96,12 @@ Structural parse и detector не повторяются; whole-body copy и DTO
 
 `ChatCompletionsResponseParser` поддерживает ordinary JSON и SSE response
 через единый public typed result и один parse pass. Runtime полностью
-удерживает ordinary/SSE response до EOF или standalone `data: [DONE]`,
+удерживает ordinary/SSE response до HTTP EOF; SSE дополнительно требует
+standalone `data: [DONE]` и валидный остаток source. Затем runtime
 проверяет protocol и применяет один response policy workflow. Ordinary JSON
-извлекает каждый string `choices[].message.content`, `refusal`, modern/deprecated
+извлекает каждый string `choices[].message.content`, `refusal`, `reasoning_content`, modern/deprecated
 function arguments и `audio.transcript`. SSE собирает independent
-`delta.content`, `delta.refusal`, modern tool arguments и deprecated function
+`delta.content`, `delta.refusal`, `delta.reasoning_content`, modern tool arguments и deprecated function
 arguments, не смешивая choices, semantic fields и tool calls.
 
 Response policy выбирает exact byte-for-byte `ALLOW`, source-patched `MASK` или
@@ -111,3 +112,13 @@ Missing/malformed terminal, malformed protocol и upstream interruption дают
 `502 invalid_upstream_response` без partial disclosure. Detector/rewrite failure или
 timeout дают safe `503 response_inspection_unavailable`. Каждый реально
 проанализированный ordinary/SSE response публикует safe RESPONSE audit pair.
+
+Plaintext `reasoning_content` нормализуется как отдельный `REASONING`. JSON
+проверяет его после content/refusal, SSE конкатенирует string deltas отдельно
+по choice index. Empty string резервирует порядок SSE buffer, null не создаёт
+buffer; полностью пустой buffer отбрасывается. Текст reasoning проверяется
+также без final content. Generic JSON/SSE source maps обеспечивают точный MASK,
+включая email через несколько reasoning events; rewriters не выбирают поля
+по имени. Никакие aliases, request history или opaque reasoning не добавлены.
+Реальные Armeria observations и граница synthetic compatibility fixture
+описаны в [reasoning evidence](response-reasoning-evidence.md).

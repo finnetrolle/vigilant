@@ -2,7 +2,7 @@
 
 - **ID:** `VIG-45`
 - **Тип:** Issue
-- **Статус:** Ready for implementation
+- **Статус:** In progress
 - **Приоритет:** P1
 - **Зависит от:** нет
 - **Выполненные предпосылки:** [response parsing](../requirements/chat-completions-protocol.md#response-descriptor), [RESPONSE enforcement](../requirements/response-enforcement.md#atomic-boundary)
@@ -13,6 +13,13 @@
 
 ## Контекст
 
+Реализация подготовлена. Уточнение R10 согласовано пользователем 2026-09-16
+при разрешении исправить findings верификации: прежнее `EMAIL:1` было
+опечаткой; сохраняется действующий fast-pii audit `EMAIL_ADDRESS:1` без
+изменения telemetry schema. Исходная согласованная версия issue сохранена
+в Git. Privacy assertions ожидают полный набор spans каждого HTTP exchange;
+результат актуальной верификации фиксируется отдельно от этого контракта.
+
 Задача возникла при подготовке цепочки Filin OpenClaw -> Vigilant -> LiteLLM.
 В исследованной локальной конфигурации Filin выбрана Qwen3.6-27B-FP8 и включён
 `OPENCLAW_MODEL_REASONING=true`. Харнес запрашивает thinking и поддерживает
@@ -20,7 +27,7 @@ SSE `choices[].delta.reasoning_content`. Синтетический fixture Fili
 содержит такое поле. Реальный ответ корпоративного LiteLLM в этом исследовании
 не снимался; наличие поля в каждом ответе модели не утверждается.
 
-Текущее поведение Vigilant подтверждено чтением исходников:
+Поведение Vigilant до реализации подтверждено чтением исходников:
 
 - `ChatCompletionsResponseParser.ResponseCollector.collectChoice` не извлекает
   `message.reasoning_content` из ordinary JSON, поэтому текст в этом поле
@@ -45,7 +52,7 @@ SSE `choices[].delta.reasoning_content`. Синтетический fixture Fili
 4. **Явные non-goals:** request-side aliases и история reasoning в запросах; поля `reasoning`, `reasoning_text`, `reasoning_details` в ответах; encrypted/opaque reasoning; Responses/Anthropic API; новый detector или оценка качества reasoning; live streaming до завершения проверки; изменение buffering, timeouts, quotas, identity, policy schema или deployment. Подключение и запуск Filin не входят в issue.
 5. **Более сложные альтернативы:** универсальный provider adapter или schema registry не нужны для двух известных paths. Поиск текста в произвольных неизвестных fields создаёт неоднозначность. Удаление reasoning или forwarding без inspection не достигает цели. Добавление reasoning к `content` теряет semantic boundary и изменяет исходный response.
 6. **Условие пересмотра:** воспроизводимый совместимый response Filin/LiteLLM требует другой content-bearing shape либо ожидаемый результат не укладывается в существующие source maps. До расширения scope зафиксировать отдельный fixture и согласовать изменение; не добавлять aliases или silent fallback автоматически.
-7. **Подтверждение:** пользователь 2026-09-15 ответом «подтверждаю. давай проработаем задачу» утвердил предложенную границу: `reasoning_content` в JSON/SSE responses, существующие ALLOW/MASK/BLOCK и буферизация, без request history, других reasoning formats и подключения Filin. Контракт ниже конкретизирует эту границу. Scope lock закрыт; runtime implementation ещё не начата.
+7. **Подтверждение:** пользователь 2026-09-15 ответом «подтверждаю. давай проработаем задачу» утвердил предложенную границу: `reasoning_content` в JSON/SSE responses, существующие ALLOW/MASK/BLOCK и буферизация, без request history, других reasoning formats и подключения Filin. Контракт ниже конкретизирует эту границу. Scope lock закрыт.
 
 ## Согласованный контракт
 
@@ -115,7 +122,7 @@ workflow. Его findings участвуют в текущей агрегаци�
 
 При единственной применённой RESPONSE policy, одном reasoning fragment с
 одним email и без других текстовых fragments успешный анализ даёт
-`fragments.inspected=1`, `findings.total=1`, `findings.by_type=EMAIL:1`,
+`fragments.inspected=1`, `findings.total=1`, `findings.by_type=EMAIL_ADDRESS:1`,
 `coverage=FULLY_INSPECTABLE`, `outcome=DETECTED` и выбранную
 `reaction=ALLOW|MASK|BLOCK`. Несколько deltas этого reasoning не увеличивают
 число fragments/findings. При detector error outcome=ERROR, reaction отсутствует.
@@ -229,11 +236,11 @@ source coordinates и typed failures. Корпоративный LiteLLM, дос
 | `R10_PRIVACY`: reasoning-only finding при ALLOW/MASK/BLOCK и detector error, оба transports | HTTP + captured audit/trace output | Одна RESPONSE audit pair после начатого analysis; успешные counts/outcome/reaction заданы выше, ERROR без reaction; reasoning sentinels отсутствуют в telemetry/errors | Один email, один fragment; literal safe metadata, unique synthetic sentinel, исправно принимающий test sink и bounded await logger/exporter completion |
 
 - [x] Scope lock согласован 2026-09-15; boundary и независимые примеры закрыты для передачи в реализацию.
-- [ ] Получен behavioral RED `R1_SSE_MASK`: отказ именно из-за неизвестного reasoning field, а не fixture/compilation failure. Для `R1_JSON_MASK` показано отсутствие требуемого masking; затем те же tests GREEN.
+- [x] Получен behavioral RED `R1_SSE_MASK`: отказ именно из-за неизвестного reasoning field, а не fixture/compilation failure. Для `R1_JSON_MASK` показано отсутствие требуемого masking; затем те же tests GREEN.
 - [ ] Выполнены `R1`-`R10`; green parser tests не заменяют HTTP inspection evidence.
-- [ ] Сохраняются существующие regression cases content/refusal/tool arguments, unknown SSE content-bearing field rejection, JSON/SSE terminal rules и request reasoning object/gap.
-- [ ] Обновлены permanent protocol field map, RESPONSE fragment list, runtime docs и requirements coverage; до реализации эти документы не объявляют новый contract доступным.
-- [ ] Выполнены focused checks, detekt и текущий full build по project workflow.
+- [x] Сохраняются существующие regression cases content/refusal/tool arguments, unknown SSE content-bearing field rejection, JSON/SSE terminal rules и request reasoning object/gap.
+- [x] Обновлены permanent protocol field map, RESPONSE fragment list, runtime docs и requirements coverage; до реализации эти документы не объявляют новый contract доступным.
+- [x] Выполнены focused checks, detekt и текущий full build по project workflow.
 
 ## Последовательность реализации
 
@@ -269,7 +276,7 @@ Focused после реализации, через durable runner:
 
 ```bash
 ./scripts/check-run start --label vig45-focused --timeout 600 -- ./gradlew test -x processTest --tests 'io.vigilant.protocol.openai.ChatCompletionsResponseParserTest' --tests 'io.vigilant.protocol.openai.JsonResponseRewriterTest' --tests 'io.vigilant.protocol.openai.SseResponseRewriterTest' --tests 'io.vigilant.gateway.proxy.JsonResponseEnforcementE2eTest' --tests 'io.vigilant.gateway.proxy.SseResponseEnforcementE2eTest' --tests 'io.vigilant.gateway.proxy.ResponseInspectionWorkflowTest' detekt
-./scripts/check-run start --label vig45-build --timeout 1200 -- ./gradlew build
+./scripts/check-run start --label vig45-build --timeout 2400 -- ./gradlew build
 ./scripts/task-context VIG-45
 git diff --check
 ```
@@ -280,12 +287,14 @@ git diff --check
 задачей не требуются. Live Filin acceptance относится к будущему подключению;
 её отсутствие не скрывать за synthetic compatibility fixture.
 
-## Readiness и Ambiguity Report
+## Readiness и Ambiguity Report до реализации
 
 Существенных открытых решений внутри согласованной границы нет. Scope lock
 утверждён, формы и errors заданы конечной матрицей, generic mapping существует,
 HTTP stimulus и independent oracles выполнимы без внешнего стенда.
-Runtime acceptance criteria остаются невыполненными до реализации.
+Уточнение R10 согласовано; privacy assertions ожидают полный набор spans
+каждого HTTP exchange. Исходная readiness-оценка ниже сохранена как контекст
+принятого scope; актуальная evidence определяется проверяемым snapshot.
 
 Goals: 0.0; Acceptance: 0.1; Boundaries: 0.0; Alternatives: 0.0;
 Assumptions: 0.1; Aggregate: 0.04. Непроверенный live payload корпоративного

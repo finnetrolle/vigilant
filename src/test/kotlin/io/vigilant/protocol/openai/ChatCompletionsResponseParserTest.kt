@@ -11,6 +11,117 @@ import java.util.concurrent.CancellationException
 /** Public conformance tests for the pinned Chat Completions JSON and SSE response parser. */
 @Suppress("LargeClass", "LongMethod", "MaxLineLength")
 class ChatCompletionsResponseParserTest {
+    /** JSON reasoning validates every agreed shape and uses array position rather than reported index. */
+    @Test
+    fun `JSON reasoning shape matrix is typed and independent of final content`() {
+        listOf("", "\"content\":null,").forEach { content ->
+            listOf("\"Plan\"", "\"\"", "null", null).forEach { value ->
+                val field = value?.let { "\"reasoning_content\":$it" }.orEmpty()
+                val message = listOf(content.removeSuffix(","), field).filter(String::isNotEmpty).joinToString(",")
+                val parsed = assertIs<ChatCompletionsResponseParseResult.Success>(
+                    parseJson("""{"choices":[{"index":7,"message":{$message}}]}"""),
+                ).response
+                assertEquals(if (value == "\"Plan\"") listOf("Plan") else emptyList(), parsed.fragments.map(TextFragment::text))
+                parsed.fragments.forEach { fragment ->
+                    assertEquals(FragmentSemanticKind.REASONING, fragment.provenance.semanticKind)
+                    assertEquals(MessageRole.ASSISTANT, fragment.provenance.role)
+                    assertEquals(ProtocolDirection.RESPONSE, fragment.provenance.direction)
+                    assertEquals("/choices/0/message/reasoning_content", fragment.provenance.locator.value)
+                }
+                assertEquals(InspectionCoverage.FULLY_INSPECTABLE, parsed.coverage)
+                assertTrue(parsed.inspectionGaps.isEmpty())
+            }
+        }
+        listOf("0", "false", "{}", "[]").forEach { value ->
+            assertEquals(
+                ChatCompletionsParseFailureCode.MALFORMED_MESSAGE,
+                assertIs<ChatCompletionsResponseParseResult.Failure>(
+                    parseJson("""{"choices":[{"message":{"reasoning_content":$value}}]}"""),
+                ).code,
+            )
+        }
+        assertEquals(
+            ChatCompletionsParseFailureCode.AMBIGUOUS_CONTENT,
+            assertIs<ChatCompletionsResponseParseResult.Failure>(
+                parseJson("""{"choices":[{"message":{"reasoning_content":"one","reasoning_content":"two"}}]}"""),
+            ).code,
+        )
+    }
+
+    /** Reasoning follows refusal even when source properties are reversed and never merges equal texts. */
+    @Test
+    fun `JSON reasoning retains canonical order and neighboring gap coverage`() {
+        val parsed = assertIs<ChatCompletionsResponseParseResult.Success>(parseJson(
+            """{"choices":[{"message":{"audio":{"data":"opaque","transcript":"spoken"},"function_call":{"arguments":"args"},"reasoning_content":"same","refusal":"no","content":"same"}}]}""",
+        )).response
+        assertEquals(listOf("same", "no", "same", "spoken", "args"), parsed.fragments.map(TextFragment::text))
+        assertEquals(
+            listOf(FragmentSemanticKind.OUTPUT_TEXT, FragmentSemanticKind.REFUSAL, FragmentSemanticKind.REASONING,
+                FragmentSemanticKind.OUTPUT_TEXT, FragmentSemanticKind.TOOL_ARGUMENT),
+            parsed.fragments.map { it.provenance.semanticKind },
+        )
+        assertEquals(InspectionCoverage.PARTIALLY_INSPECTABLE, parsed.coverage)
+        assertEquals(listOf(InspectionGapKind.AUDIO), parsed.inspectionGaps.map(InspectionGap::kind))
+    }
+
+    /** SSE reasoning follows the same finite shape matrix and uses the reported sparse choice index. */
+    @Test
+    fun `SSE reasoning shapes and sparse locator are explicit`() {
+        listOf("\"Plan\"", "\"\"", "null", null).forEach { value ->
+            val field = value?.let { "\"reasoning_content\":$it" }.orEmpty()
+            val parsed = assertIs<ChatCompletionsResponseParseResult.Success>(
+                parseSse("data: {\"choices\":[{\"index\":7,\"delta\":{$field}}]}\n\ndata: [DONE]\n\n"),
+            ).response
+            assertEquals(if (value == "\"Plan\"") listOf("Plan") else emptyList(), parsed.fragments.map(TextFragment::text))
+            parsed.fragments.forEach { fragment ->
+                assertEquals(FragmentSemanticKind.REASONING, fragment.provenance.semanticKind)
+                assertEquals(MessageRole.ASSISTANT, fragment.provenance.role)
+                assertEquals(ProtocolDirection.RESPONSE, fragment.provenance.direction)
+                assertEquals("/choices/7/delta/reasoning_content", fragment.provenance.locator.value)
+            }
+            assertEquals(InspectionCoverage.FULLY_INSPECTABLE, parsed.coverage)
+            assertTrue(parsed.inspectionGaps.isEmpty())
+        }
+        listOf("0", "false", "{}", "[]", "\"one\",\"reasoning_content\":\"two\"").forEach { value ->
+            assertEquals(
+                if (value.startsWith("\"one")) ChatCompletionsParseFailureCode.AMBIGUOUS_CONTENT
+                else ChatCompletionsParseFailureCode.MALFORMED_MESSAGE,
+                assertIs<ChatCompletionsResponseParseResult.Failure>(
+                    parseSse("data: {\"choices\":[{\"index\":7,\"delta\":{\"reasoning_content\":$value}}]}\n\ndata: [DONE]\n\n"),
+                ).code,
+            )
+        }
+    }
+
+    /** Empty string reserves ordering, null does not, and both disappear when never followed by text. */
+    @Test
+    fun `SSE reasoning empty first ordering keeps independent fields`() {
+        listOf("\"\"", "null").forEach { first ->
+            listOf(false, true).forEach { continued ->
+                val stream = "data: {\"choices\":[{\"index\":7,\"delta\":{\"reasoning_content\":$first}}]}\n\n" +
+                    "data: {\"choices\":[{\"index\":7,\"delta\":{\"content\":\"OK\"}}]}\n\n" +
+                    (if (continued) "data: {\"choices\":[{\"index\":7,\"delta\":{\"reasoning_content\":\"Plan\"}}]}\n\n" else "") +
+                    "data: [DONE]\n\n"
+                val parsed = assertIs<ChatCompletionsResponseParseResult.Success>(parseSse(stream)).response
+                val expected = when {
+                    !continued -> listOf("OK")
+                    first == "null" -> listOf("OK", "Plan")
+                    else -> listOf("Plan", "OK")
+                }
+                assertEquals(expected, parsed.fragments.map(TextFragment::text))
+                assertEquals(expected.map { if (it == "Plan") FragmentSemanticKind.REASONING else FragmentSemanticKind.OUTPUT_TEXT },
+                    parsed.fragments.map { it.provenance.semanticKind })
+            }
+        }
+        val interleaved = "data: {\"choices\":[{\"index\":7,\"delta\":{\"reasoning_content\":\"alice@\",\"refusal\":\"no\",\"content\":\"OK\"}}]}\n\n" +
+            "data: {\"choices\":[{\"index\":2,\"delta\":{\"reasoning_content\":\"other\"}},{\"index\":7,\"delta\":{\"reasoning_content\":\"example.com\"}}]}\n\n" +
+            "data: [DONE]\n\n"
+        val parsed = assertIs<ChatCompletionsResponseParseResult.Success>(parseSse(interleaved)).response
+        assertEquals(listOf("OK", "no", "alice@example.com", "other"), parsed.fragments.map(TextFragment::text))
+        assertEquals(listOf("/choices/7/delta/content", "/choices/7/delta/refusal", "/choices/7/delta/reasoning_content", "/choices/2/delta/reasoning_content"),
+            parsed.fragments.map { it.provenance.locator.value })
+    }
+
     /** Ordinary JSON preserves choice order and canonical field semantics. */
     @Test
     fun `ordinary JSON produces ordered response fragments`() {
@@ -328,12 +439,12 @@ class ChatCompletionsResponseParserTest {
             listOf(
                 SegmentationCase(
                     "JSON",
-                    """{"choices":[{"message":{"content":"Привет 🌍","refusal":null}}]}""".toByteArray(),
+                    """{"choices":[{"message":{"content":"Привет 🌍","reasoning_content":"Plan \u0040 🌍","refusal":null}}]}""".toByteArray(),
                     OpenAiOperationDescriptor.CHAT_COMPLETIONS_JSON_RESPONSE,
                 ),
                 SegmentationCase(
                     "SSE",
-                    "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Привет 🌍\"}}]}\r\n\r\ndata: [DONE]\r\n\r\n".toByteArray(),
+                    "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Привет 🌍\",\"reasoning_content\":\"Plan \\u0040 🌍\"}}]}\r\n\r\ndata: [DONE]\r\n\r\n".toByteArray(),
                     OpenAiOperationDescriptor.CHAT_COMPLETIONS_SSE_RESPONSE,
                 ),
             )

@@ -209,6 +209,7 @@ internal abstract class GatewayE2eTestSupport {
      * @param responseRewrite optional all-or-nothing response rewriter used by failure-mapping tests.
      * @param responseSseRewrite optional SSE rewriter used by source-map failure-mapping tests.
      * @param requestTransform optional server-side request replacement for transport-failure tests.
+     * @param responseTransform optional test demand boundary around the actual gateway response.
      * @param detectorBindings optional test-owned detector contributions for independent policy outcome fixtures.
      * @param upstreamClient optional external transport seam; defaults to the fixture-owned client.
      * @param tracer optional independently observed production or SDK tracer.
@@ -253,6 +254,7 @@ internal abstract class GatewayE2eTestSupport {
             ) -> ResponseRewriteResult
         )? = null,
         requestTransform: ((HttpRequest) -> HttpRequest)? = null,
+        responseTransform: ((HttpResponse) -> HttpResponse)? = null,
         detectorBindings: Map<DetectorId, Detector>? = null,
         upstreamClient: WebClient? = null,
         tracer: io.opentelemetry.api.trace.Tracer? = null,
@@ -317,8 +319,11 @@ internal abstract class GatewayE2eTestSupport {
                 responseOutputObserved,
                 requestTransform,
             )
+        val transformedService = responseTransform?.let { transform ->
+            HttpService { ctx, request -> transform(observedService.serve(ctx, request)) }
+        } ?: observedService
         val tracedService =
-            TracingService(observedService, effectiveTracer)
+            TracingService(transformedService, effectiveTracer)
         val publicService = meter?.let { MetricsService(tracedService, it) } ?: tracedService
         return fixture.startServer(
             publicService,
@@ -452,7 +457,7 @@ internal abstract class GatewayE2eTestSupport {
     }
 
     /**
-     * Waits for and verifies the canonical zero-retention response-source invariant.
+     * Waits for source closure and verifies that no retained bytes or segments remain.
      *
      * @param source response source that previously owned retained upstream bytes.
      * @param terminalEvent terminal scenario label used by assertion diagnostics.
@@ -463,10 +468,11 @@ internal abstract class GatewayE2eTestSupport {
     ) {
         assertTrue(
             fixture.awaitUntil(RETAINED_SOURCE_OBSERVATION_TIMEOUT) {
-                source.retainedBytes == 0L && source.retainedSegments == 0
+                source.closed && source.retainedBytes == 0L && source.retainedSegments == 0
             },
             "$terminalEvent left response source ownership retained",
         )
+        assertTrue(source.closed)
         assertEquals(0L, source.retainedBytes)
         assertEquals(0, source.retainedSegments)
     }

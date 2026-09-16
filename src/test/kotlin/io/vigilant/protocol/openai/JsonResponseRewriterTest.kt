@@ -10,6 +10,20 @@ import kotlin.test.assertIs
 
 /** Contract tests for parser-owned JSON coordinates and exact source patching. */
 class JsonResponseRewriterTest {
+    /** Reasoning coordinates patch an escaped email while preserving Unicode and every surrounding byte. */
+    @Test
+    @Suppress("MaxLineLength") // Literal input and oracle preserve raw JSON escapes and formatting.
+    fun `rewrites escaped JSON reasoning with independent byte oracle`() {
+        val original = """{ "choices":[{"index":7,"message":{"reasoning_content":"До 🌍 alice\u0040example.com после","content":"OK"}}],"extra":1.00 }""".toByteArray()
+        val expected = """{ "choices":[{"index":7,"message":{"reasoning_content":"До 🌍 [EMAIL_MASKED] после","content":"OK"}}],"extra":1.00 }""".toByteArray()
+        val parsed = parse(original)
+        val rewritten = assertIs<ResponseRewriteResult.Success>(JsonResponseRewriter().rewrite(
+            CompleteByteSource.copyOf(original), parsed.response,
+            listOf(plan(parsed, "/choices/0/message/reasoning_content", 10L, 27L, "[EMAIL_MASKED]")),
+        ))
+        assertContentEquals(expected, rewritten.bytes())
+    }
+
     /** Every ordinary response text kind maps decoded UTF-8 spans to only its source literal. */
     @Test
     fun `rewrites all ordinary fragment kinds without changing surrounding source bytes`() {

@@ -146,16 +146,22 @@ process и 55 work-item validator tests без failures/errors/skips. Эти
 
 ## Response and gateway evidence
 
+Plaintext response reasoning реализован для ordinary JSON и SSE; field shapes,
+отдельные logical buffers, exact rewrite, HTTP reactions, errors, atomicity,
+cleanup и safe telemetry проверены по [reasoning evidence](response-reasoning-evidence.md).
+Это synthetic Chat Completions contract, без утверждения о live payload
+корпоративного LiteLLM или полной совместимости Filin.
+
 Нормативные owners: [RESPONSE enforcement](../spec/requirements/response-enforcement.md)
 и [HTTP gateway](../spec/requirements/http-gateway.md). Таблица основана на
-current source/test review и сохранённых implementation observations. Эта
-documentation migration не перезапускала runtime, process, OCI или load suites
-и не создаёт нового dynamic evidence.
+source/test review и сохранённых implementation observations. Новые reasoning
+observations приведены выше. Исторический перенос остальных строк не включал
+новых runtime, process, OCI или load runs.
 
 | Target / invariant | Фактический source/test contract | Gap / evidence boundary |
 |---|---|---|
 | Complete ordinary/SSE source и protocol-valid terminal до первого disclosure; exact `ALLOW`, source-patched `MASK`, whole-response `BLOCK`, safe `502`/`503` | `JsonResponseEnforcementE2eTest` и `SseResponseEnforcementE2eTest` используют causal upstream-terminal и detector barriers, отдельно наблюдают headers/body, literal outcome и retained cleanup | Existing observations подтверждают current implementation; encoder tests сами по себе retention не доказывают. Нового прогона при переносе нет. |
-| Все ordinary fragments, gap/reaction precedence, JSON source coordinates и exact rewrite | Parser/rewriter suites и real-Armeria JSON matrix покрывают content, refusal, modern/deprecated arguments, transcript/audio gap, `200`/`429`/`500`, Unicode/escapes/unknown metadata и invalid mapping | Полная nested type/segmentation cross-product matrix имеет gaps, перечисленные в [protocol evidence](#protocol-evidence). Contract не сужен. |
+| Все ordinary fragments, gap/reaction precedence, JSON source coordinates и exact rewrite | Parser/rewriter suites и real-Armeria JSON matrix покрывают content, refusal, reasoning_content, modern/deprecated arguments, transcript/audio gap, `200`/`429`/`500`, Unicode/escapes/unknown metadata и invalid mapping | Полная nested type/segmentation cross-product matrix имеет gaps, перечисленные в [protocol evidence](#protocol-evidence). Contract не сужен. |
 | Все SSE logical fields, standalone terminal и cross-event source patching | Parser/SSE rewriter suites покрывают interleaved choices/tools, cross-event spans, adjacent/overlapping instructions, LF/CRLF, comments, multi-line data, empty values, Unicode/escapes и deterministic invalid mappings | Полный field branch x every byte boundary cross-product и parser-local cancellation after each partial field не подтверждены; HTTP atomic outcomes покрываются отдельно. |
 | Retained source и one-shot ownership на success/reject/failure/cancellation/shutdown | `RetainedResponseSourceTest`, `ReplayReadyResponseTest` и JSON/SSE E2E наблюдают one-item demand, view/replay exclusivity, both transfer/cancel race orders, callback failures, ingest/analysis/replay cancellation и forced cleanup | `runAllCleanupActions` проверен с first/suppressed failures; failure injection во все реальные network/resource owners не выполнялась. Heap bound намеренно отсутствует и не заявляется. |
 | Bypass request/response streaming, backpressure, cancellation, pooling, malformed upstream и exact header filtering | `BypassProxyRequestBackpressureTest`, `BypassProxyResponseBackpressureTest`, `BypassProxyCancellationTest`, `UpstreamConnectionPoolingTest`, `BypassProxyServiceTest` и raw-upstream tests наблюдают public HTTP boundaries | Physical chunk boundaries не являются contract. Existing bypass PERF result не подтверждает current enforcement latency и не становится новым load evidence. |
@@ -208,8 +214,8 @@ checks и не означают повторный прогон всей observa
 
 Нормативные owners: [Chat Completions](../spec/requirements/chat-completions-protocol.md)
 и [HTTP errors](../spec/requirements/http-gateway.md). Основание таблицы -
-source/test review; новых parser, HTTP, process, OCI или load runs при
-переносе документации нет. Методика: [protocol checks](development.md#protocol-contract-checks).
+source/test review и [новые reasoning observations](response-reasoning-evidence.md);
+исторический перенос остальных clauses не включал новых parser, HTTP, process, OCI или load runs. Методика: [protocol checks](development.md#protocol-contract-checks).
 
 | Target / invariant | Фактический source/test contract | Gap / evidence boundary |
 |---|---|---|
@@ -217,9 +223,9 @@ source/test review; новых parser, HTTP, process, OCI или load runs пр�
 | Model-visible schema property names имеют SCHEMA_TEXT | `JsonSchemaWalker.collectNamedSchemaContainer` передаёт LABEL в `addTextValue`; tests закрепляют LABEL | Conformance gap semantic kind: properties/patternProperties/dependentSchemas names сохранены как SCHEMA_TEXT target, текущий LABEL не объявлен эквивалентным. Structural enforcement classification не зависит от этого kind. |
 | Assistant-only request tool_calls и audio | `ChatCompletionsRequestParser.collectMessage` обрабатывает modern/custom tool_calls и audio для любой role, а tool fragments получают ASSISTANT | Conformance gap: user с content и tool_calls/audio может быть принят; normative assistant-only scope сохранён. Deprecated function_call/reasoning проверяют assistant отдельно. |
 | Role только при explicit protocol role | `ResponseCollector.addText` и `SseResponseCollector.result` всегда ставят ASSISTANT, включая source без role | Conformance gap provenance для отсутствующей role; target не изменён. |
-| Ordinary JSON exhaustive field/terminal failures | `ChatCompletionsResponseParserTest` проверяет content/refusal, modern/deprecated call order, audio transcript/gap, optional null, malformed/ambiguous input; rewriter tests проверяют maps | Corpus не является полной type matrix каждого nested field: отдельные missing/type combinations tool function/arguments и audio data не представлены. Требование exhaustive matrix сохранено. |
+| Ordinary JSON exhaustive field/terminal failures | `ChatCompletionsResponseParserTest` проверяет content/refusal/reasoning_content, modern/deprecated call order, audio transcript/gap, optional null, malformed/ambiguous input; rewriter tests проверяют maps | Corpus не является полной type matrix каждого nested field: отдельные missing/type combinations tool function/arguments и audio data не представлены. Требование exhaustive matrix сохранено. |
 | SSE canonical fields, terminal и unknown event | `SseResponseCollector` сохраняет независимые choice/tool/semantic buffers; negative corpus покрывает missing DONE, mixed/after terminal, indices, repeated shape и provider error | Unknown event type даёт AMBIGUOUS_CONTENT в `consumeSseEvent` и negative test; target требует UNSUPPORTED_SCHEMA. На HTTP boundary оба дают safe 502, но parser mismatch остаётся. |
-| Каждая field branch при каждом byte boundary; Unicode-safe result | Segmentation test сравнивает все splits и one-byte segments для одного JSON content и одного SSE content response с Unicode; другие field examples проверяются отдельно | Полный cross-product refusal, modern/deprecated tool arguments, audio и multi-line data × segmentation не подтверждён. Сравнение с unsplit baseline доказывает invariance этих samples, не independent semantic correctness всех shapes. |
+| Каждая field branch при каждом byte boundary; Unicode-safe result | Segmentation test сравнивает все splits и one-byte segments для JSON/SSE samples с content и reasoning_content, Unicode и JSON escape; другие field examples проверяются отдельно | Полный cross-product refusal, modern/deprecated tool arguments, audio и multi-line data × segmentation не подтверждён. Сравнение с unsplit baseline доказывает invariance этих samples, не independent semantic correctness всех shapes. |
 | No partial state/disclosure, cancellation и source ownership | Public parser cancellation test использует уже interrupted thread; `RequestInspectionE2eTest`, JSON/SSE enforcement E2E и rewrite suites проверяют rejection/replay | Pre-cancelled parse не доказывает cancellation после накопления каждого partial field. Полная terminal matrix остаётся target; transport retention evidence не заменяет parser-local observations. |
 | Exact five inspection outcomes, privacy и Retry-After | `OpenAiErrorResponsesTest` использует real HTTP и closed literal field sets для всех пяти строк; request/response integration suites проверяют handoff/disclosure | Encoder-level synthetic response replacement не является production retention evidence само по себе; соответствующие JSON/SSE E2E нужны отдельно. External identity имеет отдельный согласованный identity_unavailable у identity owner, а не inspection error. |
 

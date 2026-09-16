@@ -12,9 +12,9 @@ headers и client errors - [HTTP gateway](http-gateway.md).
 Guardrail route удерживает upstream status, headers, trailers и все body bytes
 в retained in-memory response source. До complete protocol-valid source и
 итогового policy decision клиент не получает status, header, trailer или body
-byte. Ordinary JSON достигает terminal state только по end-of-stream, SSE -
-только после отдельного standalone `data: [DONE]`; transport completion без
-этого SSE event не является success.
+byte. Ordinary JSON достигает terminal state только по end-of-stream. SSE
+требует отдельный standalone `data: [DONE]`, проверку остатка source и HTTP EOF;
+ни один DONE без EOF, ни transport completion без DONE не являются success.
 
 Все корректно сформированные Chat Completions responses проходят один и тот же
 workflow независимо от upstream status, включая `200`, `429` и `500`.
@@ -67,6 +67,7 @@ logical fields. Полный набор ordinary JSON fragments:
 
 - `OUTPUT_TEXT`: `choices[].message.content`;
 - `REFUSAL`: `choices[].message.refusal`;
+- `REASONING`: `choices[].message.reasoning_content`;
 - `TOOL_ARGUMENT`: modern
   `choices[].message.tool_calls[].function.arguments`;
 - `TOOL_ARGUMENT`: deprecated
@@ -78,10 +79,23 @@ semantic field и tool-call index:
 
 - `OUTPUT_TEXT`: `choices[].delta.content`;
 - `REFUSAL`: `choices[].delta.refusal`;
+- `REASONING`: `choices[].delta.reasoning_content`;
 - `TOOL_ARGUMENT`: modern
   `choices[].delta.tool_calls[].function.arguments`;
 - `TOOL_ARGUMENT`: deprecated
   `choices[].delta.function_call.arguments`.
+
+Plaintext reasoning использует существующие free-text inspection, typed markers
+и агрегацию RESPONSE: technical error > BLOCK > MASK > ALLOW. Новой policy,
+detector, feature flag или mandatory setting нет. Reasoning findings входят в
+те же safe audit counts/outcome; raw reasoning, previews и locators не добавляются
+в telemetry. Несколько deltas одного logical reasoning field дают один fragment;
+при единственной RESPONSE policy, одном reasoning fragment с одним email
+и без других текстовых fragments это `fragments.inspected=1`,
+`findings.total=1`, `findings.by_type=EMAIL_ADDRESS:1`. Успешная проверка даёт `DETECTED`
+и выбранную reaction; detector error даёт `ERROR` без reaction. Empty RESPONSE
+policy selection не запускает RESPONSE detector/audit, но protocol validation
+всё равно выполняется. REQUEST-фаза сохраняет собственные правила.
 
 Recognized `null` и empty SSE buffer не создают fragment или gap. Recognized
 non-text media/file/audio data создают inspection gap и сохраняются без

@@ -139,6 +139,33 @@ import org.slf4j.LoggerFactory
 /** Real HTTP E2E tests for retained SSE framing, enforcement, cancellation, and lifecycle. */
 @Suppress("LargeClass")
 internal class SseResponseEnforcementE2eTest : GatewayE2eTestSupport() {
+    /** A cross-event reasoning email gets one marker without altering final content or SSE events. */
+    @Test
+    @Suppress("MaxLineLength") // Independent exact wire fixtures.
+    fun `reasoning SSE MASK preserves final content`() {
+        val original =
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"alice@\"}}]}\n\n" +
+                "data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"example.com\"}}]}\n\n" +
+                "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"OK\"},\"finish_reason\":\"stop\"}]}\n\n" +
+                "data: [DONE]\n\n"
+        val expected =
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"[EMAIL_MASKED]\"}}]}\n\n" +
+                "data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"\"}}]}\n\n" +
+                "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"OK\"},\"finish_reason\":\"stop\"}]}\n\n" +
+                "data: [DONE]\n\n"
+        val upstream = fixture.startServer { HttpResponse.of(MediaType.EVENT_STREAM, original) }
+        val gateway = startShadowGateway(
+            fixture.serverUri(upstream),
+            policyProvider = DummyPolicyProvider(
+                listOf(responsePolicy("reasoning-mask", Reaction(Disposition.ALLOW, setOf(Transformation.MASK)))),
+            ),
+        )
+        val response = isolatedGatewayClient(fixture.serverUri(gateway))
+            .execute(chatCompletionsRequest("safe")).aggregate().join()
+        assertEquals(HttpStatus.OK, response.status())
+        assertEquals(expected, response.contentUtf8())
+    }
+
     /** One invalid SSE source, transport terminal state and optional unsupported content coding. */
     private data class InvalidSseResponseCase(
         /** Diagnostic matrix row. */
@@ -500,10 +527,22 @@ internal class SseResponseEnforcementE2eTest : GatewayE2eTestSupport() {
         assertEquals("DETECTED", pair.last().keyValue("outcome"))
     }
 
-    /** SSE detector failure and deadline return exact 503 outcomes without upstream disclosure. */
+    /**
+     * Content and reasoning share this lifecycle: SSE detector failure and deadline return exact 503 outcomes
+     * without upstream disclosure.
+     */
     @Test
+    fun `SSE inspection failure matrix returns exact unavailable contract atomically`() =
+        `SSE inspection failure matrix returns exact unavailable contract atomically`("content")
+
+    /** Exercises the same contract with the second explicit field or transport input. */
+    @Test
+    fun `reasoning SSE inspection failure matrix returns exact unavailable contract atomically`() =
+        `SSE inspection failure matrix returns exact unavailable contract atomically`("reasoning_content")
+
+    /** Executes the shared behavioral assertions for the explicitly selected field. */
     @Suppress("LongMethod")
-    fun `SSE inspection failure matrix returns exact unavailable contract atomically`() {
+    private fun `SSE inspection failure matrix returns exact unavailable contract atomically`(field: String) {
         val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
         val timeoutEntered = CountDownLatch(1)
         val timeoutCancelled = CountDownLatch(1)
@@ -550,7 +589,7 @@ internal class SseResponseEnforcementE2eTest : GatewayE2eTestSupport() {
             val responseSource = CompletableFuture<RetainedResponseSource>()
             val disclosureProbe = ResponseDisclosureProbe(responseSource) { source -> source.closed }
             val upstreamBody =
-                "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"${case.payload}\"}}]," +
+                "data: {\"choices\":[{\"index\":0,\"delta\":{\"$field\":\"${case.payload}\"}}]," +
                     "\"private\":\"upstream-$index\"}\n\ndata: [DONE]\n\n"
             /** Publishes an otherwise valid private SSE response for this failure row. */
             val upstream = fixture.startServer {
@@ -565,7 +604,6 @@ internal class SseResponseEnforcementE2eTest : GatewayE2eTestSupport() {
             val policies =
                 DummyPolicyProvider(
                     listOf(
-                        shadowPolicy(case.deadline),
                         responsePolicy(
                             "sse-response-failure-$index",
                             Reaction(Disposition.ALLOW, emptyList()),
@@ -614,16 +652,28 @@ internal class SseResponseEnforcementE2eTest : GatewayE2eTestSupport() {
         assertTrue(timeoutCancelled.await(2, TimeUnit.SECONDS), "SSE deadline detector remained active")
     }
 
-    /** Client cancellation during SSE analysis interrupts detector work and frees retained bytes. */
+    /**
+     * Content and reasoning share this lifecycle: Client cancellation during SSE analysis interrupts detector
+     * work and frees retained bytes.
+     */
     @Test
-    fun `client cancellation during SSE analysis releases source without disclosure`() {
+    fun `client cancellation during SSE analysis releases source without disclosure`() =
+        `client cancellation during SSE analysis releases source without disclosure`("content")
+
+    /** Exercises the same contract with the second explicit field or transport input. */
+    @Test
+    fun `reasoning client cancellation during SSE analysis releases source without disclosure`() =
+        `client cancellation during SSE analysis releases source without disclosure`("reasoning_content")
+
+    /** Executes the shared behavioral assertions for the explicitly selected field. */
+    private fun `client cancellation during SSE analysis releases source without disclosure`(field: String) {
         val detectorEntered = CountDownLatch(1)
         val detectorCancelled = CountDownLatch(1)
         val responseSource = CompletableFuture<RetainedResponseSource>()
         val disclosureProbe = ResponseDisclosureProbe(responseSource) { false }
         val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
         val upstreamBody =
-            "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"private-sse-analysis-cancel\"}}]}\n\n" +
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"$field\":\"private-sse-analysis-cancel\"}}]}\n\n" +
                 "data: [DONE]\n\n"
         val upstream = fixture.startServer { HttpResponse.of(HttpStatus.OK, MediaType.EVENT_STREAM, upstreamBody) }
         val policies =
@@ -671,10 +721,23 @@ internal class SseResponseEnforcementE2eTest : GatewayE2eTestSupport() {
         )
     }
 
-    /** Client cancellation before SSE DONE cancels upstream ingest with no response audit or disclosure. */
+    /**
+     * Content and reasoning share this lifecycle: Client cancellation before SSE DONE cancels upstream ingest
+     * with no response audit or disclosure.
+     */
     @Test
-    fun `client cancellation before SSE terminal releases source without analysis`() {
+    fun `client cancellation before SSE terminal releases source without analysis`() =
+        `client cancellation before SSE terminal releases source without analysis`("content")
+
+    /** Exercises the same contract with the second explicit field or transport input. */
+    @Test
+    fun `reasoning client cancellation before SSE terminal releases source without analysis`() =
+        `client cancellation before SSE terminal releases source without analysis`("reasoning_content")
+
+    /** Executes the shared behavioral assertions for the explicitly selected field. */
+    private fun `client cancellation before SSE terminal releases source without analysis`(field: String) {
         val upstreamCancelled = CountDownLatch(1)
+        val detectorCalls = AtomicInteger()
         val responseSource = CompletableFuture<RetainedResponseSource>()
         val disclosureProbe = ResponseDisclosureProbe(responseSource) { source -> source.closed }
         val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
@@ -689,7 +752,7 @@ internal class SseResponseEnforcementE2eTest : GatewayE2eTestSupport() {
                         )
                         response.write(
                             HttpData.ofUtf8(
-                                "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"private-prefix\"}}]}\n\n",
+                                "data: {\"choices\":[{\"index\":0,\"delta\":{\"$field\":\"private-prefix\"}}]}\n\n",
                             ),
                         )
                     }
@@ -698,6 +761,13 @@ internal class SseResponseEnforcementE2eTest : GatewayE2eTestSupport() {
         val gateway =
             startShadowGateway(
                 fixture.serverUri(upstream),
+                policyProvider = DummyPolicyProvider(
+                    listOf(responsePolicy("ingest-cancel", Reaction(Disposition.ALLOW, emptyList()))),
+                ),
+                detector = Detector {
+                    detectorCalls.incrementAndGet()
+                    DetectionResult.Clean
+                },
                 responseSourceCreated = responseSource::complete,
                 responseOutputObserved = disclosureProbe::observe,
             )
@@ -714,19 +784,29 @@ internal class SseResponseEnforcementE2eTest : GatewayE2eTestSupport() {
         assertEquals(null, received.headers.get())
         assertTrue(received.chunks.isEmpty())
         assertRetainedResponseReleased(retained, "SSE pre-terminal cancellation")
-        assertTrue(
-            events.filter(ILoggingEvent::isAnalysisEvent).all { event -> event.keyValue("phase") == "REQUEST" },
-            "pre-terminal SSE cancellation unexpectedly created a response audit pair",
-        )
+        assertEquals(0, detectorCalls.get(), "cancelled ingest invoked the response detector")
+        assertTrue(events.none(ILoggingEvent::isAnalysisEvent), "cancelled ingest started analysis")
     }
 
-    /** Typed SSE source-map failure returns exact 503 without unmasked fallback or upstream metadata. */
+    /**
+     * Content and reasoning share this lifecycle: Typed SSE source-map failure returns exact 503 without
+     * unmasked fallback or upstream metadata.
+     */
     @Test
-    fun `SSE rewrite failure maps to unavailable response without disclosure`() {
+    fun `SSE rewrite failure maps to unavailable response without disclosure`() =
+        `SSE rewrite failure maps to unavailable response without disclosure`("content")
+
+    /** Exercises the same contract with the second explicit field or transport input. */
+    @Test
+    fun `reasoning SSE rewrite failure maps to unavailable response without disclosure`() =
+        `SSE rewrite failure maps to unavailable response without disclosure`("reasoning_content")
+
+    /** Executes the shared behavioral assertions for the explicitly selected field. */
+    private fun `SSE rewrite failure maps to unavailable response without disclosure`(field: String) {
         val responseSource = CompletableFuture<RetainedResponseSource>()
         val rewriteInvocations = AtomicInteger()
         val upstreamBody =
-            "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"private rewrite@example.com\"}}]}\n\n" +
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"$field\":\"private rewrite@example.com\"}}]}\n\n" +
                 "data: [DONE]\n\n"
         /** Forces the shared workflow's typed no-output SSE rewrite failure branch. */
         val failingSseRewrite: (

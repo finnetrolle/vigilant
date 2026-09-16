@@ -406,7 +406,7 @@ object ChatCompletionsResponseParser {
         /** Successful fragments in canonical response order. */
         private val fragments = ArrayList<TextFragment>()
 
-        /** Collects one response choice and its required message object. */
+        /** Collects content, refusal and plaintext reasoning before the existing source-ordered call/audio fields. */
         fun collectChoice(
             choiceNode: JsonNode,
             choicePosition: Int,
@@ -417,6 +417,9 @@ object ChatCompletionsResponseParser {
             validateAssistantRole(message)
             collectOptionalText(message, CONTENT_FIELD, FragmentSemanticKind.OUTPUT_TEXT, "$base/content")
             collectOptionalText(message, REFUSAL_FIELD, FragmentSemanticKind.REFUSAL, "$base/refusal")
+            collectOptionalText(
+                message, REASONING_CONTENT_FIELD, FragmentSemanticKind.REASONING, "$base/reasoning_content",
+            )
             message.properties().forEach { (field, value) ->
                 if (!value.isNull) {
                     when (field) {
@@ -556,7 +559,7 @@ object ChatCompletionsResponseParser {
         /** Logical fields keyed independently by choice and semantic source. */
         private val buffers = LinkedHashMap<SseFieldKey, SseLogicalField>()
 
-        /** Collects one valid Chat Completions chunk event. */
+        /** Collects content, refusal, reasoning and calls into independent first-observed logical fields. */
         fun collectChunk(event: ParsedSsePayload) {
             val chunk = event.root as? ObjectNode ?: malformed()
             val choices = chunk.get(CHOICES_FIELD) as? ArrayNode ?: malformed()
@@ -574,26 +577,7 @@ object ChatCompletionsResponseParser {
                 val delta = choice.get(DELTA_FIELD) as? ObjectNode ?: malformed()
                 validateDeltaFields(delta)
                 val pointerBase = "/choices/$choicePosition/delta"
-                collectOptionalDeltaText(
-                    delta,
-                    choiceIndex,
-                    SseSelectedText(
-                        CONTENT_FIELD,
-                        FragmentSemanticKind.OUTPUT_TEXT,
-                        "$pointerBase/content",
-                    ),
-                    event,
-                )
-                collectOptionalDeltaText(
-                    delta,
-                    choiceIndex,
-                    SseSelectedText(
-                        REFUSAL_FIELD,
-                        FragmentSemanticKind.REFUSAL,
-                        "$pointerBase/refusal",
-                    ),
-                    event,
-                )
+                collectMessageTextDeltas(delta, choiceIndex, pointerBase, event)
                 delta.get(TOOL_CALLS_FIELD)?.takeUnless(JsonNode::isNull)?.let {
                     collectToolCallDeltas(
                         it,
@@ -610,6 +594,22 @@ object ChatCompletionsResponseParser {
                         event,
                     )
                 }
+            }
+        }
+
+        /** Appends the three independent message text fields in canonical in-event order. */
+        private fun collectMessageTextDeltas(
+            delta: ObjectNode,
+            choiceIndex: Int,
+            pointerBase: String,
+            event: ParsedSsePayload,
+        ) {
+            listOf(
+                CONTENT_FIELD to FragmentSemanticKind.OUTPUT_TEXT,
+                REFUSAL_FIELD to FragmentSemanticKind.REFUSAL,
+                REASONING_CONTENT_FIELD to FragmentSemanticKind.REASONING,
+            ).forEach { (field, kind) ->
+                collectOptionalDeltaText(delta, choiceIndex, SseSelectedText(field, kind, "$pointerBase/$field"), event)
             }
         }
 
@@ -891,6 +891,9 @@ object ChatCompletionsResponseParser {
     /** Assistant refusal output field. */
     private const val REFUSAL_FIELD = "refusal"
 
+    /** Plaintext reasoning extension shared by ordinary messages and SSE deltas. */
+    private const val REASONING_CONTENT_FIELD = "reasoning_content"
+
     /** Modern assistant tool-call collection field. */
     private const val TOOL_CALLS_FIELD = "tool_calls"
 
@@ -947,7 +950,7 @@ object ChatCompletionsResponseParser {
 
     /** Complete set of recognized fields inside a Chat Completions delta. */
     private val KNOWN_DELTA_FIELDS =
-        setOf(ROLE_FIELD, CONTENT_FIELD, REFUSAL_FIELD, TOOL_CALLS_FIELD, FUNCTION_CALL_FIELD)
+        setOf(ROLE_FIELD, CONTENT_FIELD, REFUSAL_FIELD, REASONING_CONTENT_FIELD, TOOL_CALLS_FIELD, FUNCTION_CALL_FIELD)
 
     /** Mask used to compare one signed JVM byte as an unsigned protocol octet. */
     private const val UNSIGNED_BYTE_MASK = 0xff

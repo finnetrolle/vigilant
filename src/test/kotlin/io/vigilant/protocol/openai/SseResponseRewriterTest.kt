@@ -10,6 +10,48 @@ import kotlin.test.assertIs
 
 /** Contract tests for parser-owned SSE segment coordinates and exact source patching. */
 class SseResponseRewriterTest {
+    /** Reasoning spans cross two/three deltas and empty/null values without changing event framing. */
+    @Test
+    fun `reasoning source segments preserve exact cross event patches`() {
+        val cases = listOf(
+            Triple(listOf("\"alice@\"", "\"example.com\""), listOf("\"[EMAIL_MASKED]\"", "\"\""), 0L),
+            Triple(listOf("\"ali\"", "\"ce@exam\"", "\"ple.com\""),
+                listOf("\"[EMAIL_MASKED]\"", "\"\"", "\"\""), 0L),
+            Triple(listOf("\"alice@\"", "\"\"", "null", "\"example.com\""),
+                listOf("\"[EMAIL_MASKED]\"", "\"\"", "null", "\"\""), 0L),
+            Triple(listOf("\"До 🌍 alice\\u0040\"", "\"example.com после\""),
+                listOf("\"До 🌍 [EMAIL_MASKED]\"", "\" после\""), 10L),
+        )
+        listOf("\n", "\r\n").forEach { eol ->
+            cases.forEach { (values, expectedValues, start) ->
+                val original = reasoningEvents(values, eol)
+                val expected = reasoningEvents(expectedValues, eol)
+                val source = CompleteByteSource.copyOf(original.map { byteArrayOf(it) })
+                val parsed = assertIs<ChatCompletionsResponseParseResult.Success>(
+                    ChatCompletionsResponseParser.parse(
+                        source, OpenAiOperationDescriptor.CHAT_COMPLETIONS_SSE_RESPONSE,
+                    ),
+                )
+                val fragment = parsed.response.fragments.single()
+                assertEquals(FragmentSemanticKind.REASONING, fragment.provenance.semanticKind)
+                assertEquals("/choices/7/delta/reasoning_content", fragment.provenance.locator.value)
+                val plan = ResponseFragmentMaskingPlan(fragment.provenance.ordinal, fragment.provenance.locator,
+                    listOf(MaskingInstruction(Utf8Span(start, start + 17L), "[EMAIL_MASKED]")))
+                val rewritten = assertIs<ResponseRewriteResult.Success>(
+                    SseResponseRewriter().rewrite(source, parsed.response, listOf(plan)),
+                )
+                assertContentEquals(expected, rewritten.bytes())
+            }
+        }
+    }
+
+    /** Wraps independently supplied literal values without deriving replacements from production mapping. */
+    private fun reasoningEvents(values: List<String>, eol: String): ByteArray =
+        (": comment\n\n" + values.joinToString("") {
+            "data: {\"choices\":[{\"index\":7,\"delta\":{\"reasoning_content\":$it}}]}\n\n"
+        } + "data: {\"choices\":[],\"usage\":{\"total_tokens\":42}}\n\ndata: [DONE]\n\n")
+            .replace("\n", eol).toByteArray()
+
     /** A finding crossing two delta values is replaced once while all unrelated bytes survive. */
     @Test
     fun `rewrites a cross event span without reserializing SSE`() {

@@ -139,6 +139,27 @@ import org.slf4j.LoggerFactory
 /** Real HTTP E2E tests for retained ordinary JSON response enforcement and lifecycle. */
 @Suppress("LargeClass")
 internal class JsonResponseEnforcementE2eTest : GatewayE2eTestSupport() {
+    /** Reasoning PII is masked through the real gateway while final content stays byte-identical. */
+    @Test
+    @Suppress("MaxLineLength") // Independent exact wire fixtures.
+    fun `reasoning JSON MASK preserves final content`() {
+        val original =
+            """{"choices":[{"message":{"role":"assistant","content":"OK","reasoning_content":"Contact alice@example.com"}}]}"""
+        val expected =
+            """{"choices":[{"message":{"role":"assistant","content":"OK","reasoning_content":"Contact [EMAIL_MASKED]"}}]}"""
+        val upstream = fixture.startServer { HttpResponse.of(MediaType.JSON, original) }
+        val gateway = startShadowGateway(
+            fixture.serverUri(upstream),
+            policyProvider = DummyPolicyProvider(
+                listOf(responsePolicy("reasoning-mask", Reaction(Disposition.ALLOW, setOf(Transformation.MASK)))),
+            ),
+        )
+        val response = isolatedGatewayClient(fixture.serverUri(gateway))
+            .execute(chatCompletionsRequest("safe")).aggregate().join()
+        assertEquals(HttpStatus.OK, response.status())
+        assertEquals(expected, response.contentUtf8())
+    }
+
     /** One complete ordinary-response gap and final reaction expectation. */
     private data class ResponseGapCase(
         /** Diagnostic matrix row. */
@@ -699,10 +720,22 @@ internal class JsonResponseEnforcementE2eTest : GatewayE2eTestSupport() {
         }
     }
 
-    /** Detector failure and deadline return one safe 503 and one exact RESPONSE error pair. */
+    /**
+     * Content and reasoning share this lifecycle: Detector failure and deadline return one safe 503 and one
+     * exact RESPONSE error pair.
+     */
     @Test
+    fun `response detector failure and timeout fail closed with exact audit aggregate`() =
+        `response detector failure and timeout fail closed with exact audit aggregate`("content")
+
+    /** Exercises the same contract with the second explicit field or transport input. */
+    @Test
+    fun `reasoning response detector failure and timeout fail closed with exact audit aggregate`() =
+        `response detector failure and timeout fail closed with exact audit aggregate`("reasoning_content")
+
+    /** Executes the shared behavioral assertions for the explicitly selected field. */
     @Suppress("LongMethod", "MaxLineLength")
-    fun `response detector failure and timeout fail closed with exact audit aggregate`() {
+    private fun `response detector failure and timeout fail closed with exact audit aggregate`(field: String) {
         val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
         val timeoutEntered = CountDownLatch(1)
         val timeoutCancelled = CountDownLatch(1)
@@ -744,7 +777,7 @@ internal class JsonResponseEnforcementE2eTest : GatewayE2eTestSupport() {
 
         cases.forEachIndexed { index, case ->
             val upstreamBody =
-                """{"choices":[{"message":{"content":"${case.payload}"}}],"private":"upstream-failure-$index"}"""
+                """{"choices":[{"message":{"$field":"${case.payload}"}}],"private":"upstream-failure-$index"}"""
             val upstream = fixture.startServer {
                 HttpResponse.of(
                     ResponseHeaders.builder(HttpStatus.valueOf(418))
@@ -757,7 +790,6 @@ internal class JsonResponseEnforcementE2eTest : GatewayE2eTestSupport() {
             val policies =
                 DummyPolicyProvider(
                     listOf(
-                        shadowPolicy(case.deadline),
                         responsePolicy("response-failure-$index", Reaction(Disposition.ALLOW, emptyList()), case.deadline),
                     ),
                 )
@@ -894,14 +926,26 @@ internal class JsonResponseEnforcementE2eTest : GatewayE2eTestSupport() {
         ).forEach { sentinel -> assertFalse(rendered.contains(sentinel), "response audit leaked $sentinel") }
     }
 
-    /** Typed rewrite failure reaches the client as exact 503 without unmasked fallback. */
+    /**
+     * Content and reasoning share this lifecycle: Typed rewrite failure reaches the client as exact 503 without
+     * unmasked fallback.
+     */
     @Test
-    fun `response rewrite failure maps to exact unavailable response without disclosure`() {
+    fun `response rewrite failure maps to exact unavailable response without disclosure`() =
+        `response rewrite failure maps to exact unavailable response without disclosure`("content")
+
+    /** Exercises the same contract with the second explicit field or transport input. */
+    @Test
+    fun `reasoning response rewrite failure maps to exact unavailable response without disclosure`() =
+        `response rewrite failure maps to exact unavailable response without disclosure`("reasoning_content")
+
+    /** Executes the shared behavioral assertions for the explicitly selected field. */
+    private fun `response rewrite failure maps to exact unavailable response without disclosure`(field: String) {
         val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
         val responseSource = CompletableFuture<RetainedResponseSource>()
         val rewriteInvocations = AtomicInteger()
         val upstreamBody =
-            """{"choices":[{"message":{"content":"private rewrite@example.com"}}],"private":"rewrite-body-sentinel"}"""
+            """{"choices":[{"message":{"$field":"private rewrite@example.com"}}],"private":"rewrite-body-sentinel"}"""
         val upstream = fixture.startServer {
             HttpResponse.of(
                 ResponseHeaders.builder(HttpStatus.valueOf(418))
@@ -956,16 +1000,28 @@ internal class JsonResponseEnforcementE2eTest : GatewayE2eTestSupport() {
         )
     }
 
-    /** Client cancellation interrupts active response analysis and releases the retained owner. */
+    /**
+     * Content and reasoning share this lifecycle: Client cancellation interrupts active response analysis and
+     * releases the retained owner.
+     */
     @Test
-    fun `client cancellation during response analysis releases source without disclosure`() {
+    fun `client cancellation during response analysis releases source without disclosure`() =
+        `client cancellation during response analysis releases source without disclosure`("content")
+
+    /** Exercises the same contract with the second explicit field or transport input. */
+    @Test
+    fun `reasoning client cancellation during response analysis releases source without disclosure`() =
+        `client cancellation during response analysis releases source without disclosure`("reasoning_content")
+
+    /** Executes the shared behavioral assertions for the explicitly selected field. */
+    private fun `client cancellation during response analysis releases source without disclosure`(field: String) {
         val detectorEntered = CountDownLatch(1)
         val detectorCancelled = CountDownLatch(1)
         val responseSource = CompletableFuture<RetainedResponseSource>()
         val disclosureProbe = ResponseDisclosureProbe(responseSource) { false }
         val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
         val upstreamBody =
-            """{"choices":[{"message":{"content":"private-analysis-cancel"}}]}"""
+            """{"choices":[{"message":{"$field":"private-analysis-cancel"}}]}"""
         val upstream = fixture.startServer { HttpResponse.of(HttpStatus.OK, MediaType.JSON, upstreamBody) }
         val policies =
             DummyPolicyProvider(
@@ -1012,14 +1068,26 @@ internal class JsonResponseEnforcementE2eTest : GatewayE2eTestSupport() {
         )
     }
 
-    /** Cancellation at final audit publication wins the one-shot handoff without disclosure. */
+    /**
+     * Content and reasoning share this lifecycle: Cancellation at final audit publication wins the one-shot
+     * handoff without disclosure.
+     */
     @Test
-    fun `client cancellation at response handoff race releases source without disclosure`() {
+    fun `client cancellation at response handoff race releases source without disclosure`() =
+        `client cancellation at response handoff race releases source without disclosure`("content")
+
+    /** Exercises the same contract with the second explicit field or transport input. */
+    @Test
+    fun `reasoning client cancellation at response handoff race releases source without disclosure`() =
+        `client cancellation at response handoff race releases source without disclosure`("reasoning_content")
+
+    /** Executes the shared behavioral assertions for the explicitly selected field. */
+    private fun `client cancellation at response handoff race releases source without disclosure`(field: String) {
         val responseSource = CompletableFuture<RetainedResponseSource>()
         val disclosureProbe = ResponseDisclosureProbe(responseSource) { false }
         val barrier = attachResponseCompletionBarrier()
         val upstreamBody =
-            """{"choices":[{"message":{"content":"private-handoff-cancel"}}]}"""
+            """{"choices":[{"message":{"$field":"private-handoff-cancel"}}]}"""
         val upstream = fixture.startServer { HttpResponse.of(HttpStatus.OK, MediaType.JSON, upstreamBody) }
         val policies =
             DummyPolicyProvider(
@@ -1096,10 +1164,23 @@ internal class JsonResponseEnforcementE2eTest : GatewayE2eTestSupport() {
         assertRetainedResponseReleased(retained, "response analysis shutdown")
     }
 
-    /** Client cancellation before terminal response state cancels upstream with zero disclosure. */
+    /**
+     * Content and reasoning share this lifecycle: Client cancellation before terminal response state cancels
+     * upstream with zero disclosure.
+     */
     @Test
-    fun `client cancellation during response ingest cancels upstream without disclosure`() {
+    fun `client cancellation during response ingest cancels upstream without disclosure`() =
+        `client cancellation during response ingest cancels upstream without disclosure`("content")
+
+    /** Exercises the same contract with the second explicit field or transport input. */
+    @Test
+    fun `reasoning client cancellation during response ingest cancels upstream without disclosure`() =
+        `client cancellation during response ingest cancels upstream without disclosure`("reasoning_content")
+
+    /** Executes the shared behavioral assertions for the explicitly selected field. */
+    private fun `client cancellation during response ingest cancels upstream without disclosure`(field: String) {
         val upstreamCancelled = CountDownLatch(1)
+        val detectorCalls = AtomicInteger()
         val responseSource = CompletableFuture<RetainedResponseSource>()
         val disclosureProbe = ResponseDisclosureProbe(responseSource) { source -> source.closed }
         val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
@@ -1111,7 +1192,7 @@ internal class JsonResponseEnforcementE2eTest : GatewayE2eTestSupport() {
                         response.write(ResponseHeaders.builder(HttpStatus.OK).contentType(MediaType.JSON).build())
                         response.write(
                             HttpData.ofUtf8(
-                                "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"private",
+                                "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"$field\":\"private",
                             ),
                         )
                     }
@@ -1120,6 +1201,13 @@ internal class JsonResponseEnforcementE2eTest : GatewayE2eTestSupport() {
         val gateway =
             startShadowGateway(
                 fixture.serverUri(upstream),
+                policyProvider = DummyPolicyProvider(
+                    listOf(responsePolicy("ingest-cancel", Reaction(Disposition.ALLOW, emptyList()))),
+                ),
+                detector = Detector {
+                    detectorCalls.incrementAndGet()
+                    DetectionResult.Clean
+                },
                 responseSourceCreated = responseSource::complete,
                 responseOutputObserved = disclosureProbe::observe,
             )
@@ -1138,14 +1226,8 @@ internal class JsonResponseEnforcementE2eTest : GatewayE2eTestSupport() {
         assertEquals(null, received.headers.get(), "client observed headers during response cancellation")
         assertTrue(received.chunks.isEmpty(), "client observed bytes during response cancellation")
         assertRetainedResponseReleased(retained, "client cancellation")
-        assertTrue(
-            fixture.awaitUntil(Duration.ofSeconds(2)) { events.analysisEventNames().size == 2 },
-            "request audit pair did not complete before upstream handoff",
-        )
-        assertTrue(
-            events.filter(ILoggingEvent::isAnalysisEvent).all { event -> event.keyValue("phase") == "REQUEST" },
-            "response ingest emitted a response analysis event before a final response analysis outcome",
-        )
+        assertEquals(0, detectorCalls.get(), "cancelled ingest invoked the response detector")
+        assertTrue(events.none(ILoggingEvent::isAnalysisEvent), "cancelled ingest started analysis")
     }
 
     /** Forced shutdown cancels an incomplete retained response after the configured drain bound. */

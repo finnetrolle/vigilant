@@ -161,9 +161,9 @@ cross-event mapping и terminal paths, находится у
 [RESPONSE enforcement](../spec/requirements/response-enforcement.md). Ниже
 описано текущее runtime wiring.
 
-Ordinary JSON parser извлекает independent `content`, `refusal`, modern/deprecated
+Ordinary JSON parser извлекает independent `content`, `refusal`, `reasoning_content`, modern/deprecated
 function arguments и audio transcript fragments. SSE parser собирает
-independent `delta.content`, `delta.refusal`, modern tool arguments и
+independent `delta.content`, `delta.refusal`, `delta.reasoning_content`, modern tool arguments и
 deprecated function arguments по choice, semantic field и tool-call index.
 Recognized audio data остаётся inspection gap; `null` и empty SSE buffer не
 создают fragment или gap. Audit outcome использует precedence `DETECTED` >

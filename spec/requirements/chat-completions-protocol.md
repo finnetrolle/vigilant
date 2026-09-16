@@ -266,13 +266,14 @@ terminal event. Complete valid JSON завершает parse; trailing JSON/garb
 |---|---|---|
 | `message.content` | String | `OUTPUT_TEXT` |
 | `message.refusal` | String | `REFUSAL`, после content того же choice |
+| `message.reasoning_content` | String | `REASONING`, после refusal того же choice |
 | `message.tool_calls[]` | Object, `type=function`, object function, string arguments | Каждый `function.arguments` - отдельный `TOOL_ARGUMENT` в array order |
 | `message.function_call` | Object со string arguments | Deprecated `TOOL_ARGUMENT`, без inner JSON parse |
 | `message.audio` | Object со string data и transcript | `transcript` - `OUTPUT_TEXT`, audio - `AUDIO` gap |
-| Optional content/refusal/tool_calls/function_call/audio | Missing или null | Не создают fragment/gap |
+| Optional content/refusal/reasoning_content/tool_calls/function_call/audio | Missing или null | Не создают fragment/gap |
 | Empty recognized text | Empty string | Не создаёт fragment, само по себе не gap |
 
-Порядок: choices array; внутри choice сначала content, затем refusal, затем
+Порядок: choices array; внутри choice сначала content, затем refusal, затем reasoning_content, затем
 modern/deprecated calls и audio в source property order. Tool names и IDs
 response не добавляют fragments. Optional null относится к полю-envelope,
 но present function arguments и audio data/transcript обязаны быть strings.
@@ -281,6 +282,33 @@ missing/non-array choices, non-object choice/message, неверный known fie
 missing required nested shape, malformed UTF-8/JSON дают `MALFORMED_MESSAGE`.
 Duplicate keys на любом уровне дают `AMBIGUOUS_CONTENT`. Failure не возвращает
 partial normalized response. Gap/coverage следуют общей таблице ниже.
+
+### Plaintext response reasoning
+
+`message.reasoning_content` и `delta.reasoning_content` - два явно
+поддержанных response extension paths. Непустая string создаёт отдельный
+`REASONING` fragment, direction `RESPONSE`, role `ASSISTANT`. Reasoning-only
+JSON с отсутствующим/null content и SSE без final-content event допустимы.
+Поле не смешивается с final content, refusal, calls или другими choices;
+равные тексты разных полей остаются независимыми fragments. Reasoning сам
+по себе не создаёт gap и не меняет coverage соседних media fields.
+
+| Значение reasoning_content | Результат |
+|---|---|
+| Непустая string | Отдельный inspectable `REASONING` |
+| Empty string | Нет terminal fragment/gap; SSE резервирует first-observed порядок buffer |
+| Missing/null | Нет fragment/gap; SSE не создаёт buffer и не обнуляет накопленный текст |
+| Number/boolean/object/array | `MALFORMED_MESSAGE`, даже без selected policies |
+| Duplicate key | `AMBIGUOUS_CONTENT` |
+
+Ordinary locator использует array position:
+`/choices/<array-position>/message/reasoning_content`, независимо от reported
+index. SSE locator использует `choice.index`:
+`/choices/<choice.index>/delta/reasoning_content`. Role/index/terminal rules
+остаются общими. Unsupported response aliases `reasoning`, `reasoning_text`,
+`reasoning_details`, encrypted/opaque reasoning и request-side aliases не
+получают нового parsing contract. Произвольный поиск текста в unknown fields
+не допускается; existing additive metadata и SSE rejection rules сохраняются.
 
 ## SSE
 
@@ -296,13 +324,16 @@ non-terminal data event содержит JSON Chat Completions chunk; explicit
 |---|---|---|
 | `choices[].delta.content` | choice.index + content | `OUTPUT_TEXT` |
 | `choices[].delta.refusal` | choice.index + refusal | `REFUSAL` |
+| `choices[].delta.reasoning_content` | choice.index + reasoning_content | `REASONING` |
 | `choices[].delta.tool_calls[].function.arguments` | choice.index + tool-call index + arguments | `TOOL_ARGUMENT` |
 | `choices[].delta.function_call.arguments` | choice.index + deprecated arguments | `TOOL_ARGUMENT` |
 
 Canonical text равен concatenation string deltas в event order, независимо
-по каждому key. Порядок fragments - первое появление logical field; внутри
-одного choice event content, refusal, modern calls, deprecated call. Empty
-buffers не создают fragments. Optional null content/refusal и null call
+по каждому key. Порядок fragments - первое появление string delta logical field, включая
+empty string; null не резервирует место. Внутри одного choice event порядок:
+content, refusal, reasoning_content, modern calls, deprecated call. Полностью
+пустые buffers отбрасываются только при формировании terminal result. Optional
+null content/refusal/reasoning_content и null call
 envelopes не создают buffer; present arguments - strings. Tool function object
 обязателен, arguments могут отсутствовать на промежуточном event. Optional
 role - assistant, optional tool type - function; names/IDs не являются text.

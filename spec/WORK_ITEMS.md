@@ -153,7 +153,7 @@ context sources. Само решение хранится один раз в own
 |---|---|---:|---:|
 | [EPIC-06: OpenAI Responses protocol scope](epics/epic_06_llm_message_parsing.md) | `Draft` | 0/0 | Responses вне MVP; нет implementation-ready leaves |
 | [VIG-44: Исследовать и исправить нарушения strict parsing](issues/issue_44_strict_parsing_investigation.md) | `Draft` | нужна rejection matrix и декомпозиция | 1 день исследования |
-| [VIG-45: Проверять текстовый reasoning в ответах Chat Completions](issues/issue_45_response_reasoning_inspection.md) | `Ready for implementation` | scope согласован; JSON/SSE contract и evidence matrix готовы | 2-3 дня |
+| [VIG-45: Проверять текстовый reasoning в ответах Chat Completions](issues/issue_45_response_reasoning_inspection.md) | `In progress` | audit type R10 согласован; privacy assertions ожидают полный набор spans | 2-3 дня |
 | [VIG-46: Оценить текущее качество детекции PII](issues/issue_46_current_pii_quality_evaluation.md) | `Draft` | HiveTrace и AdvPIIBench готовы; нужен единый snapshot и раздельные отчёты | 1-2 дня |
 
 ## Active TODO: порядок следующей работы
@@ -174,10 +174,11 @@ context sources. Само решение хранится один раз в own
 4. Не начинать новый пункт, пока предыдущий hard gate не завершён и
    `./gradlew validateWorkItems` не подтверждает согласованность реестра.
 
-Текущий следующий шаг: реализовать
+Текущий следующий шаг: завершить
 [VIG-45](issues/issue_45_response_reasoning_inspection.md), проверку reasoning
-для подключения Filin. Scope согласован, задача готова к реализации
-без hard dependencies. Безопасная transport-диагностика traces принадлежит
+для подключения Filin. Audit type R10 согласован; privacy assertions ожидают
+полный набор spans каждого HTTP exchange. Hard dependencies нет.
+Безопасная transport-диагностика traces принадлежит
 [observability owner](requirements/observability.md#transport-failure-tracing);
 [проверки](../docs/transport-trace-evidence.md) разделяют SDK, exporter и installed stdout.
 [EPIC-06](epics/epic_06_llm_message_parsing.md) остаётся вне MVP и `Draft`.
