@@ -332,6 +332,36 @@ tasks.register<JavaExec>("inspectionResourceQualification") {
     outputs.upToDateWhen { false }
 }
 
+val advPiiPreparedDirectory = layout.buildDirectory.dir("advpii")
+val advPiiOfflineDirectory = providers.gradleProperty("advPiiCorpusDirectory")
+val prepareAdvPiiCorpus = tasks.register<JavaExec>("prepareAdvPiiCorpus") {
+    dependsOn(tasks.named("testClasses"))
+    group = "verification"
+    description = "Downloads or imports and verifies the pinned AdvPIIBench Parquet file."
+    classpath = sourceSets.test.get().runtimeClasspath
+    systemProperty("logback.configurationFile", "io/vigilant/detectors/pii/benchmark/advpii/logback.xml")
+    mainClass.set("io.vigilant.detectors.pii.benchmark.advpii.AdvPiiCorpusPreparationMain")
+    inputs.file("src/test/resources/io/vigilant/detectors/pii/benchmark/advpii/metadata.properties")
+    inputs.property("offlineDirectory", advPiiOfflineDirectory.orElse(""))
+    outputs.dir(advPiiPreparedDirectory)
+    outputs.upToDateWhen { false }
+    args(advPiiPreparedDirectory.get().asFile.absolutePath, advPiiOfflineDirectory.orNull.orEmpty())
+}
+
+tasks.register<JavaExec>("advPiiBenchmark") {
+    dependsOn(prepareAdvPiiCorpus)
+    group = "verification"
+    description = "Runs the explicit held-out non-gating AdvPIIBench adversarial benchmark."
+    classpath = sourceSets.test.get().runtimeClasspath
+    maxHeapSize = "1g"
+    systemProperty("logback.configurationFile", "io/vigilant/detectors/pii/benchmark/advpii/logback.xml")
+    mainClass.set("io.vigilant.detectors.pii.benchmark.advpii.AdvPiiBenchmarkMain")
+    args(
+        advPiiPreparedDirectory.get().asFile.absolutePath,
+        layout.buildDirectory.dir("reports/pii/advpii").get().asFile.absolutePath,
+    )
+}
+
 val hiveTracePreparedDirectory = layout.buildDirectory.dir("hivetrace-pii")
 val hiveTraceOfflineDirectory = providers.gradleProperty("hiveTracePiiCorpusDirectory")
 val prepareHiveTracePiiCorpus = tasks.register<JavaExec>("prepareHiveTracePiiCorpus") {

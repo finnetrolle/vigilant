@@ -1,0 +1,4 @@
+<configuration>
+    <!-- External Parquet/library diagnostics may contain source fields. -->
+    <root level="OFF"/>
+</configuration>

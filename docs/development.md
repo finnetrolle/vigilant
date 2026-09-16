@@ -579,6 +579,115 @@ Synthetic fixtures создают настоящие Parquet-файлы без �
   --tests 'io.vigilant.detectors.pii.quality.PiiQualityScorerTest'
 ~~~
 
+### AdvPIIBench adversarial benchmark
+
+`prepareAdvPiiCorpus` и `advPiiBenchmark` - явные задачи для отдельного
+held-out external/non-gating evidence. Обычные `build`/`test` не запускают
+benchmark и не скачивают корпус. JVM Parquet reader остаётся только в test
+classpath; `piiProductionRuntimeClasspathCheck` проверяет изоляцию от production.
+Recognizer behavior, taxonomy и release thresholds не изменяются.
+
+~~~bash
+./gradlew advPiiBenchmark
+./gradlew --offline advPiiBenchmark \
+  -PadvPiiCorpusDirectory=/absolute/path/to/advpii
+./gradlew test -x processTest \
+  --tests 'io.vigilant.detectors.pii.benchmark.advpii.*' \
+  --tests 'io.vigilant.detectors.pii.benchmark.common.*' \
+  --tests 'io.vigilant.detectors.pii.benchmark.hivetrace.*' \
+  --tests 'io.vigilant.detectors.pii.quality.PiiQualityScorerTest'
+~~~
+
+Offline-каталог содержит `train-00000-of-00001.parquet`. Download/cache
+находятся в `build/advpii/`; dataset не добавляется в Git. Оба способа ввода
+используют общий bounded downloader/integrity contract с HiveTrace: exact size
+и SHA-256 проверяются до parsing и перед каждым повторным использованием.
+Временный файл публикуется только после проверки, через atomic rename при
+поддержке filesystem. Обрыв HTTP, неверные bytes и cleanup failure не оставляют
+принимаемого partial artifact. Неверный offline input не заменяется download.
+HTTP connection, input/output streams и Parquet reader закрываются на success
+и failure; connect/read timeouts ограничены.
+
+[Metadata resource](../src/test/resources/io/vigilant/detectors/pii/benchmark/advpii/metadata.properties)
+владеет revision `02741d9f99a91b8fdcf48f4316a2c73be7a7449a`, точным URL,
+размером `4 258 476` bytes, SHA-256, upstream CC BY 4.0 declaration, attribution
+Roei Arpaly and Yoni Birman (Reichman University), ссылками на pinned dataset
+card/stats и ожидаемыми category/type/stage/attack counts. Declaration не
+является юридической оценкой лицензии.
+
+Adapter v1 проверяет точную Parquet schema: int32 `uid`/`input_id`, UTF-8
+`category`/`llm_input`, `attack_target` со string lists `pii`/`context` и
+`pii_spans` со string `type`/`value`/nullable `value_fuzzy`, int32 `start`/`end`.
+Required nulls, duplicate `uid`, unknown categories/types/attacks, неверные
+configurations или spans отклоняют весь corpus до scoring. Одинаковый текст
+с разными `uid` сохраняется как отдельные attack configurations. Unicode
+читается строго; NFC/NFD/NFKC/NFKD, trimming, case folding и удаление invisible
+characters отсутствуют. Python code-point offsets переводятся в UTF-8 исходного
+`llm_input`; точный срез обязан равняться `value_fuzzy or value`, включая SSN.
+
+Mapping v1: `email -> EMAIL_ADDRESS`, `phone_number -> PHONE_NUMBER`,
+`credit_card_number -> PAYMENT_CARD`, `iban -> IBAN`. `ssn` учитывается только
+в source coverage. SSN-only positives остаются positive и не входят в negative
+FPR. Detector получает исходный текст каждой записи, `stopOnFirst=false` и
+явно эти четыре типа. Остальные пять типов обозначаются `not covered`.
+
+Полная qualification до вызова detector требует `104 728` records:
+`80 936` positive, `22 560` negative, `1 232` hard_negative; `114 101` source spans,
+из них `99 696` mapped и `14 405` SSN. Positive stages: `1 208` baseline,
+`7 248` PII-only, `72 480` combined. Каждая из шести PII families (`homoglyph`,
+`chunking`, `emojify`, `char_to_word`, `invisible_chars`, `separators`) содержит
+`13 288` rows. Все type/context counts сверяются с metadata; каждая из десяти
+фиксированных combined context configurations содержит `7 248` rows.
+Baseline уникален по `input_id`; каждая attack configuration сохраняет source
+type multiplicities того же baseline. На каждый positive input приходятся
+baseline и все `6 × (1 + 10)` distinct variants.
+
+`PiiQualityScorer` переиспользует [единый matching contract](../spec/requirements/fast-pii.md#quality):
+same-type exact boundaries или nonempty half-open overlap, deterministic
+one-to-one maximum-cardinality pairing внутри записи. Source-aligned
+`TP/FP/FN`, gold/prediction counts, precision/recall/F1 публикуются для каждого
+типа и micro aggregate. Пустые denominators дают `null` в JSON и `N/A` в Markdown;
+F1 denominator пуст только при отсутствии и gold, и predictions.
+
+Baseline, PII-only, combined, negative и hard_negative - отдельные subsets.
+PII-only и combined имеют family rollups; combined также имеет каждую context
+configuration и её пересечение с каждой family. Rollups пересекаются, их
+нельзя суммировать как независимые выборки. Context-label coverage явно
+пересекается. Для каждой positive subset сопоставимый baseline содержит одну
+исходную observation на каждую attacked row с тем же `input_id` и теми же
+scored types. Это сохраняет веса исходных prompts при объединении variants.
+Report показывает baseline counts/metrics и signed recall delta в процентных
+пунктах: attack recall минус сопоставимый baseline recall. Gold независим от
+predictions; не вводится positive document-level recall.
+
+Document FPR вычисляется отдельно для `negative` и `hard_negative`: документы
+хотя бы с одним finding / все документы source category. Числитель, знаменатель
+и четыре enabled types опубликованы рядом. Entity FP остаются отдельными counts.
+`pi_few_shot_safe` содержит неразмеченные вспомогательные примеры: посторонний
+finding остаётся source-aligned FP и не повышает recall attacked gold.
+Counts и precision сохраняются с явной оговоркой об ограниченной интерпретации FP.
+
+Privacy floor детальных groups и type groups равен **5 distinct original
+`input_id`**. Повторные variants одного prompt не увеличивают support. Type
+support учитывает prompts с gold или prediction этого типа внутри subset.
+При support 0-4 объект содержит только `suppressed=true`, без counts и derived
+metrics; Markdown показывает только suppressed. Общая source coverage сохраняется.
+Reports не содержат individual IDs, raw prompts, values/value_fuzzy, tokens,
+candidates, individual spans или reversible fingerprints. Safe errors содержат
+только allowlisted code без исходных parser causes и suppressed diagnostics;
+[конфигурация benchmark logs](../src/test/resources/io/vigilant/detectors/pii/benchmark/advpii/logback.xml)
+отключает библиотечные logs в явных benchmark processes.
+
+JSON и Markdown строятся из одного безопасного aggregate snapshot:
+`build/reports/pii/advpii/advpii-benchmark.json` и `advpii-benchmark.md`.
+Они детерминированы для одинаковых detector/evaluator и corpus bytes, не содержат
+времени запуска или offline path. В session ledger отдельно фиксируются source
+revision/dirty state, команды, JDK/OS и run IDs. Corpus остаётся целиком held-out,
+без tuning/evaluation split, training или настройки production rules по результатам.
+Он не смешивается с canonical, RedMadRobot или HiveTrace evidence и не задаёт
+новый release gate. English synthetic single-turn corpus не представляет
+production traffic и не подтверждает HTTP extraction/enforcement или latency.
+
 ### PII contract checks
 
 Обязательная matrix ниже задаёт проверяемые cases, а не утверждает наличие

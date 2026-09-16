@@ -375,6 +375,43 @@ full-scan scenarios. Превышение требует profiling и отдел
 самостоятельного waiver. Метрики прошлого прогона не являются новым
 [PERF-01 evidence](../MVP_NON_FUNCTIONAL_REQUIREMENTS.md#perf-01-guardrail-latency).
 
+### AdvPIIBench
+
+AdvPIIBench является отдельным pinned held-out external/non-gating evidence,
+без tuning recognizers, training, release threshold, positive document-level
+recall или внутреннего tuning/evaluation split. Mapping ограничен
+`email -> EMAIL_ADDRESS`, `phone_number -> PHONE_NUMBER`,
+`credit_card_number -> PAYMENT_CARD`, `iban -> IBAN`; `ssn` - только source
+coverage, SSN-only positives не являются negatives.
+
+До scoring обязательны одинаковая integrity validation online/offline input,
+полная schema/category/type/attack/UID/span validation, pinned coverage и
+baseline comparability по исходным `input_id` и source type multiplicities.
+Исходные bytes/Unicode сохраняются без NFC/NFD/NFKC/NFKD, trimming или удаления
+invisible characters; source slice равен `value_fuzzy or value`.
+Offsets преобразуются из Python code points в UTF-8 исходного текста.
+Разные `uid` с одинаковым текстом остаются разными записями.
+
+Публичный detector вызывается с `stopOnFirst=false` и явными четырьмя mapped
+types. Общий quality matcher сохраняет source-aligned counts, per-type и micro
+exact/overlap P/R/F1; empty denominator обозначается явно. Baseline, PII-only
+families и combined configurations публикуются раздельно. Recall delta в
+процентных пунктах использует baseline тех же input IDs, scored types и весов
+variants; overlapping context labels не складываются как независимые subsets.
+Negative и hard_negative document FPR имеют отдельные numerator/denominator
+и enabled types, не заменяют entity FP. В `pi_few_shot_safe` unrelated predicted
+span не даёт TP; source precision сохраняется с caveat о неразмеченных
+auxiliary examples и ограничении интерпретации FP.
+
+Detailed attack/type groups требуют минимум пяти разных исходных `input_id`;
+variants одного prompt не увеличивают support. Меньшие группы suppressed без
+counts/derived metrics, общая coverage остаётся. Reports/logs/errors не содержат
+raw text, PII/value_fuzzy, tokens, candidates или reversible fingerprints.
+Dataset и JVM reader отсутствуют в production classpath; обычные build/test
+не запускают download/benchmark. Pinned provenance, attribution, точные counts,
+safe validation, subset/support policy и команды воспроизведения принадлежат
+[AdvPIIBench methodology](../../docs/development.md#advpiibench-adversarial-benchmark).
+
 ## Lifecycle и privacy
 
 Один instance immutable и безопасен для concurrent calls, не сохраняет request

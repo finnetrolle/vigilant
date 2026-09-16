@@ -137,6 +137,18 @@ adapter сохраняет именно этот global order и всегда д
 ./gradlew redMadRobotPiiBenchmark
 ```
 
+Отдельный adversarial benchmark запускается через `./gradlew advPiiBenchmark`.
+Он оценивает четыре mapped типа (email, phone, payment card, IBAN), baseline,
+шесть PII attack families, combined configurations и два negative subsets.
+Source-aligned exact/overlap TP/FP/FN и P/R/F1, recall delta относительно
+сопоставимого baseline и document FPR находятся в `build/reports/pii/advpii/`.
+Это held-out non-gating evidence, без tuning recognizers и объединения с другими
+корпусами. Privacy floor: пять разных исходных prompts на detailed group/type;
+редкие группы suppressed. `pi_few_shot_safe` требует отдельной оговорки об
+unlabelled auxiliary examples: unrelated finding не обнаруживает attacked gold.
+[Методика, mapping, offline input и caveats](development.md#advpiibench-adversarial-benchmark)
+фиксируют неизменный исходный Unicode и ограничения interpretation.
+
 Базовый тест JMH запускается командой:
 
 ```bash
