@@ -25,14 +25,55 @@ bytes дают `INVALID_RESPONSE`; gateway возвращает existing safe
 - `spec/requirements/http-gateway.md#inspection-error-matrix`
 - `docs/development.md#identity-contract-checks`
 
-## План изменений
+## Согласованный план реализации
 
-- `BridgeIdentityClient.IDENTITY_JSON`: включить full-document validation без
-  изменения duplicate detection, media/status mapping или aggregation limit.
-- `BridgeIdentityClientTest`: real Armeria response matrix над exact raw bytes.
-- `GatewayIdentityE2eTest`: literal public response, no demand/upstream, fresh
-  retry после invalid document через existing cache boundary.
-- Requirements coverage/evidence: заменить gap фактическим test evidence.
+Цель - сделать existing Bridge JSON parsing full-document strict, сохранив
+остальной HTTP, identity, cache и safe-error contract без изменений.
+
+Текущий `BridgeIdentityClient.parseResponse` передаёт полное агрегированное тело
+в `IDENTITY_JSON.readTree`, но mapper включает только
+`STRICT_DUPLICATE_DETECTION`. Все parser exceptions уже преобразуются в
+`Unavailable(INVALID_RESPONSE)`. `CachingExternalIdentityLookup` сохраняет
+только `Resolved`, поэтому invalid document уже удаляет in-flight generation и
+следующий request с тем же token создаёт fresh Bridge lookup.
+
+Обязательные решения:
+
+- включить `DeserializationFeature.FAIL_ON_TRAILING_TOKENS` на существующем
+  `BridgeIdentityClient.IDENTITY_JSON`, по уже применяемому в OpenAI parsers
+  проектному паттерну; не вводить новый parser, setting или compatibility path;
+- сохранить `STRICT_DUPLICATE_DETECTION`, существующий `parseResponse` mapping,
+  aggregation limit и cache implementation;
+- доказывать parser contract через real Armeria responses с exact raw bytes и
+  независимыми literal/typed expectations;
+- доказывать public failure и fresh retry через real Bridge, gateway, existing
+  cache boundary и один token.
+
+Порядок выполнения:
+
+1. В `BridgeIdentityClientTest` добавить B1-B3 matrices. Сначала получить
+   behavioral RED на B2 или B3 через public `BridgeIdentityClient` seam, затем
+   сохранить полный набор whitespace, second-root и trailing-garbage cases.
+2. В `BridgeIdentityClient` включить full-document validation и обновить KDoc
+   mapper, чтобы все trailing non-whitespace попадали в existing
+   `INVALID_RESPONSE`, а trailing JSON whitespace и valid additive fields
+   оставались допустимыми.
+3. В `GatewayIdentityE2eTest` добавить representative second-root и garbage
+   scenarios. Первый request должен дать exact safe 503 без body demand,
+   upstream и sentinel disclosure; второй request с тем же token должен вызвать
+   fresh Bridge lookup, получить valid identity и дойти до upstream. Независимые
+   counters подтверждают ровно два Bridge calls.
+4. В `docs/requirements-coverage.md` заменить Bridge full-document gap ссылкой
+   на фактическое source/test evidence, не объявляя закрытыми отдельные JWT/JWK
+   gaps. После этого выполнить focused suites, `detekt` и один полный build
+   командами из раздела «Проверки»; B1-B6 и существующие regressions должны быть
+   GREEN.
+
+Имена новых test helpers и группировка dynamic tests остаются на усмотрение
+исполнителя. Добавленные или изменённые Kotlin methods и tests обязаны иметь
+актуальный KDoc. Агент-исполнитель должен следовать этому плану; существенное
+отступление от обязательных решений требует предварительного обсуждения с
+оператором.
 
 ## Критерии готовности и evidence contract
 
