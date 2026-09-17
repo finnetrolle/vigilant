@@ -24,15 +24,43 @@ JSON object с optional trailing JSON whitespace. Correctly signed token с
 - `spec/requirements/identity-and-context.md#offline-jwt`
 - `docs/development.md#identity-contract-checks`
 
-## План изменений
+## Согласованный план реализации
 
-- `OfflineJwtIdentityExtractor.JWT_JSON`: включить full-document validation для
-  обоих decoded segments, сохранив duplicate detection и validation order.
-- JWT fixture: подписывать exact caller-supplied raw header/claims bytes, чтобы
-  parser failure не маскировался invalid signature.
-- `OfflineJwtIdentityExtractorTest`: finite header/claims matrix.
-- `GatewayIdentityE2eTest`: safe HTTP, no body demand/upstream и privacy.
-- Requirements coverage/evidence: записать фактическую contract protection.
+Агент-исполнитель должен руководствоваться этим планом и принятыми решениями.
+Существенное отступление от подхода требует обсуждения с оператором; локальные
+имена test helpers и раскладка matrix cases остаются на усмотрение исполнителя.
+
+Сейчас `OfflineJwtIdentityExtractor.JWT_JSON` обнаруживает duplicate keys, но
+`readTree` принимает первый JSON root и игнорирует trailing data. Test helper
+`signedCompact` заменяет header segment после подписания, поэтому не доказывает
+parser failure при valid signature.
+
+Принято использовать существующий Jackson full-document механизм
+`FAIL_ON_TRAILING_TOKENS`, уже применяемый для Bridge JSON. Новая parser
+абстракция не нужна. Должны сохраниться exact compact signing input, duplicate
+detection и порядок header -> `alg`/`kid` -> signature -> claims.
+
+1. В `JwtTestFixtures.kt` добавить raw signer для exact caller-supplied
+   header/claims bytes. Перевести `signedJwt` и invalid raw-header fixture на
+   общий signing path, чтобы отрицательные parser cases имели valid signature.
+2. В `OfflineJwtIdentityExtractorTest.kt` сначала зафиксировать regression RED:
+   для обоих segments проверить empty/SP/TAB/LF/CRLF, каждый second-root type и
+   identifier/punctuation/truncated-token. Positive control того же raw signing
+   path должен отделять parser failure от signature/fixture error.
+3. В `OfflineJwtIdentityExtractor.JWT_JSON` включить
+   `FAIL_ON_TRAILING_TOKENS`, не меняя validation flow и safe failure mapping.
+4. В `GatewayIdentityE2eTest.kt` добавить representative correctly signed case
+   для каждого segment. Проверить exact safe HTTP, отсутствие body demand,
+   analysis и upstream call, а также отсутствие token/header/claims/body
+   sentinels в response, logs/audit и spans через accepting telemetry sink.
+5. После GREEN обновить permanent Offline JWT contract, runtime/evidence text и
+   `requirements-coverage.md`, закрыв только JWT full-document gap. Соседний JWK
+   gap остаётся открытым. Завершать и удалять VIG-48 из active catalog можно
+   только после всех criteria и обязательных checks по completion protocol.
+
+Ожидаемые проверки определены ниже: `J1`-`J7`, существующая JWT regression
+matrix, focused identity suites, detekt и durable full build. Архитектура,
+конфигурация, lifecycle и diagrams не меняются.
 
 ## Критерии готовности и evidence contract
 

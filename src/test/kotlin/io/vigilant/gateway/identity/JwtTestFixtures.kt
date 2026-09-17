@@ -52,8 +52,21 @@ internal fun signedJwt(
     val header = linkedMapOf<String, Any?>()
     if (includeAlgorithm) header["alg"] = algorithm
     if (includeKid) header["kid"] = kid
-    val encodedHeader = base64Url(JWT_JSON.writeValueAsBytes(header))
-    val encodedClaims = base64Url(JWT_JSON.writeValueAsBytes(claims))
+    return signedRawJwt(
+        key = key,
+        header = JWT_JSON.writeValueAsBytes(header),
+        claims = JWT_JSON.writeValueAsBytes(claims),
+    )
+}
+
+/** Signs the exact caller-supplied protected-header and claims bytes without normalization. */
+internal fun signedRawJwt(
+    key: JwtTestKey,
+    header: ByteArray,
+    claims: ByteArray,
+): String {
+    val encodedHeader = base64Url(header)
+    val encodedClaims = base64Url(claims)
     val signingInput = "$encodedHeader.$encodedClaims"
     val signature = Signature.getInstance("SHA256withRSA").run {
         initSign(key.keyPair.private)
@@ -91,7 +104,26 @@ internal fun invalidJwtTokens(
     return linkedMapOf(
         "empty token" to "",
         "two segments" to "header.payload",
-        "invalid header json" to signedCompact(trusted, "not-json", validClaims),
+        "invalid header json" to
+            signedRawJwt(
+                trusted,
+                "not-json".toByteArray(StandardCharsets.UTF_8),
+                JWT_JSON.writeValueAsBytes(validClaims),
+            ),
+        "duplicate header key" to
+            signedRawJwt(
+                trusted,
+                """{"alg":"RS256","alg":"RS256","kid":"${trusted.kid}"}"""
+                    .toByteArray(StandardCharsets.UTF_8),
+                JWT_JSON.writeValueAsBytes(validClaims),
+            ),
+        "duplicate claims key" to
+            signedRawJwt(
+                trusted,
+                JWT_JSON.writeValueAsBytes(mapOf("alg" to "RS256", "kid" to trusted.kid)),
+                (JWT_JSON.writeValueAsString(validClaims).dropLast(1) + ",\"sub\":\"User.Subject\"}")
+                    .toByteArray(StandardCharsets.UTF_8),
+            ),
         "missing alg" to signedJwt(trusted, validClaims, includeAlgorithm = false),
         "non-string alg" to signedJwt(trusted, validClaims, algorithm = 256),
         "wrong alg" to signedJwt(trusted, validClaims, algorithm = "HS256"),
@@ -135,10 +167,6 @@ internal fun invalidJwtTokens(
         "too many groups" to signedJwt(trusted, claimsWith("groups", (0..128).map { "group-$it" })),
     )
 }
-
-/** Signs a compact token with a caller-supplied raw header JSON body. */
-private fun signedCompact(key: JwtTestKey, header: String, claims: Map<String, Any?>): String =
-    signedJwt(key, claims).replaceBefore('.', base64Url(header.toByteArray()))
 
 /** Encodes arbitrary bytes as unpadded Base64url for compact JWT fixtures. */
 private fun base64Url(bytes: ByteArray): String =

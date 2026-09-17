@@ -664,7 +664,7 @@ internal abstract class GatewayE2eTestSupport {
 }
 /** Returns one structured event key without relying on key order. */
 internal fun ch.qos.logback.classic.spi.ILoggingEvent.keyValue(key: String): Any? =
-    keyValuePairs.firstOrNull { pair -> pair.key == key }?.value
+    keyValuePairs.orEmpty().firstOrNull { pair -> pair.key == key }?.value
 
 /** Returns the complete unordered structured key-value schema of this event. */
 internal fun ILoggingEvent.auditFieldNames(): Set<String> = keyValuePairs.orEmpty().map { pair -> pair.key }.toSet()

@@ -94,7 +94,7 @@ Environment JWK override - strict JSON array объектов с полями т
 
 | Проверка credential | Условие success; остальные варианты дают safe `400` до body demand |
 |---|---|
-| Compact form | ровно три непустых Base64url segments; valid object header и claims, без duplicate keys |
+| Compact form | ровно три непустых Base64url segments; header и claims каждый содержат ровно один полный JSON object без duplicate keys, после которого допустим только JSON whitespace |
 | Algorithm/key | exact `alg=RS256`; string non-blank `kid` выбирает ровно один configured key; missing/unknown kid и другой algorithm запрещены |
 | Signature | valid RS256 signature для exact signing input выбранным pinned public key |
 | Issuer | string `iss` точно равен configured issuer |

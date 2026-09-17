@@ -68,6 +68,7 @@ import io.vigilant.gateway.identity.jwtIdentitySettings
 import io.vigilant.gateway.identity.jwtTestKey
 import io.vigilant.gateway.identity.invalidJwtTokens
 import io.vigilant.gateway.identity.signedJwt
+import io.vigilant.gateway.identity.signedRawJwt
 import io.vigilant.gateway.identity.validJwtClaims
 import io.vigilant.gateway.metrics.TestMetricReader
 import io.vigilant.gateway.metrics.MetricsService
@@ -114,6 +115,7 @@ import io.vigilant.source.RetainedResponseSource
 import io.vigilant.windowing.WindowedFastPiiExecutor
 import java.net.URI
 import java.nio.ByteBuffer
+import java.nio.charset.StandardCharsets
 import java.time.Duration
 import java.time.Clock
 import java.time.Instant
@@ -2591,6 +2593,102 @@ internal class GatewayIdentityE2eTest : GatewayE2eTestSupport() {
 
         assertTrue(events.analysisEventNames().isEmpty(), "invalid JWT started analysis")
         assertEquals(0, upstreamRequests.get())
+    }
+
+    /** Correctly signed trailing header or claims data fails safely without disclosure or work. */
+    @Test
+    @Suppress("LongMethod")
+    fun `jwt trailing data in either segment is rejected before body demand`() {
+        val key = jwtTestKey("key-trailing-e2e")
+        val header =
+            """{"alg":"RS256","kid":"key-trailing-e2e","marker":"jwt-header-value-sentinel"}"""
+        val claims =
+            """{"iss":"https://keycloak.example/realms/platform","aud":"vigilant","exp":1767225900,""" +
+                """"nbf":1767225599,"sub":"jwt-claims-value-sentinel","groups":[]}"""
+        val cases =
+            linkedMapOf(
+                "header" to
+                    signedRawJwt(
+                        key,
+                        (header + " {\"tail\":\"jwt-header-tail-sentinel\"}")
+                            .toByteArray(StandardCharsets.UTF_8),
+                        claims.toByteArray(StandardCharsets.UTF_8),
+                    ),
+                "claims" to
+                    signedRawJwt(
+                        key,
+                        header.toByteArray(StandardCharsets.UTF_8),
+                        (claims + " jwt-claims-tail-sentinel").toByteArray(StandardCharsets.UTF_8),
+                    ),
+            )
+        val bodyDemanded = AtomicBoolean()
+        val upstreamRequests = AtomicInteger()
+        val upstream = fixture.startServer {
+            upstreamRequests.incrementAndGet()
+            validChatCompletionsResponse()
+        }
+        val events = fixture.attachAppenderTo("ROOT")
+        val gateway =
+            startShadowGateway(
+                upstreamUri = fixture.serverUri(upstream),
+                identityExtractor =
+                    OfflineJwtIdentityExtractor(
+                        jwtIdentitySettings(key),
+                        Clock.fixed(JWT_NOW, ZoneOffset.UTC),
+                    ),
+                requestBodyDemandObserved = bodyDemanded,
+            )
+        val client = isolatedGatewayClient(fixture.serverUri(gateway))
+        val responses = mutableListOf<AggregatedHttpResponse>()
+
+        cases.forEach { (name, token) ->
+            bodyDemanded.set(false)
+            val response =
+                client
+                    .execute(
+                        HttpRequest.of(
+                            RequestHeaders.builder(HttpMethod.POST, "/v1/chat/completions")
+                                .contentType(MediaType.JSON)
+                                .add("authorization", "Bearer $token")
+                                .build(),
+                            HttpData.ofUtf8(chatCompletionsBody("jwt-$name-body-sentinel")),
+                        ),
+                    ).aggregate()
+                    .join()
+            responses += response
+
+            assertFalse(bodyDemanded.get(), "$name demanded request body")
+            assertEquals(0, upstreamRequests.get(), "$name reached upstream")
+            assertEquals(HttpStatus.BAD_REQUEST, response.status(), name)
+            assertEquals("""{"error":"invalid_identity"}""", response.contentUtf8(), name)
+        }
+
+        assertTrue(events.analysisEventNames().isEmpty(), "trailing JWT data started analysis")
+        assertTrue(
+            fixture.awaitUntil(Duration.ofSeconds(2)) {
+                events.count { event -> event.keyValue("event.name") == "request_completed" } == cases.size
+            },
+            "request logs were not published before the privacy snapshot",
+        )
+        assertTrue(
+            fixture.awaitUntil(Duration.ofSeconds(2)) {
+                spans.count { span -> span.name == "vigilant.request.inspect" } == cases.size
+            },
+            "identity rejection spans were not published before the privacy snapshot",
+        )
+        val surfaces =
+            responses.joinToString("\n") { response -> response.headers().toString() + response.contentUtf8() } +
+                events.joinToString("\n") { event -> event.renderForSecretScan() } +
+                spans.joinToString("\n")
+        (cases.values +
+            listOf(
+                "jwt-header-value-sentinel",
+                "jwt-header-tail-sentinel",
+                "jwt-claims-value-sentinel",
+                "jwt-claims-tail-sentinel",
+                "jwt-header-body-sentinel",
+                "jwt-claims-body-sentinel",
+            )).forEach { sentinel -> assertFalse(surfaces.contains(sentinel), sentinel) }
     }
 
     /** Verifies SERVER parentage for request inspection, upstream, and response inspection siblings. */

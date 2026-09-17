@@ -3,6 +3,7 @@ package io.vigilant.gateway.identity
 import com.linecorp.armeria.common.RequestHeaders
 import com.fasterxml.jackson.core.JsonFactory
 import com.fasterxml.jackson.core.StreamReadFeature
+import com.fasterxml.jackson.databind.DeserializationFeature
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import io.vigilant.context.MAX_NORMALIZED_IDENTITY_GROUPS
@@ -155,12 +156,12 @@ class OfflineJwtIdentityExtractor(
         /** JCA implementation name corresponding exactly to RS256. */
         const val SIGNATURE_ALGORITHM = "SHA256withRSA"
 
-        /** Strict duplicate-detecting JSON parser shared by immutable extractor instances. */
+        /** Strict full-document JSON parser shared by immutable extractor instances. */
         val JWT_JSON: ObjectMapper =
             ObjectMapper(
                 JsonFactory.builder()
                     .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
                     .build(),
-            )
+            ).enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
     }
 }

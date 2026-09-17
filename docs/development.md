@@ -771,6 +771,9 @@ representative happy path:
   punctuation и truncated token. Real gateway/cache scenarios для second root
   и garbage проверяют exact safe 503 без body demand/upstream/disclosure, затем
   valid response и upstream handoff при fresh lookup с тем же token, ровно два Bridge calls.
+  Offline JWT применяет ту же finite suffix matrix отдельно к exactly signed
+  protected header и claims; representative real-gateway rejects дают exact safe
+  400 без body demand, analysis, upstream или disclosure.
 - HMAC deterministic randomness с независимыми literal vectors: равные
   String contents, case/character differences, different secrets, concurrent
   mixed inputs. Review retained state/listeners/callbacks проверяет отсутствие
