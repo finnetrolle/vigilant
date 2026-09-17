@@ -176,6 +176,51 @@ class BridgeIdentityClientTest {
         }
     }
 
+    /** B1: Empty and every JSON whitespace suffix preserve the normalized identity. */
+    @TestFactory
+    fun `complete bridge document permits only trailing json whitespace`(): List<DynamicTest> =
+        listOf("empty" to "", "SP" to " ", "TAB" to "\t", "LF" to "\n", "CRLF" to "\r\n")
+            .map { (name, suffix) ->
+                DynamicTest.dynamicTest("B1_VALID_WHITESPACE $name") {
+                    val result = bridgeResult(
+                        HttpStatus.OK,
+                        MediaType.JSON,
+                        ("""{"user":"External.User","groups":["Operators","Security"]}""" + suffix)
+                            .toByteArray(),
+                    )
+                    val identity = assertIs<ExternalIdentityLookupResult.Resolved>(result, name).identity
+                    assertEquals("external.user", identity.user, name)
+                    assertEquals(setOf("operators", "security"), identity.groups, name)
+                }
+            }
+
+    /** B2: Each JSON root type after a valid identity rejects the complete response. */
+    @TestFactory
+    fun `second json root after bridge identity is rejected`(): List<DynamicTest> =
+        invalidJsonTests(
+            listOf(
+                "object" to "{}",
+                "array" to "[]",
+                "string" to "\"second\"",
+                "number" to "17",
+                "boolean-true" to "true",
+                "boolean-false" to "false",
+                "null" to "null",
+            ).map { (name, suffix) ->
+                "B2_SECOND_ROOT $name" to """{"user":"user","groups":[]} $suffix"""
+            },
+        )
+
+    /** B3: Identifier, punctuation, and truncated-token suffixes reject a valid identity prefix. */
+    @TestFactory
+    fun `trailing garbage after bridge identity is rejected`(): List<DynamicTest> =
+        invalidJsonTests(
+            listOf("identifier" to "garbage", "punctuation" to "!", "truncated-token" to "tru")
+                .map { (name, suffix) ->
+                    "B3_TRAILING_GARBAGE $name" to """{"user":"user","groups":[]} $suffix"""
+                },
+        )
+
     /** FAIL-01: Every final status from 201 through 599 is one provider-status failure. */
     @TestFactory
     fun `every non 200 final bridge status is provider failure`(): List<DynamicTest> {

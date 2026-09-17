@@ -766,6 +766,11 @@ representative happy path:
   standard aggregate overflow, premature close, reserved connect failure;
   deadline отдельно на acquisition/connect/write/headers/body и every permit
   terminal path. Dummy/JWT regression использует ту же gateway boundary.
+  Full-document cases используют exact raw bytes: valid object + empty/SP/TAB/LF/CRLF;
+  second object/array/string/number/boolean/null root; trailing identifier,
+  punctuation и truncated token. Real gateway/cache scenarios для second root
+  и garbage проверяют exact safe 503 без body demand/upstream/disclosure, затем
+  valid response и upstream handoff при fresh lookup с тем же token, ровно два Bridge calls.
 - HMAC deterministic randomness с независимыми literal vectors: равные
   String contents, case/character differences, different secrets, concurrent
   mixed inputs. Review retained state/listeners/callbacks проверяет отсутствие

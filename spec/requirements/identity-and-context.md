@@ -133,8 +133,10 @@ Body отсутствует. Client headers, client query/body и request contex
 retries, discovery, circuit breaker, несколько providers и plugin registry
 отсутствуют. Cache hit и присоединение к shared lookup не создают attempt.
 
-Success требует `200 application/json` (включая `charset=utf-8`), JSON object
-без duplicate keys с required `user` и `groups` из normalized contract.
+Success требует `200 application/json` (включая `charset=utf-8`), ровно один
+полный JSON object без duplicate keys с required `user` и `groups` из normalized
+contract. После object допустим только JSON whitespace; второй JSON root и
+любые trailing non-whitespace bytes являются protocol failure.
 Unknown top-level fields игнорируются для additive compatibility. Missing
 `groups` не преобразуется в empty set. HTTP aggregation использует standard
 bounded Armeria `maxResponseLength` (текущий default `10 MiB`); отдельной
@@ -144,7 +146,7 @@ Compressed response отдельно не запрещён.
 | Provider outcome | Safe code |
 |---|---|
 | Каждый final status `201..599`, включая все 3xx, 401, 403, остальные 4xx/5xx | `PROVIDER_STATUS` |
-| Missing/non-JSON media type; invalid UTF-8; malformed JSON; duplicate keys; non-object root | `INVALID_RESPONSE` |
+| Missing/non-JSON media type; invalid UTF-8; malformed JSON; duplicate keys; non-object root; second root или trailing non-whitespace bytes | `INVALID_RESPONSE` |
 | Missing/non-string/blank/grammar-invalid user; missing/non-array groups; любой non-string/blank/invalid member; normalized duplicates; 129 unique groups | `INVALID_RESPONSE` |
 | Превышение standard aggregate limit | `INVALID_RESPONSE` |
 | DNS/connect failure или premature incomplete connection close | `TRANSPORT_ERROR` |

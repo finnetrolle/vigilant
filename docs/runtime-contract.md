@@ -70,6 +70,12 @@ extractor и `BridgeIdentityClient`: completed hit обходит Bridge, cold m
 проходит его exact one-attempt HTTP boundary. Caffeine хранит successful
 identity с write TTL/maximumSize и full HMAC keys отдельного hasher.
 
+Bridge mapper проверяет полный JSON document с duplicate detection: после
+единственного identity object допускается только JSON whitespace. Второй root
+или trailing garbage дают existing `INVALID_RESPONSE` и safe
+`503 identity_unavailable` до body demand/upstream. Такой failure не кешируется;
+следующий request с тем же token выполняет fresh Bridge lookup.
+
 Decorator владеет caller futures и generations; Bridge - exchange, deadline,
 permit и CLIENT span. Cancellation одного caller сохраняет shared lookup для
 остальных, последнего - отменяет exchange. `OutboundClientResources` закрывает

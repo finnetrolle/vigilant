@@ -2,6 +2,7 @@ package io.vigilant.gateway.identity
 
 import com.fasterxml.jackson.core.JsonFactory
 import com.fasterxml.jackson.core.StreamReadFeature
+import com.fasterxml.jackson.databind.DeserializationFeature
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.linecorp.armeria.client.RequestOptions
@@ -426,12 +427,12 @@ internal class BridgeIdentityClient(
         val HTTP_RESPONSE_STATUS_CLASS: AttributeKey<String> =
             AttributeKey.stringKey("http.response.status_class")
 
-        /** Strict duplicate-detecting parser for trusted Bridge identity documents. */
+        /** Requires one complete duplicate-free document, allowing only trailing JSON whitespace. */
         val IDENTITY_JSON: ObjectMapper =
             ObjectMapper(
                 JsonFactory.builder()
                     .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
                     .build(),
-            )
+            ).enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
     }
 }

@@ -152,7 +152,6 @@ context sources. Само решение хранится один раз в own
 | Work item | Статус | Прогресс | Оценка |
 |---|---|---:|---:|
 | [EPIC-06: OpenAI Responses protocol scope](epics/epic_06_llm_message_parsing.md) | `Draft` | 0/0 | Responses вне MVP; нет implementation-ready leaves |
-| [VIG-47: Отклонять trailing data в Bridge identity JSON](issues/issue_47_bridge_full_document_json.md) | `Ready for implementation` | bounded defect воспроизведён | 1-2 дня |
 | [VIG-48: Отклонять trailing data в JWT header и claims](issues/issue_48_jwt_full_document_json.md) | `Ready for implementation` | signed defect matrix воспроизведена | 1-2 дня |
 | [VIG-49: Отклонять trailing data в JWK environment JSON](issues/issue_49_jwk_environment_full_document_json.md) | `Ready for implementation` | startup defect matrix воспроизведена | 1 день |
 
@@ -174,12 +173,11 @@ context sources. Само решение хранится один раз в own
 4. Не начинать новый пункт, пока предыдущий hard gate не завершён и
    `./gradlew validateWorkItems` не подтверждает согласованность реестра.
 
-Готовы три независимые issues. Предпочтительный порядок:
-[VIG-47](issues/issue_47_bridge_full_document_json.md) -
+Готовы две независимые issues. Предпочтительный порядок:
 [VIG-48](issues/issue_48_jwt_full_document_json.md) -
 [VIG-49](issues/issue_49_jwk_environment_full_document_json.md).
 Текущий следующий шаг:
-[VIG-47](issues/issue_47_bridge_full_document_json.md).
+[VIG-48](issues/issue_48_jwt_full_document_json.md).
 Они закрывают подтверждённое permissive parsing на identity boundaries;
 hard dependencies между ними отсутствуют. Role-neutral request inspection уже
 закреплена в [protocol owner](requirements/chat-completions-protocol.md#recognized-message-shapes).
@@ -197,8 +195,10 @@ hard dependencies между ними отсутствуют. Role-neutral reque
 Он не меняет runtime rules или evidence опубликованной
 response reasoning capability.
 
-Завершение transport tracing не закрывает identity full-document parsing
-VIG-47..49.
+Full-document Bridge parsing закреплён в
+[identity owner](requirements/identity-and-context.md#external-bridge) и
+[coverage](../docs/requirements-coverage.md#identity-evidence).
+JWT/JWK full-document gaps остаются в VIG-48..49.
 
 Стендовую приёмку production identity, external probe и telemetry chain
 владелец продукта 2026-09-10 взял на себя; отдельная агентская задача на неё

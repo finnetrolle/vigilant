@@ -2073,6 +2073,100 @@ internal class GatewayIdentityE2eTest : GatewayE2eTestSupport() {
             }
         }
 
+    /** B4/B5: Full-document failures reject before demand, stay private, and permit a fresh same-token lookup. */
+    @TestFactory
+    @Suppress("LongMethod") // Keeps each two-request scenario and its independent boundary observations together.
+    fun `bridge trailing data fails safely then same token retries through real cache`(): List<DynamicTest> =
+        listOf(
+            "second-root" to """{"provider":"provider-tail-sentinel"}""",
+            "garbage" to "provider-tail-sentinel",
+        ).map { (name, suffix) ->
+            DynamicTest.dynamicTest("B4_PUBLIC_FAILURE B5_RETRY $name") {
+                val eventsStart = cachePrivacyEvents.size
+                val bridgeCalls = AtomicInteger()
+                val bridgeAuthorizations = CopyOnWriteArrayList<String?>()
+                val bridge = fixture.startServer { request ->
+                    bridgeAuthorizations += request.headers().get("authorization")
+                    val document = if (bridgeCalls.incrementAndGet() == 1) {
+                        """{"user":"invalid-user-sentinel","groups":["invalid-group-sentinel"]} $suffix"""
+                    } else {
+                        """{"user":"Fresh.User","groups":["Operators"]}"""
+                    }
+                    HttpResponse.of(
+                        ResponseHeaders.builder(HttpStatus.OK)
+                            .contentType(MediaType.JSON)
+                            .add("x-bridge-private", "provider-header-sentinel")
+                            .build(),
+                        HttpData.wrap(document.toByteArray()),
+                    )
+                }
+                val upstreamCalls = AtomicInteger()
+                val upstreamObserved = CompletableFuture<AggregatedHttpRequest>()
+                val upstream = fixture.startServer { request ->
+                    upstreamCalls.incrementAndGet()
+                    HttpResponse.of(request.aggregate().thenApply { observed ->
+                        upstreamObserved.complete(observed)
+                        validChatCompletionsResponse()
+                    })
+                }
+                val bodyDemanded = AtomicBoolean()
+                val responseContexts = CopyOnWriteArrayList<PolicyContext>()
+                val cache = newCachedExternalLookup(
+                    URI("${fixture.serverUri(bridge)}/identity"),
+                    maxWaiters = 1,
+                )
+                val gateway = startShadowGateway(
+                    fixture.serverUri(upstream),
+                    identityExtractor = ExternalIdentityExtractor(cache),
+                    requestBodyDemandObserved = bodyDemanded,
+                    responseContexts = responseContexts,
+                )
+                val client = isolatedGatewayClient(fixture.serverUri(gateway))
+                val authorization = "Bearer full-document-$name-token-sentinel"
+                val body = chatCompletionsBody("full-document-body-sentinel")
+                val failure = client.execute(chatCompletionsRequestWithBody(body, authorization))
+                    .aggregate().get(3, TimeUnit.SECONDS)
+
+                assertEquals(HttpStatus.SERVICE_UNAVAILABLE, failure.status(), name)
+                assertEquals(listOf("1"), failure.headers().getAll("retry-after"), name)
+                assertEquals(listOf("application/json"), failure.headers().getAll("content-type"), name)
+                assertEquals(IDENTITY_UNAVAILABLE_BODY, failure.contentUtf8(), name)
+                assertFalse(bodyDemanded.get(), name)
+                assertEquals(0, upstreamCalls.get(), name)
+                assertEquals(1, bridgeCalls.get(), name)
+                assertTrue(responseContexts.isEmpty(), name)
+
+                val success = client.execute(chatCompletionsRequestWithBody(body, authorization))
+                    .aggregate().get(3, TimeUnit.SECONDS)
+
+                assertEquals(HttpStatus.OK, success.status(), name)
+                assertEquals(VALID_CHAT_COMPLETIONS_RESPONSE_BODY, success.contentUtf8(), name)
+                assertTrue(bodyDemanded.get(), name)
+                assertEquals(1, upstreamCalls.get(), name)
+                assertEquals(2, bridgeCalls.get(), name)
+                assertEquals(listOf(authorization, authorization), bridgeAuthorizations.toList(), name)
+                val forwarded = upstreamObserved.get(1, TimeUnit.SECONDS)
+                assertEquals(authorization, forwarded.headers().get("authorization"), name)
+                assertEquals(body, forwarded.contentUtf8(), name)
+                assertEquals("fresh.user", responseContexts.single().user, name)
+                assertEquals(setOf("operators"), responseContexts.single().groups, name)
+                assertTrue(fixture.awaitUntil(Duration.ofSeconds(3)) {
+                    cachePrivacyEvents.drop(eventsStart).count { event ->
+                        event.keyValuePairs.orEmpty().any {
+                            it.key == "event.name" && it.value == "request_completed"
+                        }
+                    } == 2
+                }, "both owning request logs must be published before the privacy assertion")
+                val surfaces = failure.headers().toString() + failure.contentUtf8() +
+                    cachePrivacyEvents.drop(eventsStart).joinToString("\n") { it.renderForSecretScan() }
+                listOf(
+                    "full-document-$name-token-sentinel", "full-document-body-sentinel",
+                    "invalid-user-sentinel", "invalid-group-sentinel", "provider-tail-sentinel",
+                    "provider-header-sentinel",
+                ).forEach { sentinel -> assertFalse(surfaces.contains(sentinel), "$name: $sentinel") }
+            }
+        }
+
     /** LIFE-03: Client abort during real Bridge lookup cancels it without body or upstream work. */
     @Test
     fun `external bridge exchange is cancelled with client request`() {

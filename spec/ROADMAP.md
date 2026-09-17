@@ -81,9 +81,11 @@ Delivery order определяется
 [protocol contract](requirements/chat-completions-protocol.md#plaintext-response-reasoning)
 и подтверждена [evidence](../docs/response-reasoning-evidence.md).
 Текущий frontier - последовательно закрыть ready identity full-document fixes
-[VIG-47](issues/issue_47_bridge_full_document_json.md),
 [VIG-48](issues/issue_48_jwt_full_document_json.md),
 [VIG-49](issues/issue_49_jwk_environment_full_document_json.md).
+Full-document Bridge parsing опубликован в
+[identity contract](requirements/identity-and-context.md#external-bridge)
+и подтверждён [coverage](../docs/requirements-coverage.md#identity-evidence).
 Hard dependencies между этими issues отсутствуют. Role-neutral request
 inspection опубликована в
 [recognized message contract](requirements/chat-completions-protocol.md#recognized-message-shapes).
