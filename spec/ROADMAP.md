@@ -80,9 +80,13 @@ Delivery order определяется
 Проверка plaintext response reasoning опубликована в
 [protocol contract](requirements/chat-completions-protocol.md#plaintext-response-reasoning)
 и подтверждена [evidence](../docs/response-reasoning-evidence.md).
-Текущий frontier - проработать остающееся в `Draft`
-[исследование strict parsing](issues/issue_44_strict_parsing_investigation.md)
-до implementation-ready rejection matrix и декомпозиции.
+Текущий frontier - последовательно закрыть ready identity full-document fixes
+[VIG-47](issues/issue_47_bridge_full_document_json.md),
+[VIG-48](issues/issue_48_jwt_full_document_json.md),
+[VIG-49](issues/issue_49_jwk_environment_full_document_json.md), затем
+[role-neutral request inspection VIG-44](issues/issue_44_role_neutral_message_inspection.md).
+Hard dependencies между этими issues отсутствуют; порядок ставит локальные
+identity conformance fixes перед изменением request protocol contract.
 Безопасная transport-диагностика SERVER/CLIENT следует
 [finite tracing contract](requirements/observability.md#transport-failure-tracing),
 с раздельным [SDK/exporter/process evidence](../docs/transport-trace-evidence.md).
