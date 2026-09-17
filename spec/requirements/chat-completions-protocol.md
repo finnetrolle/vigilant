@@ -100,11 +100,13 @@ protocol locator, но locator не является public offset contract.
 | Source | Semantic kind | Role | Правило |
 |---|---|---|---|
 | `messages[*].content` у `developer`/`system` | `INSTRUCTION` | explicit role | String или каждый `type=text` part отдельно |
-| `messages[*].content` у `user`/`assistant` | `MESSAGE_TEXT` | explicit role | String или каждый text/refusal part отдельно; refusal использует `REFUSAL` |
-| `messages[*].content` у `tool`/`function` | `TOOL_RESULT` | explicit role | String или каждый разрешённый text part отдельно |
+| `messages[*].content` у `user`/`assistant` | `MESSAGE_TEXT` | explicit role | String или каждый `type=text` part отдельно |
+| `messages[*].content` у `tool`/`function` | `TOOL_RESULT` | explicit role | String или каждый `type=text` part отдельно |
+| `messages[*].content[]` с `type=refusal` | `REFUSAL` | explicit role | Один string `refusal`, независимо от известной role |
 | `messages[*].name` и function/tool/custom names | `LABEL` | message role, если есть | OpenAI IDs и call IDs исключаются |
-| assistant `tool_calls[*].function.arguments` и deprecated `function_call.arguments` | `TOOL_ARGUMENT` | `assistant` | Весь decoded string, без обязательного inner JSON parse |
-| custom tool-call textual input | `TOOL_ARGUMENT` | `assistant` | Весь decoded string |
+| `tool_calls[*].function.arguments` и deprecated `function_call.arguments` | `TOOL_ARGUMENT` | enclosing message role | Весь decoded string, без обязательного inner JSON parse |
+| custom tool-call textual input | `TOOL_ARGUMENT` | enclosing message role | Весь decoded string |
+| `messages[*].reasoning.text` и `.summary` | `REASONING` | enclosing message role | Каждое present string поле отдельно |
 | `tools[*].function.description` и `tools[*].custom.description` | `TOOL_DESCRIPTION` | absent | Name идёт отдельным `LABEL` |
 | named `tool_choice`, `allowed_tools` и deprecated `function_call.name` | `LABEL` | absent | Только user-supplied tool/function/custom names; fixed modes исключаются |
 | custom tool grammar `definition` | `SCHEMA_TEXT` | absent | `syntax` является fixed discriminator и исключается |
@@ -113,11 +115,12 @@ protocol locator, но locator не является public offset contract.
 | `prediction.content` | `OUTPUT_TEXT` | absent | String или каждый `type=text` part отдельно |
 | `response_format.json_schema` и function `parameters` | `SCHEMA_TEXT`/`LABEL` | absent | Только явный schema vocabulary ниже |
 
-Assistant `audio.id`, user `image_url`, `input_audio` и `file` являются
-schema-recognized non-text/provider-opaque content. Они не передаются text
-detector и создают соответственно gaps `OPAQUE_AUDIO_REFERENCE`, `IMAGE`,
-`AUDIO` и `FILE`. Доступный `file.filename` создаёт `LABEL`, но file data,
-file ID, media URL и filename не попадают в safe errors или audit events.
+Для каждой известной message role `audio.id`, `image_url`, `input_audio` и
+`file` являются schema-recognized non-text/provider-opaque content. Они не
+передаются text detector и создают соответственно gaps
+`OPAQUE_AUDIO_REFERENCE`, `IMAGE`, `AUDIO` и `FILE`. Доступный
+`file.filename` создаёт `LABEL` с enclosing role, но file data, file ID, media
+URL и filename не попадают в safe errors или audit events.
 
 Control и metadata fields, включая `model`, `store`, `metadata`, `user`,
 `safety_identifier`, sampling parameters, token limits, `stop`, `seed`,
@@ -173,22 +176,30 @@ Parser читает immutable source, но не закрывает, не replay-
 
 ### Recognized message shapes
 
+Все шесть известных roles используют один recognized message envelope. Role
+определяет provenance и semantic kind обычного content text, но не разрешает и
+не запрещает recognized sibling field или content part.
+
 | Поле/shape | Допустимая форма и нормализация |
 |---|---|
 | Message role | `developer`, `system`, `user`, `assistant`, `tool`, `function`; непустая string role обязательна |
-| Message content | String или array отдельных parts; `null` допустим у assistant. Остальные roles требуют `content`; assistant без content требует tool calls, function call, audio либо reasoning |
+| Message content | String, array отдельных parts или `null` для любой известной role; present `null` является recognized empty content |
 | Text part | `type=text` с string `text`; semantic kind задаёт role |
-| Refusal part | Только assistant, `type=refusal` с string `refusal`, kind `REFUSAL` |
-| Image part | Только user; `type=image_url`, object `image_url` с непустой string `url`; gap `IMAGE` |
-| Audio part | Только user; `type=input_audio`, object с непустыми `data`, `format=wav\|mp3`; gap `AUDIO` |
-| File part | Только user; object `file` с ровно одним непустым string `file_data` или `file_id`; optional string `filename` даёт отдельный `LABEL`, gap `FILE` остаётся |
-| Assistant audio | Object с непустой string `id`, gap `OPAQUE_AUDIO_REFERENCE` |
-| Function call | Modern `type=function` или deprecated assistant `function_call`: object с name и string arguments; empty arguments допустимы, invalid inner JSON остаётся текстом |
-| Custom call | `type=custom`, object `custom` с name и string input; весь input - один `TOOL_ARGUMENT`, без разбора вложенного языка |
-| Reasoning | Assistant object `reasoning`: string `text` и `summary` дают отдельные `REASONING`; string `encrypted_content` даёт `OPAQUE_REASONING` и не декодируется |
+| Refusal part | `type=refusal` с string `refusal`, kind `REFUSAL` и actual enclosing role |
+| Image part | `type=image_url`, object `image_url` с непустой string `url`; gap `IMAGE` |
+| Audio part | `type=input_audio`, object с непустыми `data`, `format=wav\|mp3`; gap `AUDIO` |
+| File part | Object `file` с ровно одним непустым string `file_data` или `file_id`; optional string `filename` даёт отдельный `LABEL` с enclosing role, gap `FILE` остаётся |
+| Audio reference | Object с непустой string `id`, gap `OPAQUE_AUDIO_REFERENCE` |
+| Function call | Modern `type=function` или deprecated `function_call`: object с name и string arguments; actual enclosing role сохраняется, empty arguments допустимы, invalid inner JSON остаётся текстом |
+| Custom call | `type=custom`, object `custom` с name и string input; весь input - один `TOOL_ARGUMENT` с enclosing role, без разбора вложенного языка |
+| Reasoning | Object `reasoning`: string `text` и `summary` дают отдельные `REASONING` с enclosing role; string `encrypted_content` даёт `OPAQUE_REASONING` и не декодируется |
 | Custom definition grammar | `format.type=grammar`, `grammar.syntax=lark\|regex`, string `definition`; только definition становится `SCHEMA_TEXT` |
 | Prediction | `type=content`, string content или array `type=text` parts |
 | Response format | `type=text\|json_object` без fragments; `type=json_schema` требует object `json_schema`, name и schema |
+
+Message valid, если `content` present либо присутствует хотя бы один recognized
+sibling `tool_calls`, `function_call`, `audio` или `reasoning`. Message без
+любого recognized content source даёт `MALFORMED_MESSAGE`.
 
 Empty plaintext при наличии encrypted content остаётся gap. Gap сам по себе
 не запрещает lossless forwarding, но не отменяет policy BLOCK, structural MASK

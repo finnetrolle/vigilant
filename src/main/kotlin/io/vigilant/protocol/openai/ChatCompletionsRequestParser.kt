@@ -284,14 +284,14 @@ object ChatCompletionsRequestParser {
         ) {
             val message = messageNode as? ObjectNode ?: malformed()
             val role = message.requiredText(ROLE_FIELD).toMessageRole()
-            validateMessageContentPresence(message, role)
+            validateMessageContentPresence(message)
             message.properties().forEach { (field, value) ->
                 checkCancellation()
                 val locator = "/messages/$messageIndex/${field.escapePointer()}"
                 when (field) {
                     CONTENT_FIELD -> collectScalarContent(value, role, locator)
                     NAME_FIELD -> addStructuralText(value, FragmentSemanticKind.LABEL, role, locator)
-                    TOOL_CALLS_FIELD -> collectToolCalls(value, messageIndex)
+                    TOOL_CALLS_FIELD -> collectToolCalls(value, messageIndex, role)
                     AUDIO_FIELD -> addGap(value, InspectionGapKind.OPAQUE_AUDIO_REFERENCE, locator, ID_FIELD)
                     FUNCTION_CALL_FIELD -> collectMessageFunctionCall(value, locator, role)
                     REASONING_FIELD -> collectReasoning(value, locator, role)
@@ -299,20 +299,9 @@ object ChatCompletionsRequestParser {
             }
         }
 
-        /** Validates that each supported role carries one schema-recognized content source. */
-        private fun validateMessageContentPresence(
-            message: ObjectNode,
-            role: MessageRole,
-        ) {
-            val hasContent = message.has(CONTENT_FIELD)
-            if (role != MessageRole.ASSISTANT && !hasContent) {
-                malformed()
-            }
-            if (
-                role == MessageRole.ASSISTANT &&
-                !hasContent &&
-                ASSISTANT_CONTENT_FIELDS.none(message::has)
-            ) {
+        /** Validates that a known-role message carries at least one schema-recognized content source. */
+        private fun validateMessageContentPresence(message: ObjectNode) {
+            if (RECOGNIZED_MESSAGE_CONTENT_FIELDS.none(message::has)) {
                 malformed()
             }
         }
@@ -326,7 +315,7 @@ object ChatCompletionsRequestParser {
             when {
                 value.isTextual -> addText(value, role.contentSemanticKind(), role, locator)
                 value is ArrayNode -> collectContentParts(value, role, locator)
-                value.isNull && role == MessageRole.ASSISTANT -> Unit
+                value.isNull -> Unit
                 else -> malformed()
             }
         }
@@ -350,42 +339,32 @@ object ChatCompletionsRequestParser {
                             "$partLocator/text",
                         )
 
-                    REFUSAL_DISCRIMINATOR -> {
-                        if (role != MessageRole.ASSISTANT) {
-                            ambiguous()
-                        }
+                    REFUSAL_DISCRIMINATOR ->
                         addText(
                             part.get(REFUSAL_FIELD) ?: malformed(),
                             FragmentSemanticKind.REFUSAL,
                             role,
                             "$partLocator/refusal",
                         )
-                    }
 
                     IMAGE_URL_DISCRIMINATOR ->
-                        requireUserMediaRole(role) {
-                            addGap(
-                                part.get(IMAGE_URL_FIELD) ?: malformed(),
-                                InspectionGapKind.IMAGE,
-                                partLocator,
-                                URL_FIELD,
-                            )
-                        }
+                        addGap(
+                            part.get(IMAGE_URL_FIELD) ?: malformed(),
+                            InspectionGapKind.IMAGE,
+                            partLocator,
+                            URL_FIELD,
+                        )
 
-                    INPUT_AUDIO_DISCRIMINATOR ->
-                        requireUserMediaRole(role) {
-                            val inputAudio = part.get(INPUT_AUDIO_FIELD) as? ObjectNode ?: malformed()
-                            inputAudio.requiredText(DATA_FIELD)
-                            when (inputAudio.requiredText(FORMAT_FIELD)) {
-                                WAV_DISCRIMINATOR, MP3_DISCRIMINATOR -> Unit
-                                else -> ambiguous()
-                            }
-                            addGap(inputAudio, InspectionGapKind.AUDIO, partLocator)
+                    INPUT_AUDIO_DISCRIMINATOR -> {
+                        val inputAudio = part.get(INPUT_AUDIO_FIELD) as? ObjectNode ?: malformed()
+                        inputAudio.requiredText(DATA_FIELD)
+                        when (inputAudio.requiredText(FORMAT_FIELD)) {
+                            WAV_DISCRIMINATOR, MP3_DISCRIMINATOR -> Unit
+                            else -> ambiguous()
                         }
-                    FILE_DISCRIMINATOR ->
-                        requireUserMediaRole(role) {
-                            collectFilePart(part, role, partLocator)
-                        }
+                        addGap(inputAudio, InspectionGapKind.AUDIO, partLocator)
+                    }
+                    FILE_DISCRIMINATOR -> collectFilePart(part, role, partLocator)
                     else -> ambiguous()
                 }
             }
@@ -409,10 +388,11 @@ object ChatCompletionsRequestParser {
             }
         }
 
-        /** Collects assistant tool calls in their source order. */
+        /** Collects tool calls in source order with the actual enclosing message role. */
         private fun collectToolCalls(
             value: JsonNode,
             messageIndex: Int,
+            role: MessageRole,
         ) {
             val calls = value as? ArrayNode ?: malformed()
             calls.forEachIndexed { callIndex, callNode ->
@@ -428,13 +408,13 @@ object ChatCompletionsRequestParser {
                             when (field) {
                                 NAME_FIELD ->
                                     addStructuralText(fieldValue, FragmentSemanticKind.LABEL,
-                                        MessageRole.ASSISTANT, locator)
+                                        role, locator)
 
                                 ARGUMENTS_FIELD ->
                                     addStructuralText(
                                         fieldValue,
                                         FragmentSemanticKind.TOOL_ARGUMENT,
-                                        MessageRole.ASSISTANT,
+                                        role,
                                         locator,
                                     )
                             }
@@ -445,6 +425,7 @@ object ChatCompletionsRequestParser {
                         collectCustomToolCall(
                             call.get(CUSTOM_FIELD) as? ObjectNode ?: malformed(),
                             "/messages/$messageIndex/tool_calls/$callIndex/custom",
+                            role,
                         )
 
                     else -> ambiguous()
@@ -452,33 +433,31 @@ object ChatCompletionsRequestParser {
             }
         }
 
-        /** Collects a custom tool-call label and complete textual input. */
+        /** Collects a custom tool-call label and complete textual input with its enclosing role. */
         private fun collectCustomToolCall(
             custom: ObjectNode,
             locator: String,
+            role: MessageRole,
         ) {
             custom.requiredText(NAME_FIELD)
             custom.requiredString(INPUT_FIELD)
             custom.properties().forEach { (field, value) ->
                 when (field) {
-                    NAME_FIELD -> addStructuralText(value, FragmentSemanticKind.LABEL, MessageRole.ASSISTANT,
+                    NAME_FIELD -> addStructuralText(value, FragmentSemanticKind.LABEL, role,
                         "$locator/name")
                     INPUT_FIELD ->
-                        addStructuralText(value, FragmentSemanticKind.TOOL_ARGUMENT, MessageRole.ASSISTANT,
+                        addStructuralText(value, FragmentSemanticKind.TOOL_ARGUMENT, role,
                             "$locator/input")
                 }
             }
         }
 
-        /** Collects a deprecated assistant function invocation. */
+        /** Collects a deprecated function invocation with its enclosing message role. */
         private fun collectMessageFunctionCall(
             value: JsonNode,
             locator: String,
             role: MessageRole,
         ) {
-            if (role != MessageRole.ASSISTANT) {
-                ambiguous()
-            }
             val functionCall = value as? ObjectNode ?: malformed()
             functionCall.requiredText(NAME_FIELD)
             functionCall.requiredString(ARGUMENTS_FIELD)
@@ -491,15 +470,12 @@ object ChatCompletionsRequestParser {
             }
         }
 
-        /** Collects available reasoning text and records provider-opaque encrypted content. */
+        /** Collects available reasoning text and opaque content with its enclosing message role. */
         private fun collectReasoning(
             value: JsonNode,
             locator: String,
             role: MessageRole,
         ) {
-            if (role != MessageRole.ASSISTANT) {
-                ambiguous()
-            }
             val reasoning = value as? ObjectNode ?: malformed()
             reasoning.properties().forEach { (field, fieldValue) ->
                 when (field) {
@@ -592,17 +568,6 @@ object ChatCompletionsRequestParser {
                 null,
                 "$locator/name",
             )
-        }
-
-        /** Restricts recognized media parts to the pinned user-message union. */
-        private inline fun requireUserMediaRole(
-            role: MessageRole,
-            block: () -> Unit,
-        ) {
-            if (role != MessageRole.USER) {
-                malformed()
-            }
-            block()
         }
 
         /** Delegates one complete schema to the isolated explicit-vocabulary walker. */
@@ -1026,7 +991,10 @@ object ChatCompletionsRequestParser {
 
     private val APPROXIMATE_LOCATION_TEXT_FIELDS = setOf("country", "region", "city", "timezone")
     private val FILE_SOURCE_FIELDS = setOf(FILE_DATA_FIELD, FILE_ID_FIELD)
-    private val ASSISTANT_CONTENT_FIELDS = setOf(TOOL_CALLS_FIELD, FUNCTION_CALL_FIELD, AUDIO_FIELD, REASONING_FIELD)
+
+    /** Message fields that independently satisfy the recognized-content presence rule. */
+    private val RECOGNIZED_MESSAGE_CONTENT_FIELDS =
+        setOf(CONTENT_FIELD, TOOL_CALLS_FIELD, FUNCTION_CALL_FIELD, AUDIO_FIELD, REASONING_FIELD)
     private val SCHEMA_TEXT_KEYWORDS = setOf("title", "description", "const", "default", "pattern")
     private val SCHEMA_TEXT_ARRAY_KEYWORDS = setOf("enum", "examples")
     private val SCHEMA_NAMED_CONTAINERS = setOf("properties", "patternProperties", "dependentSchemas")

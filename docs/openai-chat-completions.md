@@ -23,6 +23,14 @@ UNSUPPORTED_SCHEMA. Это не подтверждение более высок
 Полная последовательность показана в UML 2.0
 [request-inspection-sequence.puml](diagrams/request-inspection-sequence.puml).
 
+Каждая из шести известных message roles принимает один и тот же recognized
+envelope: scalar/array/null `content`, refusal/media/file parts, modern и
+deprecated calls, `audio` и `reasoning`. Actual enclosing role сохраняется в
+provenance всех text fragments; прежний role-derived semantic kind обычного
+content не меняется. Role и semantic kind не фильтруют текущие policies.
+Present `content=null` и любой recognized sibling удовлетворяют presence rule;
+envelope без recognized content source остаётся malformed.
+
 ## Field classification и REQUEST enforcement
 
 Нормативная classification, reaction priority, marker и rewrite semantics
@@ -37,9 +45,10 @@ custom lark/regex grammar и approximate location fields. Arguments/input
 остаются полной opaque string, включая пустую строку и malformed inner JSON;
 вложенный язык не разбирается ради rewrite.
 
-Free text допускает exact-span MASK: scalar/part message content всех roles,
-refusal, modern/custom/deprecated descriptions, schema title/description/string
-examples, filename, open reasoning text/summary и prediction content.
+Free text допускает exact-span MASK: scalar/part message content, refusal,
+filename и open reasoning text/summary всех шести roles;
+modern/custom/deprecated descriptions, schema title/description/string examples
+и prediction content.
 Schema rules одинаковы для modern/legacy function parameters и response schema.
 Property с именем `description` или `examples` остаётся structural key, а
 дочерняя annotation является free text. Empty/number/boolean/null/object/array

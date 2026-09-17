@@ -282,6 +282,149 @@ internal class RequestInspectionE2eTest : GatewayE2eTestSupport() {
         }
     }
 
+    /** Every known role executes all recognized text fields, preserves gaps, and replays exact bytes. */
+    @Test
+    @Suppress("LongMethod")
+    fun `role neutral envelopes execute detectors and no policy replays exact bytes`() {
+        val detectorCalls = CopyOnWriteArrayList<String>()
+        val detector = Detector { payload ->
+            detectorCalls += payload
+            DetectionResult.Clean
+        }
+        val upstreamCalls = AtomicInteger()
+        val captured = AtomicReference<String>()
+        val upstream = fixture.startServer { request ->
+            upstreamCalls.incrementAndGet()
+            HttpResponse.of(
+                request.aggregate().thenApply { aggregated ->
+                    captured.set(aggregated.contentUtf8())
+                    validChatCompletionsResponse()
+                },
+            )
+        }
+        val allowPolicy = shadowPolicy(Duration.ofSeconds(2))
+        val selectedPolicies = AtomicReference(listOf(allowPolicy))
+        val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
+        val quota = RequestSourceQuota()
+        val gateway =
+            startShadowGateway(
+                fixture.serverUri(upstream),
+                quota,
+                detector,
+                policyProvider = PolicyProvider { selectedPolicies.get() },
+            )
+        val client = isolatedGatewayClient(fixture.serverUri(gateway))
+
+        roleExecutionCases().forEach { roleCase ->
+            val body = roleNeutralEnvelope(roleCase.wireRole)
+            selectedPolicies.set(listOf(allowPolicy))
+            detectorCalls.clear()
+            val upstreamBefore = upstreamCalls.get()
+            val eventsBefore = events.size
+
+            val response = client.execute(chatCompletionsRequestWithBody(body)).aggregate().join()
+
+            assertEquals(HttpStatus.OK, response.status(), "${roleCase.wireRole}/policy")
+            assertEquals(1, upstreamCalls.get() - upstreamBefore, "${roleCase.wireRole}/policy upstream")
+            assertEquals(body, captured.get(), "${roleCase.wireRole}/policy exact body")
+            assertEquals(
+                roleCase.expectedDetectorInputs,
+                detectorCalls.toList(),
+                "${roleCase.wireRole}/policy detector",
+            )
+            assertTrue(
+                fixture.awaitUntil(Duration.ofSeconds(2)) { events.size == eventsBefore + 2 },
+                "${roleCase.wireRole}/policy audit pair",
+            )
+            val completed =
+                events.drop(eventsBefore).single { event ->
+                    event.keyValue("event.name") == "policy.analysis_completed"
+                }
+            assertEquals("PARTIALLY_INSPECTABLE", completed.keyValue("coverage"), roleCase.wireRole)
+            assertEquals(12, completed.keyValue("fragments.inspected"), roleCase.wireRole)
+            assertEquals("INSPECTION_GAP", completed.keyValue("outcome"), roleCase.wireRole)
+            assertEquals("ALLOW", completed.keyValue("reaction"), roleCase.wireRole)
+            assertSourceReservationsReleased(quota, "${roleCase.wireRole}/policy")
+
+            selectedPolicies.set(emptyList())
+            detectorCalls.clear()
+            val noPolicyUpstreamBefore = upstreamCalls.get()
+            val noPolicyEventsBefore = events.size
+
+            val noPolicyResponse = client.execute(chatCompletionsRequestWithBody(body)).aggregate().join()
+
+            assertEquals(HttpStatus.OK, noPolicyResponse.status(), "${roleCase.wireRole}/no-policy")
+            assertEquals(1, upstreamCalls.get() - noPolicyUpstreamBefore, "${roleCase.wireRole}/no-policy upstream")
+            assertEquals(body, captured.get(), "${roleCase.wireRole}/no-policy exact body")
+            assertEquals(emptyList(), detectorCalls, "${roleCase.wireRole}/no-policy detector")
+            assertEquals(noPolicyEventsBefore, events.size, "${roleCase.wireRole}/no-policy audit")
+            assertSourceReservationsReleased(quota, "${roleCase.wireRole}/no-policy")
+        }
+    }
+
+    /** Free-text MASK and structural refusal retain their existing reactions at noncanonical roles. */
+    @Test
+    fun `noncanonical roles preserve free text patch and structural block`() {
+        val upstreamCalls = AtomicInteger()
+        val captured = AtomicReference<String>()
+        val upstream = fixture.startServer { request ->
+            upstreamCalls.incrementAndGet()
+            HttpResponse.of(
+                request.aggregate().thenApply { aggregated ->
+                    captured.set(aggregated.contentUtf8())
+                    validChatCompletionsResponse()
+                },
+            )
+        }
+        val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
+        val gateway =
+            startShadowGateway(
+                fixture.serverUri(upstream),
+                policyProvider =
+                    DummyPolicyProvider(
+                        listOf(
+                            shadowPolicy(
+                                Duration.ofSeconds(2),
+                                detected = Reaction(Disposition.ALLOW, listOf(Transformation.MASK)),
+                            ),
+                        ),
+                    ),
+            )
+        val client = isolatedGatewayClient(fixture.serverUri(gateway))
+        @Suppress("MaxLineLength") // Literal source and patched bytes are the independent oracle.
+        val freeText =
+            """{ "model":"gpt-test", "messages":[{"role":"system","content":[{"type":"refusal","refusal":"before alice@example.com after"}]}], "unknown":1.00 }"""
+        @Suppress("MaxLineLength") // Literal source and patched bytes are the independent oracle.
+        val patched =
+            """{ "model":"gpt-test", "messages":[{"role":"system","content":[{"type":"refusal","refusal":"before [EMAIL_MASKED] after"}]}], "unknown":1.00 }"""
+
+        val freeTextResponse = client.execute(chatCompletionsRequestWithBody(freeText)).aggregate().join()
+
+        assertEquals(HttpStatus.OK, freeTextResponse.status())
+        assertEquals(1, upstreamCalls.get())
+        assertEquals(patched, captured.get())
+        assertTrue(fixture.awaitUntil(Duration.ofSeconds(2)) { events.size == 2 })
+        assertEquals("MASK", events.last().keyValue("reaction"))
+
+        val structural =
+            """
+            {"model":"gpt-test","messages":[
+              {"role":"tool","function_call":{"name":"legacy","arguments":"alice@example.com"}}
+            ]}
+            """.trimIndent()
+        val structuralResponse = client.execute(chatCompletionsRequestWithBody(structural)).aggregate().join()
+
+        assertEquals(HttpStatus.FORBIDDEN, structuralResponse.status())
+        @Suppress("MaxLineLength") // Literal wire bytes are the independent oracle.
+        assertEquals(
+            """{"error":{"message":"Request blocked: PII detected.","type":"policy_violation","code":"policy_blocked"}}""",
+            structuralResponse.contentUtf8(),
+        )
+        assertEquals(1, upstreamCalls.get())
+        assertTrue(fixture.awaitUntil(Duration.ofSeconds(2)) { events.size == 4 })
+        assertEquals("BLOCK", events.last().keyValue("reaction"))
+    }
+
     /** Colliding hypothetical schema masks block, while clean structural names permit exact text masks. */
     @Test
     fun `schema key collision and clean structural text mask controls`() {
@@ -2051,6 +2194,53 @@ internal class RequestInspectionE2eTest : GatewayE2eTestSupport() {
         )
     }
 
+    /** Role and nested-shape failures keep exact HTTP errors with no detector, audit, or upstream disclosure. */
+    @Test
+    @Suppress("MaxLineLength")
+    fun `role neutral request failures remain typed and fail closed`() {
+        val detectorCalls = AtomicInteger()
+        val upstreamRequests = AtomicInteger()
+        val upstream = fixture.startServer {
+            upstreamRequests.incrementAndGet()
+            validChatCompletionsResponse()
+        }
+        val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)
+        val gateway =
+            startShadowGateway(
+                fixture.serverUri(upstream),
+                detector = Detector { detectorCalls.incrementAndGet(); DetectionResult.Clean },
+            )
+        val client = isolatedGatewayClient(fixture.serverUri(gateway))
+        val cases =
+            listOf(
+                """{"model":"gpt-test","private":"private-role-sentinel","messages":[{"content":"text"}]}""" to
+                    "malformed_message",
+                """{"model":"gpt-test","private":"private-role-sentinel","messages":[{"role":7,"content":"text"}]}""" to
+                    "malformed_message",
+                """{"model":"gpt-test","private":"private-role-sentinel","messages":[{"role":" ","content":"text"}]}""" to
+                    "malformed_message",
+                """{"model":"gpt-test","private":"private-role-sentinel","messages":[{"role":"alien","content":"text"}]}""" to
+                    "ambiguous_content",
+                """{"model":"gpt-test","private":"private-role-sentinel","messages":[{"role":"system","content":[{"type":"refusal","refusal":7}]}]}""" to
+                    "malformed_message",
+                """{"model":"gpt-test","private":"private-role-sentinel","messages":[{"role":"system","content":[{"type":"future","text":"text"}]}]}""" to
+                    "ambiguous_content",
+            )
+
+        cases.forEachIndexed { index, (body, expectedCode) ->
+            val response = client.execute(chatCompletionsRequestWithBody(body)).aggregate().join()
+
+            assertEquals(HttpStatus.BAD_REQUEST, response.status(), "case $index")
+            assertEquals("""{"error":"$expectedCode"}""", response.contentUtf8(), "case $index")
+        }
+
+        assertEquals(0, detectorCalls.get())
+        assertEquals(0, upstreamRequests.get())
+        assertTrue(events.analysisEventNames().isEmpty(), "role failure started analysis")
+        val rendered = events.joinToString("\n") { event -> event.formattedMessage + event.keyValuePairs.orEmpty() }
+        assertFalse(rendered.contains("private-role-sentinel"))
+    }
+
     /** Verifies safe stable outcomes for ambiguous and unresolved content. */
     @Test
     @Suppress("MaxLineLength")
@@ -2607,5 +2797,96 @@ internal class RequestInspectionE2eTest : GatewayE2eTestSupport() {
             "request context remained retained after upstream failure",
         )
     }
+
+    /** Builds one combined role-neutral envelope with every inspectable message family and every current gap. */
+    private fun roleNeutralEnvelope(role: String): String =
+        """
+        {
+          "model":"gpt-test",
+          "messages":[
+            {"role":"$role","content":"$role-scalar"},
+            {
+              "role":"$role",
+              "content":[
+                {"type":"text","text":"$role-part"},
+                {"type":"refusal","refusal":"$role-refusal"},
+                {"type":"image_url","image_url":{"url":"$role-image"}},
+                {"type":"input_audio","input_audio":{"data":"$role-audio","format":"wav"}},
+                {"type":"file","file":{"file_id":"$role-file","filename":"$role-filename"}}
+              ],
+              "tool_calls":[
+                {"type":"function","function":{"name":"$role-function","arguments":"$role-arguments"}},
+                {"type":"custom","custom":{"name":"$role-custom","input":"$role-input"}}
+              ],
+              "function_call":{"name":"$role-legacy","arguments":"$role-legacy-arguments"},
+              "audio":{"id":"$role-audio-reference"},
+              "reasoning":{
+                "summary":"$role-summary",
+                "text":"$role-reasoning",
+                "encrypted_content":"$role-encrypted"
+              }
+            }
+          ]
+        }
+        """.trimIndent()
+
+    /** Returns literal detector sequences for all six combined role envelopes. */
+    private fun roleExecutionCases(): List<RoleExecutionCase> =
+        listOf(
+            RoleExecutionCase(
+                "developer",
+                listOf(
+                    "developer-scalar", "developer-part", "developer-refusal", "developer-filename",
+                    "developer-function", "developer-arguments", "developer-custom", "developer-input",
+                    "developer-legacy", "developer-legacy-arguments", "developer-summary", "developer-reasoning",
+                ),
+            ),
+            RoleExecutionCase(
+                "system",
+                listOf(
+                    "system-scalar", "system-part", "system-refusal", "system-filename",
+                    "system-function", "system-arguments", "system-custom", "system-input",
+                    "system-legacy", "system-legacy-arguments", "system-summary", "system-reasoning",
+                ),
+            ),
+            RoleExecutionCase(
+                "user",
+                listOf(
+                    "user-scalar", "user-part", "user-refusal", "user-filename",
+                    "user-function", "user-arguments", "user-custom", "user-input",
+                    "user-legacy", "user-legacy-arguments", "user-summary", "user-reasoning",
+                ),
+            ),
+            RoleExecutionCase(
+                "assistant",
+                listOf(
+                    "assistant-scalar", "assistant-part", "assistant-refusal", "assistant-filename",
+                    "assistant-function", "assistant-arguments", "assistant-custom", "assistant-input",
+                    "assistant-legacy", "assistant-legacy-arguments", "assistant-summary", "assistant-reasoning",
+                ),
+            ),
+            RoleExecutionCase(
+                "tool",
+                listOf(
+                    "tool-scalar", "tool-part", "tool-refusal", "tool-filename",
+                    "tool-function", "tool-arguments", "tool-custom", "tool-input",
+                    "tool-legacy", "tool-legacy-arguments", "tool-summary", "tool-reasoning",
+                ),
+            ),
+            RoleExecutionCase(
+                "function",
+                listOf(
+                    "function-scalar", "function-part", "function-refusal", "function-filename",
+                    "function-function", "function-arguments", "function-custom", "function-input",
+                    "function-legacy", "function-legacy-arguments", "function-summary", "function-reasoning",
+                ),
+            ),
+        )
+
+    /** One role and its independently declared detector-input order. */
+    private data class RoleExecutionCase(
+        val wireRole: String,
+        val expectedDetectorInputs: List<String>,
+    )
 
 }

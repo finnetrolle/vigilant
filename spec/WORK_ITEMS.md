@@ -152,7 +152,6 @@ context sources. Само решение хранится один раз в own
 | Work item | Статус | Прогресс | Оценка |
 |---|---|---:|---:|
 | [EPIC-06: OpenAI Responses protocol scope](epics/epic_06_llm_message_parsing.md) | `Draft` | 0/0 | Responses вне MVP; нет implementation-ready leaves |
-| [VIG-44: Проверять recognized message payload независимо от role](issues/issue_44_role_neutral_message_inspection.md) | `Ready for implementation` | scope lock подтверждён; finite role/field matrix | 2-3 дня |
 | [VIG-47: Отклонять trailing data в Bridge identity JSON](issues/issue_47_bridge_full_document_json.md) | `Ready for implementation` | bounded defect воспроизведён | 1-2 дня |
 | [VIG-48: Отклонять trailing data в JWT header и claims](issues/issue_48_jwt_full_document_json.md) | `Ready for implementation` | signed defect matrix воспроизведена | 1-2 дня |
 | [VIG-49: Отклонять trailing data в JWK environment JSON](issues/issue_49_jwk_environment_full_document_json.md) | `Ready for implementation` | startup defect matrix воспроизведена | 1 день |
@@ -175,14 +174,15 @@ context sources. Само решение хранится один раз в own
 4. Не начинать новый пункт, пока предыдущий hard gate не завершён и
    `./gradlew validateWorkItems` не подтверждает согласованность реестра.
 
-Готовы четыре независимые issues. Предпочтительный порядок:
+Готовы три независимые issues. Предпочтительный порядок:
 [VIG-47](issues/issue_47_bridge_full_document_json.md) -
 [VIG-48](issues/issue_48_jwt_full_document_json.md) -
-[VIG-49](issues/issue_49_jwk_environment_full_document_json.md) -
-[VIG-44](issues/issue_44_role_neutral_message_inspection.md).
-Первые три закрывают подтверждённое permissive parsing на identity boundaries;
-VIG-44 затем согласованно меняет request protocol contract на role-neutral
-inspection. Hard dependencies между ними отсутствуют.
+[VIG-49](issues/issue_49_jwk_environment_full_document_json.md).
+Текущий следующий шаг:
+[VIG-47](issues/issue_47_bridge_full_document_json.md).
+Они закрывают подтверждённое permissive parsing на identity boundaries;
+hard dependencies между ними отсутствуют. Role-neutral request inspection уже
+закреплена в [protocol owner](requirements/chat-completions-protocol.md#recognized-message-shapes).
 Безопасная transport-диагностика traces принадлежит
 [observability owner](requirements/observability.md#transport-failure-tracing);
 [проверки](../docs/transport-trace-evidence.md) разделяют SDK, exporter и installed stdout.
@@ -197,8 +197,8 @@ inspection. Hard dependencies между ними отсутствуют.
 Он не меняет runtime rules или evidence опубликованной
 response reasoning capability.
 
-Завершение transport tracing не закрывает VIG-44 или identity full-document
-parsing VIG-47..49.
+Завершение transport tracing не закрывает identity full-document parsing
+VIG-47..49.
 
 Стендовую приёмку production identity, external probe и telemetry chain
 владелец продукта 2026-09-10 взял на себя; отдельная агентская задача на неё

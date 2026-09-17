@@ -389,6 +389,233 @@ class ChatCompletionsRequestParserTest {
         )
     }
 
+    /** Every known role accepts the same finite message-field matrix with role-derived metadata only. */
+    @Test
+    @Suppress("LongMethod")
+    fun `recognized message field matrix is role neutral`() {
+        messageRoleCases().forEach { roleCase ->
+            val prefix = roleCase.wireRole
+            val fieldCases =
+                listOf(
+                    RoleFieldCase(
+                        name = "scalar-content",
+                        fields = """"content":"$prefix-scalar"""",
+                        expectedCoverage = InspectionCoverage.FULLY_INSPECTABLE,
+                        fragments = listOf(ExpectedFragment("$prefix-scalar", roleCase.contentKind, roleCase.role)),
+                        fragmentLocators = listOf("/messages/0/content"),
+                    ),
+                    RoleFieldCase(
+                        name = "text-part",
+                        fields = """"content":[{"type":"text","text":"$prefix-part"}]""",
+                        expectedCoverage = InspectionCoverage.FULLY_INSPECTABLE,
+                        fragments = listOf(ExpectedFragment("$prefix-part", roleCase.contentKind, roleCase.role)),
+                        fragmentLocators = listOf("/messages/0/content/0/text"),
+                    ),
+                    RoleFieldCase(
+                        name = "refusal-part",
+                        fields = """"content":[{"type":"refusal","refusal":"$prefix-refusal"}]""",
+                        expectedCoverage = InspectionCoverage.FULLY_INSPECTABLE,
+                        fragments =
+                            listOf(
+                                ExpectedFragment(
+                                    "$prefix-refusal",
+                                    FragmentSemanticKind.REFUSAL,
+                                    roleCase.role,
+                                ),
+                            ),
+                        fragmentLocators = listOf("/messages/0/content/0/refusal"),
+                    ),
+                    RoleFieldCase(
+                        name = "media-parts",
+                        fields =
+                            """"content":[{"type":"image_url","image_url":{"url":"$prefix-image"}},{"type":"input_audio","input_audio":{"data":"$prefix-audio","format":"wav"}},{"type":"file","file":{"file_id":"$prefix-file","filename":"$prefix-filename"}}]""",
+                        expectedCoverage = InspectionCoverage.PARTIALLY_INSPECTABLE,
+                        fragments = listOf(ExpectedFragment("$prefix-filename", FragmentSemanticKind.LABEL, roleCase.role)),
+                        fragmentLocators = listOf("/messages/0/content/2/file/filename"),
+                        gaps =
+                            listOf(
+                                ExpectedGap(InspectionGapKind.IMAGE, "/messages/0/content/0"),
+                                ExpectedGap(InspectionGapKind.AUDIO, "/messages/0/content/1"),
+                                ExpectedGap(InspectionGapKind.FILE, "/messages/0/content/2"),
+                            ),
+                    ),
+                    RoleFieldCase(
+                        name = "modern-tool-calls",
+                        fields =
+                            """"tool_calls":[{"type":"function","function":{"name":"$prefix-function","arguments":"$prefix-arguments"}},{"type":"custom","custom":{"name":"$prefix-custom","input":"$prefix-input"}}]""",
+                        expectedCoverage = InspectionCoverage.FULLY_INSPECTABLE,
+                        fragments =
+                            listOf(
+                                ExpectedFragment("$prefix-function", FragmentSemanticKind.LABEL, roleCase.role),
+                                ExpectedFragment(
+                                    "$prefix-arguments",
+                                    FragmentSemanticKind.TOOL_ARGUMENT,
+                                    roleCase.role,
+                                ),
+                                ExpectedFragment("$prefix-custom", FragmentSemanticKind.LABEL, roleCase.role),
+                                ExpectedFragment("$prefix-input", FragmentSemanticKind.TOOL_ARGUMENT, roleCase.role),
+                            ),
+                        fragmentLocators =
+                            listOf(
+                                "/messages/0/tool_calls/0/function/name",
+                                "/messages/0/tool_calls/0/function/arguments",
+                                "/messages/0/tool_calls/1/custom/name",
+                                "/messages/0/tool_calls/1/custom/input",
+                            ),
+                    ),
+                    RoleFieldCase(
+                        name = "deprecated-function-call",
+                        fields =
+                            """"function_call":{"name":"$prefix-legacy","arguments":"$prefix-legacy-arguments"}""",
+                        expectedCoverage = InspectionCoverage.FULLY_INSPECTABLE,
+                        fragments =
+                            listOf(
+                                ExpectedFragment("$prefix-legacy", FragmentSemanticKind.LABEL, roleCase.role),
+                                ExpectedFragment(
+                                    "$prefix-legacy-arguments",
+                                    FragmentSemanticKind.TOOL_ARGUMENT,
+                                    roleCase.role,
+                                ),
+                            ),
+                        fragmentLocators =
+                            listOf(
+                                "/messages/0/function_call/name",
+                                "/messages/0/function_call/arguments",
+                            ),
+                    ),
+                    RoleFieldCase(
+                        name = "audio-reference",
+                        fields = """"audio":{"id":"$prefix-audio-reference"}""",
+                        expectedCoverage = InspectionCoverage.UNINSPECTABLE,
+                        gaps =
+                            listOf(
+                                ExpectedGap(InspectionGapKind.OPAQUE_AUDIO_REFERENCE, "/messages/0/audio"),
+                            ),
+                    ),
+                    RoleFieldCase(
+                        name = "reasoning",
+                        fields =
+                            """"reasoning":{"summary":"$prefix-summary","text":"$prefix-reasoning","encrypted_content":"$prefix-encrypted"}""",
+                        expectedCoverage = InspectionCoverage.PARTIALLY_INSPECTABLE,
+                        fragments =
+                            listOf(
+                                ExpectedFragment("$prefix-summary", FragmentSemanticKind.REASONING, roleCase.role),
+                                ExpectedFragment("$prefix-reasoning", FragmentSemanticKind.REASONING, roleCase.role),
+                            ),
+                        fragmentLocators =
+                            listOf(
+                                "/messages/0/reasoning/summary",
+                                "/messages/0/reasoning/text",
+                            ),
+                        gaps =
+                            listOf(
+                                ExpectedGap(InspectionGapKind.OPAQUE_REASONING, "/messages/0/reasoning/encrypted_content"),
+                            ),
+                    ),
+                )
+
+            fieldCases.forEach { fieldCase ->
+                val label = "${roleCase.wireRole}/${fieldCase.name}"
+                val success =
+                    assertIs<ChatCompletionsParseResult.Success>(
+                        parse(
+                            """{"model":"gpt-5","messages":[{"role":"${roleCase.wireRole}",${fieldCase.fields}}]}""",
+                        ),
+                        label,
+                    )
+
+                assertEquals(
+                    fieldCase.fragments,
+                    success.request.fragments.map { fragment ->
+                        ExpectedFragment(fragment.text, fragment.provenance.semanticKind, fragment.provenance.role)
+                    },
+                    label,
+                )
+                assertEquals(
+                    fieldCase.fragmentLocators,
+                    success.request.fragments.map { fragment -> fragment.provenance.locator.value },
+                    label,
+                )
+                assertEquals(
+                    fieldCase.gaps,
+                    success.request.inspectionGaps.map { gap -> ExpectedGap(gap.kind, gap.locator.value) },
+                    label,
+                )
+                assertCompleteSuccessTuple(
+                    success,
+                    fieldCase.expectedCoverage,
+                    fieldCase.gaps.map(ExpectedGap::locator),
+                )
+            }
+        }
+    }
+
+    /** Content presence is independent of role while an envelope without any recognized source stays malformed. */
+    @Test
+    fun `content presence rule is role neutral`() {
+        messageRoleCases().forEach { roleCase ->
+            val prefix = roleCase.wireRole
+            val recognizedSiblingFields =
+                listOf(
+                    """"tool_calls":[{"type":"function","function":{"name":"$prefix-tool","arguments":"$prefix-args"}}]""",
+                    """"function_call":{"name":"$prefix-legacy","arguments":"$prefix-legacy-args"}""",
+                    """"audio":{"id":"$prefix-audio"}""",
+                    """"reasoning":{"encrypted_content":"$prefix-encrypted"}""",
+                )
+
+            recognizedSiblingFields.forEach { fields ->
+                assertIs<ChatCompletionsParseResult.Success>(
+                    parse("""{"model":"gpt-5","messages":[{"role":"${roleCase.wireRole}",$fields}]}"""),
+                    "${roleCase.wireRole}/$fields",
+                )
+            }
+
+            val nullContent =
+                assertIs<ChatCompletionsParseResult.Success>(
+                    parse("""{"model":"gpt-5","messages":[{"role":"${roleCase.wireRole}","content":null}]}"""),
+                    "${roleCase.wireRole}/null-content",
+                )
+            assertEquals(emptyList(), nullContent.request.fragments, "${roleCase.wireRole}/null-content fragments")
+            assertEquals(emptyList(), nullContent.request.inspectionGaps, "${roleCase.wireRole}/null-content gaps")
+            assertCompleteSuccessTuple(nullContent, InspectionCoverage.FULLY_INSPECTABLE)
+
+            assertFailure(
+                parse("""{"model":"gpt-5","messages":[{"role":"${roleCase.wireRole}"}]}"""),
+                ChatCompletionsParseFailureCode.MALFORMED_MESSAGE,
+            )
+        }
+    }
+
+    /** Removing role gates does not relax any known nested type, required-member, or discriminator rule. */
+    @Test
+    fun `role neutral fields retain fail closed nested validation`() {
+        val cases =
+            listOf(
+                """{"model":"gpt-5","messages":[{"role":"system","content":[{"type":"refusal","refusal":7}]}]}""" to
+                    ChatCompletionsParseFailureCode.MALFORMED_MESSAGE,
+                """{"model":"gpt-5","messages":[{"role":"assistant","content":[{"type":"image_url","image_url":{}}]}]}""" to
+                    ChatCompletionsParseFailureCode.MALFORMED_MESSAGE,
+                """{"model":"gpt-5","messages":[{"role":"tool","content":[{"type":"input_audio","input_audio":{"data":"opaque","format":"future"}}]}]}""" to
+                    ChatCompletionsParseFailureCode.AMBIGUOUS_CONTENT,
+                """{"model":"gpt-5","messages":[{"role":"function","content":[{"type":"file","file":{"file_id":"one","file_data":"two"}}]}]}""" to
+                    ChatCompletionsParseFailureCode.MALFORMED_MESSAGE,
+                """{"model":"gpt-5","messages":[{"role":"developer","tool_calls":[{"type":"future","function":{"name":"tool","arguments":"args"}}]}]}""" to
+                    ChatCompletionsParseFailureCode.AMBIGUOUS_CONTENT,
+                """{"model":"gpt-5","messages":[{"role":"user","function_call":{"name":"legacy","arguments":7}}]}""" to
+                    ChatCompletionsParseFailureCode.MALFORMED_MESSAGE,
+                """{"model":"gpt-5","messages":[{"role":"tool","audio":{"id":""}}]}""" to
+                    ChatCompletionsParseFailureCode.MALFORMED_MESSAGE,
+                """{"model":"gpt-5","messages":[{"role":"function","reasoning":{"summary":{}}}]}""" to
+                    ChatCompletionsParseFailureCode.MALFORMED_MESSAGE,
+                """{"model":"gpt-5","messages":[{"role":"system","content":[{"type":"future","text":"sentinel"}]}]}""" to
+                    ChatCompletionsParseFailureCode.AMBIGUOUS_CONTENT,
+            )
+
+        cases.forEach { (body, expectedCode) ->
+            assertFailure(parse(body), expectedCode)
+        }
+    }
+
     /** Every supported message role keeps its own content field and explicit semantic role. */
     @Test
     fun `system assistant tool and function contents remain independent fragments`() {
@@ -509,6 +736,12 @@ class ChatCompletionsRequestParserTest {
                 """{"model":"gpt-5","messages":"not-an-array"}""".toByteArray() to
                     ChatCompletionsParseFailureCode.MALFORMED_MESSAGE,
                 """{"model":"gpt-5","messages":["not-an-object"]}""".toByteArray() to
+                    ChatCompletionsParseFailureCode.MALFORMED_MESSAGE,
+                """{"model":"gpt-5","messages":[{"content":"sentinel"}]}""".toByteArray() to
+                    ChatCompletionsParseFailureCode.MALFORMED_MESSAGE,
+                """{"model":"gpt-5","messages":[{"role":7,"content":"sentinel"}]}""".toByteArray() to
+                    ChatCompletionsParseFailureCode.MALFORMED_MESSAGE,
+                """{"model":"gpt-5","messages":[{"role":" ","content":"sentinel"}]}""".toByteArray() to
                     ChatCompletionsParseFailureCode.MALFORMED_MESSAGE,
                 """{"model":"gpt-5","messages":[{"role":"user"}]}""".toByteArray() to
                     ChatCompletionsParseFailureCode.MALFORMED_MESSAGE,
@@ -848,6 +1081,17 @@ class ChatCompletionsRequestParserTest {
     private fun schemaRequestBody(schema: String): String =
         """{"model":"gpt-5","messages":[{"role":"user","content":""}],"response_format":{"type":"json_schema","json_schema":{"name":"answer","schema":$schema}}}"""
 
+    /** Returns the explicit role, wire name, and existing content semantic kind finite table. */
+    private fun messageRoleCases(): List<MessageRoleCase> =
+        listOf(
+            MessageRoleCase("developer", MessageRole.DEVELOPER, FragmentSemanticKind.INSTRUCTION),
+            MessageRoleCase("system", MessageRole.SYSTEM, FragmentSemanticKind.INSTRUCTION),
+            MessageRoleCase("user", MessageRole.USER, FragmentSemanticKind.MESSAGE_TEXT),
+            MessageRoleCase("assistant", MessageRole.ASSISTANT, FragmentSemanticKind.MESSAGE_TEXT),
+            MessageRoleCase("tool", MessageRole.TOOL, FragmentSemanticKind.TOOL_RESULT),
+            MessageRoleCase("function", MessageRole.FUNCTION, FragmentSemanticKind.TOOL_RESULT),
+        )
+
     /** Asserts one typed safe parser failure. */
     private fun assertFailure(
         result: ChatCompletionsParseResult,
@@ -890,5 +1134,28 @@ class ChatCompletionsRequestParserTest {
         val text: String,
         val semanticKind: FragmentSemanticKind,
         val role: MessageRole?,
+    )
+
+    /** One explicit message-role row and its unchanged content semantic kind. */
+    private data class MessageRoleCase(
+        val wireRole: String,
+        val role: MessageRole,
+        val contentKind: FragmentSemanticKind,
+    )
+
+    /** One recognized message-field row with exact fragments, locators, and gaps. */
+    private data class RoleFieldCase(
+        val name: String,
+        val fields: String,
+        val expectedCoverage: InspectionCoverage,
+        val fragments: List<ExpectedFragment> = emptyList(),
+        val fragmentLocators: List<String> = emptyList(),
+        val gaps: List<ExpectedGap> = emptyList(),
+    )
+
+    /** Compact expected gap view independent of parser implementation types. */
+    private data class ExpectedGap(
+        val kind: InspectionGapKind,
+        val locator: String,
     )
 }

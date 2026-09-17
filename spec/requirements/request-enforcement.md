@@ -87,6 +87,8 @@ field class и source identity; free-text string также получает raw
 quote location. Classification зависит от exact parsed field, а не только от
 semantic kind или текстового JSON Pointer. Полный recognized vocabulary и
 schema shapes принадлежат [protocol field map](chat-completions-protocol.md#semantic-field-map).
+Для message fields classification одинакова при всех шести известных roles;
+role и semantic kind остаются metadata и не фильтруют текущий policy execution.
 
 Selected MASK finding в любом structural case блокирует весь request. ALLOW
 finding в том же field не блокирует. Полная structural matrix:
@@ -115,11 +117,11 @@ malformed nested JSON под selected MASK дают 403. Empty или no-finding
 | Named cases | Recognized source |
 |---|---|
 | `MESSAGE_SCALAR_TEXT`, `MESSAGE_PART_TEXT` | scalar/part content всех шести roles |
-| `REFUSAL_TEXT` | assistant refusal part |
+| `REFUSAL_TEXT` | refusal part любой известной message role |
 | `FUNCTION_DESCRIPTION`, `CUSTOM_DESCRIPTION`, `LEGACY_FUNCTION_DESCRIPTION` | modern/custom/deprecated descriptions |
 | `SCHEMA_TITLE`, `SCHEMA_DESCRIPTION`, `SCHEMA_EXAMPLE` | schema title/description/string examples |
-| `FILE_NAME` | user file filename; file data/ID остаются gap |
-| `REASONING_TEXT`, `REASONING_SUMMARY` | open assistant reasoning |
+| `FILE_NAME` | file filename любой известной message role; file data/ID остаются gap |
+| `REASONING_TEXT`, `REASONING_SUMMARY` | open reasoning любой известной message role |
 | `PREDICTION_SCALAR_TEXT`, `PREDICTION_PART_TEXT` | prediction scalar/part content |
 
 Schema key/value cases обязательны во всех трёх roots:

@@ -147,7 +147,7 @@ enum class FragmentSemanticKind {
     /** Predicted or returned output text. */
     OUTPUT_TEXT,
 
-    /** Assistant refusal text. */
+    /** Refusal text. */
     REFUSAL,
 
     /** Available plaintext reasoning or summary. */
@@ -230,7 +230,7 @@ enum class InspectionGapKind {
     /** File content. */
     FILE,
 
-    /** Opaque assistant audio reference. */
+    /** Opaque audio reference. */
     OPAQUE_AUDIO_REFERENCE,
 
     /** Provider-opaque encrypted reasoning. */

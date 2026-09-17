@@ -221,14 +221,15 @@ checks и не означают повторный прогон всей observa
 
 Нормативные owners: [Chat Completions](../spec/requirements/chat-completions-protocol.md)
 и [HTTP errors](../spec/requirements/http-gateway.md). Основание таблицы -
-source/test review и [новые reasoning observations](response-reasoning-evidence.md);
+source/test review, durable role-neutral parser/gateway verification и
+[новые reasoning observations](response-reasoning-evidence.md);
 исторический перенос остальных clauses не включал новых parser, HTTP, process, OCI или load runs. Методика: [protocol checks](development.md#protocol-contract-checks).
 
 | Target / invariant | Фактический source/test contract | Gap / evidence boundary |
 |---|---|---|
 | Request field map, exact routing, schema walker, gaps, budgets | `ChatCompletionsRequestParserTest`, `RequestEnforcementFieldCases`, `RequestRewritePlannerTest` содержат independent field/classification, schema, Unicode, negative и limit cases | Request defaults 8 MiB не подтверждают target 20 MiB raw/16 MiB text. Textual arguments не разрешают structured containers. Нового dynamic run нет. |
 | Model-visible schema property names имеют SCHEMA_TEXT | `JsonSchemaWalker.collectNamedSchemaContainer` передаёт LABEL в `addTextValue`; tests закрепляют LABEL | Conformance gap semantic kind: properties/patternProperties/dependentSchemas names сохранены как SCHEMA_TEXT target, текущий LABEL не объявлен эквивалентным. Structural enforcement classification не зависит от этого kind. |
-| Assistant-only request tool_calls и audio | `ChatCompletionsRequestParser.collectMessage` обрабатывает modern/custom tool_calls и audio для любой role, а tool fragments получают ASSISTANT | Conformance gap: user с content и tool_calls/audio может быть принят; normative assistant-only scope сохранён. Deprecated function_call/reasoning проверяют assistant отдельно. |
+| Role-neutral recognized request messages | `ChatCompletionsRequestParserTest` проверяет 6 roles x 8 field families, presence/null/failure matrix и actual-role provenance; `RequestInspectionE2eTest` проверяет six-role detector sequence, gaps, no-policy/ALLOW exact replay, safe failures и noncanonical-role MASK/BLOCK | Role-aware policy matching, новые roles/content kinds, tool correlation, response/SSE roles и inner parsing arguments остаются вне текущего scope. |
 | Role только при explicit protocol role | `ResponseCollector.addText` и `SseResponseCollector.result` всегда ставят ASSISTANT, включая source без role | Conformance gap provenance для отсутствующей role; target не изменён. |
 | Ordinary JSON exhaustive field/terminal failures | `ChatCompletionsResponseParserTest` проверяет content/refusal/reasoning_content, modern/deprecated call order, audio transcript/gap, optional null, malformed/ambiguous input; rewriter tests проверяют maps | Corpus не является полной type matrix каждого nested field: отдельные missing/type combinations tool function/arguments и audio data не представлены. Требование exhaustive matrix сохранено. |
 | SSE canonical fields, terminal и unknown event | `SseResponseCollector` сохраняет независимые choice/tool/semantic buffers; negative corpus покрывает missing DONE, mixed/after terminal, indices, repeated shape и provider error | Unknown event type даёт AMBIGUOUS_CONTENT в `consumeSseEvent` и negative test; target требует UNSUPPORTED_SCHEMA. На HTTP boundary оба дают safe 502, но parser mismatch остаётся. |
