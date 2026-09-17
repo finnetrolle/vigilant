@@ -152,7 +152,6 @@ context sources. Само решение хранится один раз в own
 | Work item | Статус | Прогресс | Оценка |
 |---|---|---:|---:|
 | [EPIC-06: OpenAI Responses protocol scope](epics/epic_06_llm_message_parsing.md) | `Draft` | 0/0 | Responses вне MVP; нет implementation-ready leaves |
-| [VIG-48: Отклонять trailing data в JWT header и claims](issues/issue_48_jwt_full_document_json.md) | `Ready for implementation` | signed defect matrix воспроизведена | 1-2 дня |
 
 ## Active TODO: порядок следующей работы
 
@@ -172,18 +171,18 @@ context sources. Само решение хранится один раз в own
 4. Не начинать новый пункт, пока предыдущий hard gate не завершён и
    `./gradlew validateWorkItems` не подтверждает согласованность реестра.
 
-Активной ready issue остаётся
-[VIG-48](issues/issue_48_jwt_full_document_json.md).
+Готовых к реализации задач сейчас нет. Текущий implementation frontier пуст.
 Текущий следующий шаг:
-[VIG-48](issues/issue_48_jwt_full_document_json.md).
-Она завершает учёт full-document work на JWT boundary. JWK environment
-contract уже закреплён в permanent owners.
+[EPIC-06](epics/epic_06_llm_message_parsing.md) - discovery, фиксация решений
+и декомпозиция future OpenAI Responses scope после отдельной post-MVP
+приоритизации; production implementation пока не разрешена.
 Role-neutral request inspection уже
 закреплена в [protocol owner](requirements/chat-completions-protocol.md#recognized-message-shapes).
 Безопасная transport-диагностика traces принадлежит
 [observability owner](requirements/observability.md#transport-failure-tracing);
 [проверки](../docs/transport-trace-evidence.md) разделяют SDK, exporter и installed stdout.
-[EPIC-06](epics/epic_06_llm_message_parsing.md) остаётся вне MVP и `Draft`.
+[EPIC-06](epics/epic_06_llm_message_parsing.md) остаётся вне MVP и `Draft` без
+implementation-ready leaves.
 Проверка plaintext response reasoning опубликована в
 [protocol owner](requirements/chat-completions-protocol.md#plaintext-response-reasoning)
 и [evidence](../docs/response-reasoning-evidence.md).
@@ -197,9 +196,9 @@ response reasoning capability.
 Full-document Bridge parsing закреплён в
 [identity owner](requirements/identity-and-context.md#external-bridge) и
 [coverage](../docs/requirements-coverage.md#identity-evidence).
-JWK environment full-document parsing также закреплён в
-[identity owner](requirements/identity-and-context.md#offline-jwt) и coverage;
-VIG-48 остаётся active до собственного completion protocol.
+JWT protected header/claims и JWK environment full-document parsing также
+закреплены в
+[identity owner](requirements/identity-and-context.md#offline-jwt) и coverage.
 
 Стендовую приёмку production identity, external probe и telemetry chain
 владелец продукта 2026-09-10 взял на себя; отдельная агентская задача на неё

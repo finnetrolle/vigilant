@@ -80,8 +80,11 @@ Delivery order определяется
 Проверка plaintext response reasoning опубликована в
 [protocol contract](requirements/chat-completions-protocol.md#plaintext-response-reasoning)
 и подтверждена [evidence](../docs/response-reasoning-evidence.md).
-Текущий frontier - завершить active identity full-document issue
-[VIG-48](issues/issue_48_jwt_full_document_json.md).
+Текущий implementation frontier пуст: `Ready for implementation` и
+`In progress` issues отсутствуют.
+JWT protected header/claims full-document parsing опубликован в
+[identity contract](requirements/identity-and-context.md#offline-jwt) и
+подтверждён [coverage](../docs/requirements-coverage.md#identity-evidence).
 JWK environment full-document parsing опубликован в
 [identity contract](requirements/identity-and-context.md#offline-jwt) и
 подтверждён [coverage](../docs/requirements-coverage.md#identity-evidence).
