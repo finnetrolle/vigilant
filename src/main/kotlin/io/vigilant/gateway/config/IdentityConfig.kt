@@ -5,6 +5,7 @@ package io.vigilant.gateway.config
 import com.fasterxml.jackson.core.JsonFactory
 import com.fasterxml.jackson.core.JsonProcessingException
 import com.fasterxml.jackson.core.StreamReadFeature
+import com.fasterxml.jackson.databind.DeserializationFeature
 import com.fasterxml.jackson.databind.ObjectMapper
 import io.vigilant.context.MAX_NORMALIZED_IDENTITY_GROUPS
 import io.vigilant.context.normalizeIdentityTokenOrNull
@@ -338,10 +339,10 @@ private fun validatedRuntimeEnvironment(raw: String?): RuntimeEnvironment {
 /** Sole exact field set accepted by the environment JWK JSON adapter. */
 private val JWK_FIELDS = setOf("kty", "kid", "n", "e")
 
-/** Strict duplicate-detecting parser for the one complex environment setting. */
+/** Requires one complete duplicate-free JWK document, allowing only trailing JSON whitespace. */
 private val JWK_ENV_JSON =
     ObjectMapper(
         JsonFactory.builder()
             .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
             .build(),
-    )
+    ).enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)

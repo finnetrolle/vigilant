@@ -65,10 +65,13 @@ choice, semantic field, tool call или transcript boundaries.
 `AppComponent` выбирает Dummy, offline JWT или External. Shared
 `BearerHeaderParser` находится в `DummyIdentityExtractor.kt`; successful
 extractor передаёт только `NormalizedIdentity`. JWT проверяет pinned RS256
-trust локально. Protected header и claims каждый разбираются как один полный
-duplicate-free JSON object с optional trailing JSON whitespace; второй root или
-trailing garbage дают existing safe `400 invalid_identity` до body demand и
-upstream. В EXTERNAL `CachingExternalIdentityLookup` стоит между
+trust локально. Environment JWK override разбирается при startup как один полный
+duplicate-free JSON array с optional trailing JSON whitespace; второй root или
+trailing garbage дают value-free configuration error и exit code `2` до запуска
+gateway. Protected header и claims каждый разбираются как один полный duplicate-free
+JSON object с optional trailing JSON whitespace; второй root или trailing garbage
+дают existing safe `400 invalid_identity` до body demand и upstream. В EXTERNAL
+`CachingExternalIdentityLookup` стоит между
 extractor и `BridgeIdentityClient`: completed hit обходит Bridge, cold miss
 проходит его exact one-attempt HTTP boundary. Caffeine хранит successful
 identity с write TTL/maximumSize и full HMAC keys отдельного hasher.

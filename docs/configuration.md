@@ -131,9 +131,11 @@ variable `VIGILANT_SOME_SETTING`.
 значения: `TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR`, `OFF`. Default -
 `INFO`.
 
-Complex `VIGILANT_IDENTITY_JWT_JWKS` задаётся strict JSON array с полями
-`kty`, `kid`, `n`, `e`; HOCON file использует native object-list syntax из
-примера выше. Неизвестные или duplicate JSON fields отклоняются.
+Complex `VIGILANT_IDENTITY_JWT_JWKS` задаётся ровно одним полным strict JSON
+array с полями `kty`, `kid`, `n`, `e`; после массива допустим только JSON
+whitespace. Второй JSON root, trailing non-whitespace bytes, неизвестные или
+duplicate JSON fields отклоняются. HOCON file использует native object-list
+syntax из примера выше.
 
 ## Validation rules
 

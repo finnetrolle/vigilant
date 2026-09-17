@@ -13,6 +13,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import org.junit.jupiter.api.DynamicTest
+import org.junit.jupiter.api.TestFactory
 
 @Suppress("LargeClass")
 class AppConfigLoadingTest {
@@ -580,6 +582,59 @@ class AppConfigLoadingTest {
         assertEquals("https://keycloak.example/realms/platform", identity.issuer)
         assertEquals("vigilant", identity.audience)
         assertEquals(setOf("key-env"), identity.publicKeys.keys)
+    }
+
+    /** K1: One complete JWK array accepts only the complete JSON whitespace suffix set. */
+    @TestFactory
+    fun `jwt environment jwks accept trailing json whitespace`(): List<DynamicTest> {
+        val rawJwks = "[${rsaJwkJson("key-full-document")}]"
+        return linkedMapOf(
+            "empty" to "",
+            "space" to " ",
+            "tab" to "\t",
+            "line-feed" to "\n",
+            "carriage-return-line-feed" to "\r\n",
+        ).map { (name, suffix) ->
+            DynamicTest.dynamicTest("K1_VALID_WHITESPACE $name") {
+                val config = loadAppConfigWithoutIdentityDefaults(validJwtEnvironment(rawJwks + suffix))
+
+                val identity = config.identity as JwtIdentitySettings
+                assertEquals(setOf("key-full-document"), identity.publicKeys.keys, name)
+            }
+        }
+    }
+
+    /** K2: Every JSON root type after a valid JWK array fails with one value-free diagnostic. */
+    @TestFactory
+    fun `jwt environment jwks reject every second json root`(): List<DynamicTest> {
+        val rawJwks = "[${rsaJwkJson("key-second-root")}]"
+        return linkedMapOf(
+            "object" to "{}",
+            "array" to "[]",
+            "string" to "\"second-root-sentinel\"",
+            "number" to "17",
+            "boolean" to "true",
+            "null" to "null",
+        ).map { (name, suffix) ->
+            DynamicTest.dynamicTest("K2_SECOND_ROOT $name") {
+                assertInvalidEnvironmentJwks("$rawJwks $suffix", name, "second-root-sentinel")
+            }
+        }
+    }
+
+    /** K3: Identifier, punctuation, and truncated-token suffixes fail without disclosure. */
+    @TestFactory
+    fun `jwt environment jwks reject trailing garbage`(): List<DynamicTest> {
+        val rawJwks = "[${rsaJwkJson("key-trailing-garbage")}]"
+        return linkedMapOf(
+            "identifier" to " trailing-jwk-sentinel",
+            "punctuation" to " !trailing-jwk-sentinel",
+            "truncated-token" to " {\"trailing-jwk-sentinel\":",
+        ).map { (name, suffix) ->
+            DynamicTest.dynamicTest("K3_TRAILING_GARBAGE $name") {
+                assertInvalidEnvironmentJwks(rawJwks + suffix, name, "trailing-jwk-sentinel")
+            }
+        }
     }
 
     /** Invalid, duplicate, unknown, and private JWK JSON never escapes source values in errors. */
@@ -1265,6 +1320,30 @@ class AppConfigLoadingTest {
             """"e":"${base64Url(publicKey.publicExponent.toByteArray())}"}"""
     }
 
+    /** Supplies one otherwise-valid JWT environment with exact caller-controlled JWK JSON. */
+    private fun validJwtEnvironment(rawJwks: String): Map<String, String> =
+        mapOf(
+            "VIGILANT_UPSTREAM_URL" to "http://127.0.0.1:18081",
+            "VIGILANT_ENVIRONMENT" to "production",
+            "VIGILANT_IDENTITY_MODE" to "JWT",
+            "VIGILANT_IDENTITY_JWT_ISSUER" to "https://keycloak.example/realms/platform",
+            "VIGILANT_IDENTITY_JWT_AUDIENCE" to "vigilant",
+            "VIGILANT_IDENTITY_JWT_JWKS" to rawJwks,
+        )
+
+    /** Asserts the stable environment-JWK failure without exposing any supplied sentinel. */
+    private fun assertInvalidEnvironmentJwks(
+        rawJwks: String,
+        caseName: String,
+        sentinel: String,
+    ) {
+        val failure = assertFailsWith<IllegalArgumentException>(caseName) {
+            loadAppConfigWithoutIdentityDefaults(validJwtEnvironment(rawJwks))
+        }
+        assertEquals(INVALID_ENVIRONMENT_JWKS_MESSAGE, failure.message, caseName)
+        assertFalse(failure.message.orEmpty().contains(sentinel), caseName)
+    }
+
     /** Builds one valid raw RSA JWK fixture for direct validation cases. */
     private fun validIdentityJwk(kid: String): IdentityJwkSettings {
         val publicKey = newRsaPublicKey()
@@ -1374,6 +1453,10 @@ class AppConfigLoadingTest {
         )
 
     private companion object {
+        /** Stable value-free diagnostic for invalid environment JWK JSON. */
+        private const val INVALID_ENVIRONMENT_JWKS_MESSAGE =
+            "VIGILANT_IDENTITY_JWT_JWKS must contain a valid JSON public JWK array"
+
         /** Complete valid identity prerequisite overridden only by the behavior under test. */
         private val VALID_DUMMY_ENV =
             mapOf(

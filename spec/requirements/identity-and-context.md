@@ -89,8 +89,10 @@ JWT проверяет локальный immutable pinned trust snapshot и н�
 и непустой `identity-jwt-jwks` обязательны. Каждый JWK - RSA public key с
 non-blank unique exact `kid`, valid Base64url unsigned `n` и `e`. Невалидный
 JWK, duplicate kid и incomplete trust configuration отклоняются при startup.
-Environment JWK override - strict JSON array объектов с полями только
-`kty`, `kid`, `n`, `e`, без duplicate keys и private material.
+Environment JWK override - ровно один полный strict JSON array объектов с полями
+только `kty`, `kid`, `n`, `e`, без duplicate keys и private material. После
+массива допустим только JSON whitespace; второй root и trailing non-whitespace
+bytes дают safe startup failure.
 
 | Проверка credential | Условие success; остальные варианты дают safe `400` до body demand |
 |---|---|

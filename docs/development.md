@@ -774,6 +774,11 @@ representative happy path:
   Offline JWT применяет ту же finite suffix matrix отдельно к exactly signed
   protected header и claims; representative real-gateway rejects дают exact safe
   400 без body demand, analysis, upstream или disclosure.
+- JWK environment override применяет finite suffix matrix к валидному public RSA
+  JWK array через `loadAppConfig`: empty/SP/TAB/LF/CRLF принимаются, каждый
+  second-root type и identifier/punctuation/truncated garbage дают exact value-free
+  startup error. `MainTest` проверяет representative second-root и garbage через
+  installed launcher с exit `2`, закрытыми process/readers и без disclosure.
 - HMAC deterministic randomness с независимыми literal vectors: равные
   String contents, case/character differences, different secrets, concurrent
   mixed inputs. Review retained state/listeners/callbacks проверяет отсутствие

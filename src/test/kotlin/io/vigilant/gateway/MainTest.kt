@@ -1,7 +1,11 @@
 package io.vigilant.gateway
 
+import java.net.URI
 import java.nio.file.Files
+import java.security.KeyPairGenerator
+import java.security.interfaces.RSAPublicKey
 import java.time.Duration
+import java.util.Base64
 import kotlin.io.path.writeText
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -115,6 +119,27 @@ class MainTest {
         }
     }
 
+    /** K4: The installed launcher rejects representative trailing JWK documents and closes cleanly. */
+    @TestFactory
+    fun `installed startup rejects trailing jwk environment data`(): List<DynamicTest> {
+        val rawJwks = "[${rsaJwkJson("process-full-document")}]"
+        val expectedMessage =
+            "VIGILANT_IDENTITY_JWT_JWKS must contain a valid JSON public JWK array"
+        return listOf(
+            "second-root" to " {\"process-tail-sentinel\":\"private\"}",
+            "garbage" to " process-tail-sentinel",
+        ).map { (name, suffix) ->
+            DynamicTest.dynamicTest("K4_PROCESS $name") {
+                val result = runInstalledGateway(validJwtEnvironment(rawJwks + suffix))
+
+                assertEquals(2, result.exitCode, name)
+                assertEquals(expectedMessage, result.stderr.trimEnd(), name)
+                assertFalse((result.stdout + result.stderr).contains("process-tail-sentinel"), name)
+                assertFalse(result.stderr.contains(rawJwks), name)
+            }
+        }
+    }
+
     /** CFG-06..08 and CFG-12..14: Every quantified invalid startup variant exits safely with code 2. */
     @TestFactory
     fun `external invalid startup matrix exits with code 2`(): List<DynamicTest> =
@@ -143,6 +168,44 @@ class MainTest {
         } finally {
             gateway.close()
         }
+    }
+
+    /** Runs the installed distribution until expected rejection and verifies all process resources close. */
+    private fun runInstalledGateway(environment: Map<String, String>): GatewayProcessExit {
+        val gateway = GatewayProcessFixture.launchInstalled(URI("http://127.0.0.1:18081"), environment)
+
+        return try {
+            gateway.awaitExit(Duration.ofSeconds(10))
+        } finally {
+            gateway.close()
+            assertFalse(gateway.process.isAlive, "startup rejection left the installed process alive")
+            assertFalse(gateway.hasLiveOutputReaders(), "startup rejection left an output reader alive")
+        }
+    }
+
+    /** Supplies one otherwise-valid JWT process environment with exact caller-controlled JWK JSON. */
+    private fun validJwtEnvironment(rawJwks: String): Map<String, String> =
+        mapOf(
+            "VIGILANT_ENVIRONMENT" to "production",
+            "VIGILANT_IDENTITY_MODE" to "JWT",
+            "VIGILANT_IDENTITY_JWT_ISSUER" to "https://keycloak.example/realms/platform",
+            "VIGILANT_IDENTITY_JWT_AUDIENCE" to "vigilant",
+            "VIGILANT_IDENTITY_JWT_JWKS" to rawJwks,
+        )
+
+    /** Builds one valid pinned RSA public JWK for the installed startup boundary. */
+    private fun rsaJwkJson(kid: String): String {
+        val publicKey =
+            KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }
+                .generateKeyPair().public as RSAPublicKey
+        return """{"kty":"RSA","kid":"$kid","n":"${base64Url(publicKey.modulus.toByteArray())}",""" +
+            """"e":"${base64Url(publicKey.publicExponent.toByteArray())}"}"""
+    }
+
+    /** Encodes one unsigned RSA integer as unpadded Base64url. */
+    private fun base64Url(signedBytes: ByteArray): String {
+        val unsigned = signedBytes.dropWhile { it == 0.toByte() }.toByteArray()
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(unsigned)
     }
 
     /** One fully expanded process-startup rejection with a value-free oracle. */

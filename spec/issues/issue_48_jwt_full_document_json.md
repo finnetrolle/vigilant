@@ -55,8 +55,9 @@ detection и порядок header -> `alg`/`kid` -> signature -> claims.
    sentinels в response, logs/audit и spans через accepting telemetry sink.
 5. После GREEN обновить permanent Offline JWT contract, runtime/evidence text и
    `requirements-coverage.md`, закрыв только JWT full-document gap. Соседний JWK
-   gap остаётся открытым. Завершать и удалять VIG-48 из active catalog можно
-   только после всех criteria и обязательных checks по completion protocol.
+   environment contract закреплён отдельно в permanent owner и остаётся вне
+   scope VIG-48. Завершать и удалять VIG-48 из active catalog можно только после
+   всех criteria и обязательных checks по completion protocol.
 
 Ожидаемые проверки определены ниже: `J1`-`J7`, существующая JWT regression
 matrix, focused identity suites, detekt и durable full build. Архитектура,
