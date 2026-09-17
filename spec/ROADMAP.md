@@ -77,10 +77,12 @@ qualification без fallback. Historical durations или percentage improvemen
 Delivery order определяется
 [active registry](WORK_ITEMS.md#active-todo-порядок-следующей-работы):
 
-Реализовать проверку reasoning в
-[VIG-45](issues/issue_45_response_reasoning_inspection.md).
-Исследование strict parsing остаётся открытым в Draft
-[VIG-44](issues/issue_44_strict_parsing_investigation.md).
+Проверка plaintext response reasoning опубликована в
+[protocol contract](requirements/chat-completions-protocol.md#plaintext-response-reasoning)
+и подтверждена [evidence](../docs/response-reasoning-evidence.md).
+Текущий frontier - проработать остающееся в `Draft`
+[исследование strict parsing](issues/issue_44_strict_parsing_investigation.md)
+до implementation-ready rejection matrix и декомпозиции.
 Безопасная transport-диагностика SERVER/CLIENT следует
 [finite tracing contract](requirements/observability.md#transport-failure-tracing),
 с раздельным [SDK/exporter/process evidence](../docs/transport-trace-evidence.md).

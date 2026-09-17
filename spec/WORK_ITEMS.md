@@ -153,7 +153,6 @@ context sources. Само решение хранится один раз в own
 |---|---|---:|---:|
 | [EPIC-06: OpenAI Responses protocol scope](epics/epic_06_llm_message_parsing.md) | `Draft` | 0/0 | Responses вне MVP; нет implementation-ready leaves |
 | [VIG-44: Исследовать и исправить нарушения strict parsing](issues/issue_44_strict_parsing_investigation.md) | `Draft` | нужна rejection matrix и декомпозиция | 1 день исследования |
-| [VIG-45: Проверять текстовый reasoning в ответах Chat Completions](issues/issue_45_response_reasoning_inspection.md) | `In progress` | audit type R10 согласован; privacy assertions ожидают полный набор spans | 2-3 дня |
 
 ## Active TODO: порядок следующей работы
 
@@ -173,23 +172,27 @@ context sources. Само решение хранится один раз в own
 4. Не начинать новый пункт, пока предыдущий hard gate не завершён и
    `./gradlew validateWorkItems` не подтверждает согласованность реестра.
 
-Текущий следующий шаг: завершить
-[VIG-45](issues/issue_45_response_reasoning_inspection.md), проверку reasoning
-для подключения Filin. Audit type R10 согласован; privacy assertions ожидают
-полный набор spans каждого HTTP exchange. Hard dependencies нет.
+Готовых к реализации задач сейчас нет. Текущий следующий шаг:
+проработать
+[VIG-44: исследовать и исправить нарушения strict parsing](issues/issue_44_strict_parsing_investigation.md):
+зафиксировать exact rejection matrix и решение о декомпозиции до
+`Ready for implementation`. Статус issue остаётся `Draft` и не
+разрешает production implementation.
 Безопасная transport-диагностика traces принадлежит
 [observability owner](requirements/observability.md#transport-failure-tracing);
 [проверки](../docs/transport-trace-evidence.md) разделяют SDK, exporter и installed stdout.
 [EPIC-06](epics/epic_06_llm_message_parsing.md) остаётся вне MVP и `Draft`.
+Проверка plaintext response reasoning опубликована в
+[protocol owner](requirements/chat-completions-protocol.md#plaintext-response-reasoning)
+и [evidence](../docs/response-reasoning-evidence.md).
 
 Текущий [baseline качества детектора](../docs/pii-quality-evaluation.md)
 зафиксирован 2026-09-16: четыре свежих корпуса на общем snapshot, полные
 агрегированные таблицы, ограничения и приоритеты последующего исследования.
-Он не меняет runtime rules и не закрывает оставшуюся проверку reasoning.
+Он не меняет runtime rules или evidence опубликованной
+response reasoning capability.
 
-Исследование strict parsing в [VIG-44](issues/issue_44_strict_parsing_investigation.md)
-остаётся открытым в `Draft`: до реализации нужны exact rejection matrix и
-решение о декомпозиции. Завершение transport tracing не закрывает эту задачу.
+Завершение transport tracing не закрывает исследование strict parsing.
 
 Стендовую приёмку production identity, external probe и telemetry chain
 владелец продукта 2026-09-10 взял на себя; отдельная агентская задача на неё

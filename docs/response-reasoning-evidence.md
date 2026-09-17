@@ -26,25 +26,25 @@
 `SseResponseEnforcementE2eTest`, `ResponseInspectionWorkflowTest`,
 `ReasoningResponseE2eTest`, `ReasoningResponseLifecycleE2eTest`.
 
-Durable run `dec3d7b6261545138c94f3f64e75a721` выполнил все восемь suites
-и detekt: 83 tests, 0 failures/errors/skips, exit 0. Он фиксирует initial
-GREEN до усиления review assertions для exception scanning и ingest cancellation.
+Initial behavioral run `dec3d7b6261545138c94f3f64e75a721` выполнил все
+восемь suites и detekt: 83 tests, 0 failures/errors/skips, exit 0.
 Review corrections проверены run `74bde075a7154cd480e5563081da39d5`:
 6 affected HTTP tests и detekt, exit 0.
 
-Полный gate `0cbe425866054e11adcf6b3e64524533` выполнил
-`./gradlew workItemValidatorTest --rerun validateWorkItems build`, exit 0,
-21m54s: 1725 ordinary tests, 72 process tests и 55 validator tests, без
-failures/errors/skips. Process lane была UP-TO-DATE после успешного
-выполнения в предыдущем запуске. Detekt и production runtime classpath check
-прошли. Предыдущий full run `40edde3c40c04e49b38442ba4baf74f0` остановлен
-по supervisor timeout 1200 секунд во время ordinary tests и не является PASS;
-повторный запуск использовал bound 2400 без изменения runtime/test timeouts.
-Эти observations относятся к initial implementation snapshot. После его
-верификации согласован audit type R10 `EMAIL_ADDRESS:1` и усилено ожидание
-полного набора spans перед privacy assertions. Изменённые test и docs inputs
-требуют актуальной evidence повторной верификации; прежний build не является
-прогоном этих assertions.
+После согласования audit type `EMAIL_ADDRESS:1` и усиления privacy
+assertions run `6d0bbce8799b4dd8b81a6f126b8b24aa` проверил affected
+HTTP matrix, detekt и work-item validation, exit 0. Полный pipeline
+`901556931c2240ae9b197c35dda6b214` затем выполнил build, tests,
+process tests, detekt, work-item validation и dependency check, exit 0.
+Scoped Sonar run `09111bb714244ded8fdc122be2b7ff89` на том же snapshot
+не нашёл blocking issues или hotspots в изменённых files.
+
+Терминальный focused run `8b17106c7cee4a23a9347c85101eec77`
+на 2026-09-17 повторил все восемь suites и detekt на текущем
+committed implementation: 83 tests, 0 failures/errors/skips, exit 0.
+Последний pre-closure full build `d604e6218d20471b960cb8415a3d04de`
+также завершился с exit 0. Relevant production и test files не менялись
+после implementation commit `499c6d1a34e5af80be1014f3858ce4cc789e52df`.
 Logs и input snapshots хранятся в локальном `.git/check-runs/`.
 
 Воспроизведение focused contract:
