@@ -53,10 +53,10 @@ enum InspectionQualificationShape {
         "qualification-fragment-overflow",
         InspectionQualificationPayload::fragmentOverflow,
         InspectionQualificationPayload.MAX_NORMALIZED_FRAGMENTS + 1,
-        0,
+        -1,
         0,
         new InspectionQualificationHttpOutcome(400, "{\"error\":\"unsupported_schema\"}"),
-        new InspectionQualificationAuditOutcome(Decision.ERROR, Coverage.UNINSPECTABLE, ErrorCode.UNSUPPORTED_SCHEMA)
+        new InspectionQualificationAuditOutcome(Decision.NOT_STARTED, Coverage.MISSING, ErrorCode.NONE)
     );
 
     private final String id;
@@ -132,6 +132,11 @@ enum InspectionQualificationShape {
     /** Returns the exact expected typed safe audit outcome. */
     InspectionQualificationAuditOutcome expectedAudit() {
         return expectedAudit;
+    }
+
+    /** States whether the fixture reaches detector execution and therefore requires an analysis pair. */
+    boolean requiresAnalysis() {
+        return expectedAudit.decision() != Decision.NOT_STARTED;
     }
 
     /** Returns the complete immutable set of required report identifiers. */

@@ -55,6 +55,8 @@
 
 ## Проверки и evidence
 
+- [Полные benchmark cycles](benchmark-cycles.md) - запуск нагрузочной матрицы
+  или качества Fast PII одной командой с общей сводкой.
 - [Operations evidence](operations-evidence.md) - проверенный Docker artifact,
   application/trace/metric stdout и текущие lifecycle checks; отдельно от стенда.
 - [Методика PERF-01](perf-01-load-test.md) описывает воспроизводимый benchmark,

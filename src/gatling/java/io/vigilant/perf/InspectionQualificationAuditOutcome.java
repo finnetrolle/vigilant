@@ -15,9 +15,9 @@ record InspectionQualificationAuditOutcome(
         );
     }
 
-    /** Safe aggregate shadow-decision classes accepted by the fixed matrix. */
+    /** Safe REQUEST analysis outcomes, including absence when analysis never started. */
     enum Decision {
-        MISSING,
+        NOT_STARTED,
         CLEAN,
         INSPECTION_GAP,
         ERROR;
@@ -25,7 +25,7 @@ record InspectionQualificationAuditOutcome(
         /** Parses one exact audit decision or fails closed on contract drift. */
         static Decision fromWireValue(String value) {
             if (value == null || value.isEmpty()) {
-                return MISSING;
+                return NOT_STARTED;
             }
             return valueOf(value);
         }

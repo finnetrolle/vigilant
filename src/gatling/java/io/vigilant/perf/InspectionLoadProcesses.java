@@ -21,7 +21,7 @@ final class InspectionLoadProcesses implements AutoCloseable {
     /** Creates the process fixture and its deterministic report paths. */
     InspectionLoadProcesses(InspectionLoadProfile profile) {
         this.profile = profile;
-        processLogDirectory = profile.projectDirectory().resolve("build/inspection-processes");
+        processLogDirectory = BenchmarkReports.path(profile.projectDirectory(), "inspection-processes");
         gatewayLog = processLogDirectory.resolve("gateway.log");
     }
 
@@ -84,11 +84,7 @@ final class InspectionLoadProcesses implements AutoCloseable {
                 + profile.projectDirectory().resolve("build/install/vigilant/lib/*")
         );
         command.add(BenchmarkUpstreamMain.class.getName());
-        command.add(Integer.toString(profile.upstreamPort()));
-        command.add(Integer.toString(profile.responseBytes()));
-        command.add("1");
-        command.add("1");
-        command.add("0");
+        command.addAll(upstreamArguments());
         return PerformanceProcessSupport.process(command, profile.projectDirectory(), logFile).start();
     }
 
@@ -116,6 +112,12 @@ final class InspectionLoadProcesses implements AutoCloseable {
             Integer.toString(profile.maxConcurrentRequestSources())
         );
         return builder.start();
+    }
+
+    /** Declares the exact shared upstream wire budgets, including its available streaming branch. */
+    List<String> upstreamArguments() {
+        return List.of(Integer.toString(profile.upstreamPort()), Integer.toString(profile.responseBytes()),
+            "1", Integer.toString(profile.responseBytes()), "0");
     }
 
     /** Stops the gateway first so its async audit appender flushes before the log is inspected. */

@@ -25,19 +25,23 @@ record InspectionQualificationCapacityEvidence(
     record Probe(
         InspectionQualificationHttpOutcome http,
         InspectionQualificationAuditOutcome audit,
-        int auditEvents
+        int auditEvents,
+        String retryAfter,
+        int upstreamRequests,
+        boolean preAnalysisHttpVerified
     ) {
         private static final InspectionQualificationHttpOutcome CAPACITY_HTTP =
-            new InspectionQualificationHttpOutcome(503, "{\"error\":\"inspection_capacity_exhausted\"}");
+            new InspectionQualificationHttpOutcome(503, "{\"error\":{\"message\":\"Request inspection unavailable.\",\"type\":\"server_error\",\"code\":\"request_inspection_unavailable\"}}");
         private static final InspectionQualificationAuditOutcome CAPACITY_AUDIT =
             new InspectionQualificationAuditOutcome(
-                Decision.ERROR,
-                Coverage.UNINSPECTABLE,
-                ErrorCode.INSPECTION_CAPACITY_EXHAUSTED
+                Decision.NOT_STARTED,
+                Coverage.MISSING,
+                ErrorCode.NONE
             );
         /** Returns whether this probe exactly observed the stable capacity rejection contract. */
         boolean capacityRejected() {
-            return auditEvents == 1 && CAPACITY_HTTP.equals(http) && CAPACITY_AUDIT.equals(audit);
+            return auditEvents == 0 && CAPACITY_HTTP.equals(http) && CAPACITY_AUDIT.equals(audit)
+                && "1".equals(retryAfter) && upstreamRequests == 0 && preAnalysisHttpVerified;
         }
     }
 }

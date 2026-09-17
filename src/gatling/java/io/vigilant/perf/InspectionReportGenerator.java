@@ -21,7 +21,7 @@ final class InspectionReportGenerator {
         InspectionLoadProfile profile = snapshot.profile();
         InspectionAuditObservation audit = snapshot.audit();
         return String.format(Locale.ROOT, """
-            # Production PII shadow proxy inspection-load run
+            # Packaged request-policy inspection-load run
 
             - Started (UTC): %s
             - Finished (UTC): %s
@@ -46,7 +46,7 @@ final class InspectionReportGenerator {
             - Gateway RSS last-window median: %s
             - Gateway RSS peak: %s
             - Matched measured audit events: %d
-            - Measured `DETECTED` decisions: %d
+            - Measured REQUEST analysis `DETECTED` outcomes: %d
             - OutOfMemoryError observed: %s
             - Sensitive benchmark value observed in logs: %s
             - Byte-identical replay: every successful response was accepted by the upstream SHA-256 check.
@@ -141,13 +141,22 @@ final class InspectionReportGenerator {
         return markdown.toString();
     }
 
-    /** Writes one immutable load snapshot to its deterministic report path. */
+    /** Writes text and aggregate JSON for one immutable load snapshot beneath the configured artifact root. */
     static Path writeLoad(InspectionLoadSnapshot snapshot) {
-        Path report = snapshot.profile().projectDirectory()
-            .resolve("build/reports/inspection/load/summary.md");
+        Path report = BenchmarkReports.path(snapshot.profile().projectDirectory(), "reports/inspection/load/summary.md");
         try {
             Files.createDirectories(report.getParent());
             Files.writeString(report, renderLoad(snapshot));
+            java.util.Map<String, Object> metrics = new java.util.LinkedHashMap<>();
+            metrics.put("verdict", snapshot.verdict());
+            metrics.put("passed", snapshot.productionPassed());
+            metrics.put("fullProfile", snapshot.profile().qualifiesForProductionReport());
+            metrics.put("successfulRequests", snapshot.latencyMillis().size());
+            metrics.put("p50Ms", snapshot.latencyMillis().isEmpty() ? null : snapshot.latencyPercentile(50));
+            metrics.put("p95Ms", snapshot.latencyMillis().isEmpty() ? null : snapshot.latencyPercentile(95));
+            metrics.put("p99Ms", snapshot.latencyMillis().isEmpty() ? null : snapshot.latencyPercentile(99));
+            metrics.put("safetyPassed", snapshot.safetyPassed());
+            BenchmarkReports.writeJson(report.resolveSibling("summary.json"), metrics);
         } catch (IOException exception) {
             throw new IllegalStateException("Failed to write inspection-load summary", exception);
         }

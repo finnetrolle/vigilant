@@ -33,7 +33,7 @@ final class InspectionQualificationReport {
 
             ## Exact request-shape matrix
 
-            | Case | Request bytes | Expected fragments | Inspected fragments | Inspection gaps | HTTP | Audit decision | Coverage | Error | Events | Transport exact | Inspection ms |
+            | Case | Request bytes | Expected fragments | Inspected fragments | Inspection gaps | HTTP | Audit decision | Coverage | Error | Events | Transport exact | Analysis ms |
             |---|---:|---:|---:|---:|---:|---|---|---|---:|---:|---:|
             """,
             snapshot.startedAt(),
@@ -55,11 +55,11 @@ final class InspectionQualificationReport {
         for (InspectionQualificationSnapshot.ShapeResult shape : snapshot.shapes()) {
             report.append(String.format(
                 Locale.ROOT,
-                "| %s | %d | %d | %d | %d | %d | %s | %s | %s | %d | %s | %d |%n",
+                "| %s | %d | %d | %s | %d | %d | %s | %s | %s | %d | %s | %s |%n",
                 shape.id(),
                 shape.requestBytes(),
                 shape.shape().expectedFragments(),
-                shape.inspectedFragments(),
+                shape.inspectedFragments() < 0 ? "n/a" : Integer.toString(shape.inspectedFragments()),
                 shape.shape().expectedGaps(),
                 shape.actualHttp().status(),
                 shape.actualAudit().decision(),
@@ -69,7 +69,7 @@ final class InspectionQualificationReport {
                     : shape.actualAudit().errorCode().wireValue(),
                 shape.auditEvents(),
                 shape.transportOutcomeVerified(),
-                shape.totalInspectionMillis()
+                shape.analysisDurationMillis() < 0 ? "n/a" : Long.toString(shape.analysisDurationMillis())
             ));
         }
         InspectionQualificationSnapshot.ConcurrencyResult concurrency = snapshot.concurrency();
@@ -79,12 +79,12 @@ final class InspectionQualificationReport {
 
             Every accepted case required HTTP 200, byte-identical digest replay at the real
             upstream, one matching safe audit event, complete normalized counts, and no silent
-            truncation. The overflow case required local HTTP 400 with one `UNSUPPORTED_SCHEMA`
-            audit and no upstream request.
+            truncation. The overflow case required local HTTP 400, no analysis pair, one terminal
+            HTTP audit and no upstream request. NOT_STARTED and n/a represent pre-analysis termination.
 
-            - Single-fragment total inspection duration: %s.
-            - Max-fragment total inspection duration: %s.
-            - Gap-dense total inspection duration: %s.
+            - Single-fragment request analysis duration: %s.
+            - Max-fragment request analysis duration: %s.
+            - Gap-dense request analysis duration: %s.
             - No new latency threshold is applied; durations are observations of sequential
               per-fragment policy evaluation.
 
@@ -98,7 +98,8 @@ final class InspectionQualificationReport {
             - Measured capacity probes: 1.
             - Matching safe audit events: %d.
             - Accepted audit outcome: one `CLEAN/FULLY_INSPECTABLE` event per request;
-              the sole measured capacity audit is `ERROR/INSPECTION_CAPACITY_EXHAUSTED`.
+              the measured capacity rejection requires no analysis pair, one terminal HTTP audit,
+              Retry-After 1, no upstream request and unchanged server-held quota.
             - Byte-identical replay for every accepted request: `%s`.
             - Post-cleanup success probe: `%s`.
 
@@ -122,7 +123,8 @@ final class InspectionQualificationReport {
             - Success returned to bounded baseline: `%s`.
             - Rejection returned to bounded baseline: `%s`.
             - Client cancellation returned to bounded baseline: `%s`.
-            - Packaged interrupted-upload audit outcome: `ERROR/SOURCE_ERROR`.
+            - Interrupted upload: server retention confirmed before abort; quota returned to zero,
+              no upstream request, one terminal HTTP audit and no analysis pair.
             - Process shutdown completed within its bound: `%s`.
             - Exact source owners and retained bytes returned to zero in focused public-seam tests: `%s`.
             - Inspection executor tasks drained in focused lifecycle tests: `%s`.
@@ -192,7 +194,7 @@ final class InspectionQualificationReport {
         return snapshot.shapes().stream()
             .filter(shape -> shape.id().equals(expectedShape.id()))
             .findFirst()
-            .map(shape -> shape.totalInspectionMillis() + " ms")
+            .map(shape -> shape.analysisDurationMillis() < 0 ? "n/a" : shape.analysisDurationMillis() + " ms")
             .orElse("n/a");
     }
 

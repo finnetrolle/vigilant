@@ -1,0 +1,200 @@
+#!/usr/bin/env python3
+"""Run complete explicit benchmark cycles through the repository's sole supervisor."""
+
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+import uuid
+
+from benchmark_cycle import ensure_idle, execute, publish_json
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def emit(**fields):
+    """Write scalar TOON; progress and raw child output never enter stdout."""
+    for key, value in fields.items():
+        print(f'{key}: {json.dumps(value, ensure_ascii=False)}', flush=True)
+
+
+class Parser(argparse.ArgumentParser):
+    """Keep usage errors actionable and non-interactive."""
+
+    def __init__(self, *args, **kwargs):
+        """Require exact flag names rather than silently accepting abbreviations."""
+        super().__init__(*args, allow_abbrev=False, **kwargs)
+
+    def error(self, message):
+        emit(error=message, help=self.format_help().strip())
+        raise SystemExit(2)
+
+    def print_help(self, file=None):
+        """Keep help inside the same scalar TOON contract as other responses."""
+        emit(help=self.format_help().strip())
+
+
+def parse_args():
+    """Reject unknown and mode-inapplicable options before starting dependencies."""
+    parser = Parser(description='Full benchmark cycles. Examples: benchmark load; benchmark pii-quality --detach; '
+                    'benchmark pii-quality --baseline /path/to/reviewed-baseline. Exit: 0 success, 1 failed cycle, 2 usage/preflight.')
+    parser.add_argument('--execute', help=argparse.SUPPRESS)
+    commands = parser.add_subparsers(dest='mode', parser_class=Parser)
+    for mode in ('load', 'pii-quality'):
+        command = commands.add_parser(mode, help=f'run the complete {mode} cycle',
+                                      description=f'benchmark {mode}; benchmark {mode} --detach --offline')
+        command.add_argument('--detach', action='store_true', help='return a run ID immediately; dispatch is not PASS')
+        command.add_argument('--offline', action='store_true', help='no dependency or dataset downloads; verified local datasets required')
+        command.add_argument('--timeout', type=int, default=14400, help='whole cycle deadline in seconds (default: 14400)')
+        command.add_argument('--tool', action='append', default=[], help='additional installed tool/configuration input (repeatable)')
+        if mode == 'pii-quality':
+            command.add_argument('--baseline', help='reviewed frozen qualification directory; adds paired JMH qualification')
+            command.add_argument('--redmadrobot', help='local pinned test.csv')
+            command.add_argument('--hivetrace', help='local directory containing both pinned Parquet files')
+            command.add_argument('--advpii', help='local directory containing the pinned Parquet file')
+    args = parser.parse_args()
+    if args.execute:
+        if args.mode or not re.fullmatch('[0-9a-f]{32}', args.execute):
+            parser.error('invalid internal cycle ID')
+    elif args.mode and args.timeout <= 0:
+        parser.error('--timeout must be positive')
+    return args
+
+
+def runner(*args):
+    """Call the existing supervisor and read its scalar machine interface."""
+    result = subprocess.run([sys.executable, str(ROOT / 'scripts/check-run'), *args], cwd=ROOT,
+                            capture_output=True, text=True, timeout=90)
+    fields = {key: json.loads(value) for key, separator, value in
+              (line.partition(': ') for line in result.stdout.splitlines()) if separator}
+    if 'run' not in fields:
+        raise ValueError(fields.get('error', 'cannot launch cycle; inspect benchmark --help'))
+    return result.returncode, fields
+
+
+def await_run(identifier, report=None):
+    """Wait in bounded calls, exposing progress and checking final evidence applicability."""
+    previous = None
+    try:
+        while True:
+            _, fields = runner('wait', identifier, '--seconds', '5')
+            if report and report.exists():
+                summary = json.loads(report.read_text())
+                progress = ', '.join(f'{s["id"]}: {s["state"]}' for s in summary['stages'])
+                if progress != previous:
+                    print(progress, file=sys.stderr, flush=True)
+                    previous = progress
+            if fields['state'] not in ('starting', 'running'):
+                return runner('status', identifier)
+    except KeyboardInterrupt:
+        runner('cancel', identifier)
+        print('Cancellation requested; waiting for process cleanup.', file=sys.stderr, flush=True)
+        return await_run(identifier, report)
+
+
+def java_home():
+    """Resolve the installed JDK used by both Gradle and all benchmark toolchains."""
+    java = str(Path(os.environ['JAVA_HOME']) / 'bin/java') if os.environ.get('JAVA_HOME') else shutil.which('java')
+    if not java:
+        raise ValueError('JDK 25 is required; set JAVA_HOME to an installed JDK 25')
+    result = subprocess.run([java, '-XshowSettings:properties', '-version'], capture_output=True, text=True, timeout=15)
+    properties = dict(re.findall(r'^\s*(java\.(?:home|version)) = (.+)$', result.stderr, re.MULTILINE))
+    if result.returncode or not re.match(r'^25(?:[.+-]|$)', properties.get('java.version', '')):
+        raise ValueError('JDK 25 is required; set JAVA_HOME to an installed JDK 25')
+    return Path(properties['java.home']).resolve(), properties['java.version']
+
+
+def gradle_home(offline):
+    """Locate the wrapper's pinned distribution, bootstrapping it durably on first use."""
+    wrapper = (ROOT / 'gradle/wrapper/gradle-wrapper.properties').read_text()
+    match = re.search(r'gradle-([0-9.]+)-(bin|all)\.zip', wrapper)
+    if not match:
+        raise ValueError('unsupported Gradle wrapper URL; configure a pinned Gradle distribution')
+    version, kind = match.groups()
+    user_home = Path(os.environ.get('GRADLE_USER_HOME', Path.home() / '.gradle')).resolve()
+    pattern = f'wrapper/dists/gradle-{version}-{kind}/*/gradle-{version}'
+    homes = list(user_home.glob(pattern))
+    if not homes and offline:
+        raise ValueError('offline mode requires the pinned Gradle distribution in GRADLE_USER_HOME')
+    if not homes:
+        ensure_idle()
+        code, run = runner('start', '--label', 'benchmark-bootstrap', '--timeout', '600', '--', './gradlew', '--version')
+        if code or await_run(run['run'])[0]:
+            raise ValueError(f'Gradle preparation failed; inspect check-run status {run["run"]}')
+        homes = list(user_home.glob(pattern))
+    if len(homes) != 1:
+        raise ValueError('cannot identify one pinned Gradle installation in GRADLE_USER_HOME')
+    return user_home, homes[0].resolve()
+
+
+def launch(args):
+    """Prepare immutable cycle configuration and delegate process ownership to check-run."""
+    jdk, version = java_home()
+    user_home, gradle = gradle_home(args.offline)
+    config = vars(args).copy()
+    config.update(java_home=str(jdk), java_version=version, gradle_home=str(gradle))
+    tools = [jdk, gradle, ROOT / 'gradle.properties']
+    tools += [user_home / name for name in ('gradle.properties', 'init.d', 'init.gradle', 'init.gradle.kts')]
+    for name in ('redmadrobot', 'hivetrace', 'advpii', 'baseline'):
+        value = config.get(name)
+        if value:
+            path = Path(value).expanduser().resolve()
+            if not path.exists():
+                raise ValueError(f'--{name} input does not exist')
+            config[name] = str(path)
+            tools.append(path)
+    if config.get('baseline'):
+        required = ('redmadrobot-pii-benchmark.json', 'jmh.json', 'environment.properties', 'revision.txt')
+        if not all((Path(config['baseline']) / name).is_file() for name in required):
+            raise ValueError('--baseline must contain reviewed RedMadRobot, JMH, environment and revision artifacts')
+    cycle = uuid.uuid4().hex
+    output = ROOT / 'build/reports/benchmark' / cycle
+    output.mkdir(parents=True)
+    gateway_config = output / 'vigilant.conf'
+    gateway_config.write_text('# Benchmark fixtures supply their explicit settings through environment.\n')
+    publish_json(output / 'config.json', config)
+    tools += [output / 'config.json', gateway_config]
+    command = ['start', '--label', f'benchmark-{args.mode}', '--snapshot', cycle,
+               '--timeout', str(args.timeout), '--artifact', f'directory:build/reports/benchmark/{cycle}']
+    for path in [*tools, *args.tool]:
+        command += ['--tool', str(path)]
+    command += ['--env-key', 'HOME', '--env-key', '_JAVA_OPTIONS', '--', './scripts/benchmark', '--execute', cycle]
+    code, fields = runner(*command)
+    if code or args.detach:
+        emit(**fields, cycle=cycle, summary=str(output / 'summary.md'))
+        return code
+    print(f'Run: {fields["run"]}; summary: {output / "summary.md"}', file=sys.stderr, flush=True)
+    code, fields = await_run(fields['run'], output / 'summary.json')
+    emit(**fields, cycle=cycle, summary=str(output / 'summary.md'))
+    return code
+
+
+def main():
+    """Dispatch a fresh cycle, its internal worker, or the read-only home view."""
+    os.umask(0o077)
+    args = parse_args()
+    try:
+        if args.execute:
+            return execute(ROOT, args.execute)
+        if args.mode:
+            return launch(args)
+        summaries = sorted((ROOT / 'build/reports/benchmark').glob('*/summary.json'), key=lambda p: p.stat().st_mtime)
+        emit(bin=str(Path(__file__).resolve()), description='Run full load and Fast PII quality cycles', cycles=len(summaries))
+        if summaries:
+            latest = json.loads(summaries[-1].read_text())
+            emit(cycle=latest['cycle'], measurement_state=latest['state'], applicability='unverified',
+                 summary=str(summaries[-1].with_suffix('.md')),
+                 verification='Use check-run status with the run ID returned at launch; summary alone is not PASS')
+        emit(next='./scripts/benchmark load | ./scripts/benchmark pii-quality')
+        return 0
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
+        emit(error=str(error) if isinstance(error, ValueError) else 'cannot prepare benchmark cycle', help='./scripts/benchmark --help')
+        return 2
+
+
+if __name__ == '__main__':
+    sys.exit(main())

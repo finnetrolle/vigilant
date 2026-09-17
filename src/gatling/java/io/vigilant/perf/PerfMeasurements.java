@@ -11,6 +11,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
 import java.util.EnumMap;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -70,13 +71,13 @@ final class PerfMeasurements {
     }
 
     /**
-     * Writes both a stable latest summary and a timestamped copy under build/reports/perf-01.
+     * Writes latest/timestamped Markdown and aggregate JSON under the configured artifact root.
      */
     Path writeSummary(PerfProfile profile) {
         return writeSummary(profile, PerfLoggingObservation.unavailable());
     }
 
-    /** Writes the summary with process-level logging evidence when available. */
+    /** Writes text and JSON from one gate evaluation with process-level logging evidence when available. */
     Path writeSummary(PerfProfile profile, PerfLoggingObservation loggingObservation) {
         Instant finishedAt = Instant.now();
         Instant effectiveStartedAt = startedAt == null ? finishedAt : startedAt;
@@ -93,7 +94,7 @@ final class PerfMeasurements {
             && latencies.proxy().combined().count() >= expectedPerPath * 0.99
             && latencies.slowSink().combined().count() >= expectedPerPath * 0.99;
 
-        String markdown = report(
+        Summary summary = report(
             profile,
             effectiveStartedAt,
             finishedAt,
@@ -103,7 +104,8 @@ final class PerfMeasurements {
             targetRateObserved,
             loggingObservation
         );
-        Path reportDirectory = profile.projectDirectory().resolve("build/reports/perf-01");
+        String markdown = summary.markdown();
+        Path reportDirectory = BenchmarkReports.path(profile.projectDirectory(), "reports/perf-01");
         String runId = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss", Locale.ROOT)
             .withZone(ZoneOffset.UTC)
             .format(effectiveStartedAt);
@@ -113,6 +115,7 @@ final class PerfMeasurements {
             Files.createDirectories(reportDirectory);
             Files.writeString(timestampedReport, markdown);
             Files.writeString(latestReport, markdown);
+            BenchmarkReports.writeJson(reportDirectory.resolve("summary.json"), summary.metrics());
         } catch (IOException exception) {
             throw new IllegalStateException("Failed to write PERF-01 summary", exception);
         }
@@ -136,8 +139,8 @@ final class PerfMeasurements {
         };
     }
 
-    /** Builds the human-readable, self-contained run summary. */
-    private static String report(
+    /** Evaluates gates once and builds paired human-readable and machine-readable observations. */
+    private static Summary report(
         PerfProfile profile,
         Instant startedAt,
         Instant finishedAt,
@@ -219,7 +222,7 @@ final class PerfMeasurements {
                 + (slowSinkDropsObserved ? "observed" : "not observed") + "**.";
         defaultProfileStatement = profileStatement("Default", loggingObservation.defaultProfile());
         slowSinkProfileStatement = profileStatement("Slow-sink", loggingObservation.slowSinkProfile());
-        return """
+        String markdown = """
             # PERF-01 run summary
 
             - Started (UTC): %s
@@ -271,7 +274,8 @@ final class PerfMeasurements {
             - Upstream: one local Armeria process at `%s`
             - Default gateway: packaged Vigilant at `%s` with production `INFO` stdout logging
             - Slow-sink gateway: packaged Vigilant at `%s` with %d ms downstream delay
-            - JFR artifacts: `build/perf-processes/gateway.jfr` and `slow-sink-gateway.jfr`
+            - JFR artifacts: [gateway.jfr](../../perf-processes/gateway.jfr) and
+              [slow-sink-gateway.jfr](../../perf-processes/slow-sink-gateway.jfr)
 
             ## Hardware and runtime
 
@@ -285,8 +289,8 @@ final class PerfMeasurements {
             Latencies come from Gatling's `responseTimeInMillis` check and include the full
             response, including all streaming chunks. p99 uses the nearest-rank method over
             all successful measured requests in the 80/20 mix. Gatling's HTML report and raw
-            data remain under `build/reports/gatling/`; process logs are under
-            `build/perf-processes/`.
+            data remain under [Gatling reports](../gatling/); process logs are under
+            [process logs](../../perf-processes/).
             """.formatted(
             startedAt,
             finishedAt,
@@ -337,6 +341,32 @@ final class PerfMeasurements {
             System.getProperty("java.vendor"),
             safeJvmArguments()
         );
+        Map<String, Object> metrics = new java.util.LinkedHashMap<>();
+        metrics.put("verdict", verdict);
+        metrics.put("passed", allGatesMet);
+        metrics.put("fullProfile", fullProfile);
+        metrics.put("overheadP99Ms", direct.combined().count() == 0 || proxy.combined().count() == 0
+            ? null : overheadP99Ms);
+        metrics.put("targetRateObserved", targetRateObserved);
+        metrics.put("loggingPassed", allLoggingEvidenceMet);
+        metrics.put("direct", latencyMetrics(direct.combined()));
+        metrics.put("proxy", latencyMetrics(proxy.combined()));
+        metrics.put("slowSink", latencyMetrics(slowSink.combined()));
+        return new Summary(markdown, metrics);
+    }
+
+    /** Publishes safe combined latency percentiles, using null when no requests succeeded. */
+    private static Map<String, Object> latencyMetrics(LatencySnapshot latency) {
+        Map<String, Object> values = new java.util.LinkedHashMap<>();
+        values.put("count", latency.count());
+        values.put("p50Ms", latency.count() == 0 ? null : latency.percentile(50));
+        values.put("p95Ms", latency.count() == 0 ? null : latency.percentile(95));
+        values.put("p99Ms", latency.count() == 0 ? null : latency.p99());
+        return values;
+    }
+
+    /** Couples human and machine reports to one gate evaluation and measurement snapshot. */
+    private record Summary(String markdown, Map<String, ?> metrics) {
     }
 
     /** Renders one safe JFR verdict and bounded method-only violation diagnostics. */

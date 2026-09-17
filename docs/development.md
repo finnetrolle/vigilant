@@ -307,6 +307,10 @@ explicit barriers, streaming test освобождает последний upst
 
 ## PII quality
 
+Полный цикл canonical + RedMadRobot + HiveTrace + AdvPIIBench запускается одной
+командой `./scripts/benchmark pii-quality`. Lifecycle, offline inputs, optional
+baseline и общий отчёт описаны в [benchmark cycles](benchmark-cycles.md).
+
 Canonical synthetic corpus является gating частью обычного `test`. Отдельный
 human-readable и machine-readable отчёт создаётся командой:
 
@@ -826,6 +830,10 @@ PIT анализирует `io.vigilant.*` classes и сохраняет HTML/XM
 в `build`, `verifyAll` или CI.
 
 ## Performance
+
+Вся существующая матрица JMH, gateway load и resource qualification запускается
+командой `./scripts/benchmark load`. [Benchmark cycles](benchmark-cycles.md)
+описывает состав, fresh reports, exit codes и границу current SLO evidence.
 
 JMH baseline deterministic PII detector:
 

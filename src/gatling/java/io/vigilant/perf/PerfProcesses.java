@@ -25,7 +25,7 @@ final class PerfProcesses implements AutoCloseable {
     /** Creates a process fixture for the supplied validated profile. */
     PerfProcesses(PerfProfile profile) {
         this.profile = profile;
-        processLogDirectory = profile.projectDirectory().resolve("build/perf-processes");
+        processLogDirectory = BenchmarkReports.path(profile.projectDirectory(), "perf-processes");
         gatewayLog = processLogDirectory.resolve("gateway.log");
         slowSinkGatewayLog = processLogDirectory.resolve("slow-sink-gateway.log");
         gatewayRecording = processLogDirectory.resolve("gateway.jfr");

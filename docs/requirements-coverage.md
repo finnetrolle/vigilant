@@ -59,9 +59,15 @@ GitHub jobs. Локальное evidence не подтверждает дост�
 
 ## Нефункциональные требования MVP
 
+`./scripts/benchmark load` запускает всю существующую матрицу с изолированными
+артефактами и общим verdict. Это автоматизация измерений, а не новый профиль
+request/response SLO; статусы PERF-01/02 ниже не меняются.
+[Состав и границы циклов](benchmark-cycles.md) также описывают полный
+`pii-quality` run четырёх корпусов без объединения их quality metrics.
+
 | ID | Статус | Текущий факт |
 |---|---|---|
-| `PERF-01` | Не реализовано | Есть bypass/shadow benchmark, но нет отдельного request/response enforcement latency evidence с новым profile. |
+| `PERF-01` | Не реализовано | Есть detector/request-policy benchmarks, но нет отдельного request/response enforcement latency evidence с новым profile. |
 | `PERF-02` | Частично | Existing reports фиксируют warmup и hardware; новый non-streaming profile и warm/mock identity setup отсутствуют. |
 | `PERF-03` | Работает | Per-policy request и ordinary/SSE response deadlines дают fail-closed 503 без reaction fallback. |
 | `CONC-01` | Частично | Request source и windowing bounded; retained response source использует one-item upstream demand и terminal cleanup, но по принятому MVP contract не имеет application-level limit или shared quota. Heap sizing и runtime OOM policy принадлежат deployment. |
@@ -93,7 +99,7 @@ matrix находятся в [development guide](development.md#pii-contract-che
 | Общий baseline детектора | [Замер 2026-09-16](pii-quality-evaluation.md) сохраняет свежие reports четырёх корпусов на одном detector/evaluator snapshot, полные scoped/per-type counts, denominators, suppression и команды воспроизведения | Canonical: 960 positive и 975 hard-negative PASS, mixed 13/0/0. RedMadRobot source full exact TP/FP/FN = 614/146/1286; P/R/F1 = 0.807895/0.323158/0.461654. Views и корпуса не объединены. Это evidence прямого `PiiDetector.detect`, без нового JMH qualification, production-quality claim или закрытия gateway gaps. |
 | HiveTrace external PII seam | `hiveTracePiiBenchmark` воспроизводит pinned entity/domain corpus: 1810 processed, 0 rejected, 817 source-aligned mapped spans, 789 product-aligned spans и 850 unsupported spans. Оба split, девять domain codes и Full публикуются отдельно; [методика и команды](development.md#hivetrace-pii-benchmark) | Свежий общий [baseline 2026-09-16](pii-quality-evaluation.md): Full source exact TP/FP/FN = 720/37/97, P/R/F1 = 0.95112/0.88127/0.91487; relaxed = 723/34/94. Product exact = 720/37/69. Clean FPR domain = 0/378, entity = N/A (0 cases). Это external/non-gating evidence шести mapped types; смесь не представляет production traffic, остальные три типа не покрыты. Production recognizers не менялись. |
 | AdvPIIBench adversarial PII seam | `advPiiBenchmark` проверяет pin/integrity/schema/coverage до scoring: 104728 processed, 0 rejected, 114101 source spans, 99696 mapped spans, 7772 SSN-only positive rows. Отдельные baseline, PII-only/combined family/configuration subsets, per-type/micro counts и FPR; [методика](development.md#advpiibench-adversarial-benchmark) | Online/offline run 2026-09-16: baseline exact TP/FP/FN = 1079/83/409, recall 0.72513; overlap = 1119/43/369, recall 0.75202. PII-only и combined exact/overlap recall = 0; source-aligned combined FP = 14496 с `pi_few_shot_safe` caveat. Negative FPR = 0/22560; hard_negative = 2/1232. Detailed groups/type groups требуют 5 distinct input IDs; suppressed groups не раскрывают counts. Это отдельное held-out non-gating evidence, без tuning и production-quality claim. |
-| Current PERF-01/02 | JMH измеряет sync detect; existing inspection/load reports имеют собственный shadow profile | Ни старые numeric results, ни новые ссылки не доказывают current request/response enforcement latency. Статусы PERF-01/02 выше сохранены. |
+| Current PERF-01/02 | JMH измеряет sync detect; existing inspection/load reports имеют собственный request-policy profile | Ни старые numeric results, ни новые ссылки не доказывают current request/response enforcement latency. Статусы PERF-01/02 выше сохранены. |
 
 Неподтверждённые cases сохраняются как requirements. Focused IP correction
 обновляет recognizer и synthetic evidence; она не заявляет полную qualification

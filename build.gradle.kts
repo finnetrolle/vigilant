@@ -17,6 +17,10 @@ plugins {
     id("io.vigilant.test-throughput-qualification")
 }
 
+// A cycle supplies an empty per-stage root; normal task output paths remain unchanged.
+val benchmarkOutputRoot = providers.gradleProperty("benchmarkOutputRoot")
+    .map { layout.projectDirectory.dir(it) }.orElse(layout.buildDirectory)
+
 gatling {
     gatlingVersion = "3.15.1"
     includeMainOutput = false
@@ -31,6 +35,7 @@ gatling {
     )
     systemProperties = mapOf(
         "perf.projectDir" to rootDir.absolutePath,
+        "perf.artifactRoot" to benchmarkOutputRoot.get().asFile.absolutePath,
         "perf.javaExecutable" to javaToolchains.launcherFor {
             languageVersion = JavaLanguageVersion.of(25)
         }.get().executablePath.asFile.absolutePath,
@@ -100,11 +105,11 @@ val piiJmhForks = 2
 val piiJmhMeasurementIterations = 5
 val piiJmhMeasurementTime = "1s"
 val piiJmhJvmArgs = listOf("-Xms1g", "-Xmx1g")
-val piiJmhReportDirectory = layout.buildDirectory.dir("reports/pii/jmh")
+val piiJmhReportDirectory = benchmarkOutputRoot.map { it.dir("reports/pii/jmh") }
 val piiJmhResultFile = piiJmhReportDirectory.map { directory -> directory.file("baseline.json") }
 val piiJmhHumanOutputFile = piiJmhReportDirectory.map { directory -> directory.file("baseline.txt") }
 val piiJmhEnvironmentFile = piiJmhReportDirectory.map { directory -> directory.file("environment.properties") }
-val piiQualificationReportDirectory = layout.buildDirectory.dir("reports/pii/qualification")
+val piiQualificationReportDirectory = benchmarkOutputRoot.map { it.dir("reports/pii/qualification") }
 val piiQualificationJmhResultFile =
     piiQualificationReportDirectory.map { directory -> directory.file("current-jmh.json") }
 val piiQualificationJmhEnvironmentFile =
@@ -118,7 +123,7 @@ val currentWorktreeDirty =
     providers.exec {
         commandLine("git", "status", "--porcelain=v1", "--untracked-files=all")
     }.standardOutput.asText.map { status -> status.isNotBlank() }
-val inspectionPhaseReportDirectory = layout.buildDirectory.dir("reports/inspection/phase")
+val inspectionPhaseReportDirectory = benchmarkOutputRoot.map { it.dir("reports/inspection/phase") }
 val inspectionPhaseResultFile = inspectionPhaseReportDirectory.map { directory -> directory.file("results.json") }
 val inspectionPhaseSummaryFile = inspectionPhaseReportDirectory.map { directory -> directory.file("summary.md") }
 val piiJmhJavaLauncher =
@@ -277,6 +282,7 @@ tasks.named<io.gatling.gradle.GatlingRunTask>("gatlingRun") {
     group = "verification"
     description = "Runs the explicit PERF-01 direct-versus-proxy load test."
     setSimulationClassName("io.vigilant.perf.PerfLoadSimulation")
+    setGatlingReportDir(benchmarkOutputRoot.get().dir("reports/gatling").asFile)
     setNonInteractive(true)
     setRunAllSimulations(false)
 }
@@ -307,11 +313,12 @@ tasks.register<io.gatling.gradle.GatlingRunTask>("inspectionLoadTest") {
     setSystemProperties(
         mapOf(
             "perf.projectDir" to rootDir.absolutePath,
+            "perf.artifactRoot" to benchmarkOutputRoot.get().asFile.absolutePath,
             "perf.javaExecutable" to piiJmhJavaLauncher.get().executablePath.asFile.absolutePath,
         ),
     )
     setGatlingRuntimeClasspath(gatlingSourceSet.get().runtimeClasspath)
-    setGatlingReportDir(layout.buildDirectory.dir("reports/gatling").get().asFile)
+    setGatlingReportDir(benchmarkOutputRoot.get().dir("reports/gatling").asFile)
 }
 
 tasks.register<JavaExec>("inspectionResourceQualification") {
@@ -326,9 +333,10 @@ tasks.register<JavaExec>("inspectionResourceQualification") {
     classpath = gatlingSourceSet.get().runtimeClasspath
     mainClass.set("io.vigilant.perf.InspectionResourceQualificationMain")
     systemProperty("perf.projectDir", rootDir.absolutePath)
+    systemProperty("perf.artifactRoot", benchmarkOutputRoot.get().asFile.absolutePath)
     systemProperty("perf.javaExecutable", piiJmhJavaLauncher.get().executablePath.asFile.absolutePath)
     jvmArgs("--add-modules=jdk.jdi")
-    outputs.file(layout.buildDirectory.file("reports/inspection/resource-qualification/summary.md"))
+    outputs.file(benchmarkOutputRoot.map { it.file("reports/inspection/resource-qualification/summary.md") })
     outputs.upToDateWhen { false }
 }
 
@@ -358,7 +366,7 @@ tasks.register<JavaExec>("advPiiBenchmark") {
     mainClass.set("io.vigilant.detectors.pii.benchmark.advpii.AdvPiiBenchmarkMain")
     args(
         advPiiPreparedDirectory.get().asFile.absolutePath,
-        layout.buildDirectory.dir("reports/pii/advpii").get().asFile.absolutePath,
+        benchmarkOutputRoot.map { it.dir("reports/pii/advpii") }.get().asFile.absolutePath,
     )
 }
 
@@ -387,7 +395,7 @@ tasks.register<JavaExec>("hiveTracePiiBenchmark") {
     mainClass.set("io.vigilant.detectors.pii.benchmark.hivetrace.HiveTraceBenchmarkMain")
     args(
         hiveTracePreparedDirectory.get().asFile.absolutePath,
-        layout.buildDirectory.dir("reports/pii/hivetrace").get().asFile.absolutePath,
+        benchmarkOutputRoot.map { it.dir("reports/pii/hivetrace") }.get().asFile.absolutePath,
     )
 }
 
@@ -422,7 +430,7 @@ tasks.register<JavaExec>("redMadRobotPiiBenchmark") {
     mainClass.set("io.vigilant.detectors.pii.benchmark.redmadrobot.RedMadRobotBenchmarkMain")
     args(
         redMadRobotPreparedDataset.get().asFile.absolutePath,
-        layout.buildDirectory.dir("reports/pii/redmadrobot").get().asFile.absolutePath,
+        benchmarkOutputRoot.map { it.dir("reports/pii/redmadrobot") }.get().asFile.absolutePath,
     )
 }
 
@@ -451,7 +459,7 @@ tasks.register<JavaExec>("piiQualityReport") {
     classpath = sourceSets.test.get().runtimeClasspath
     mainClass.set("io.vigilant.detectors.pii.quality.CanonicalQualityReportMain")
     args(
-        layout.buildDirectory.dir("reports/pii/canonical").get().asFile.absolutePath,
+        benchmarkOutputRoot.map { it.dir("reports/pii/canonical") }.get().asFile.absolutePath,
     )
 }
 
@@ -539,12 +547,11 @@ tasks.register<JavaExec>("piiQualityQualification") {
         check(requiredFiles.all(File::isFile)) { "Qualification baseline directory is incomplete" }
         setArgs(
             listOf(
-                layout.buildDirectory
-                    .file("reports/pii/redmadrobot/redmadrobot-pii-benchmark.json")
+                benchmarkOutputRoot.map { it.file("reports/pii/redmadrobot/redmadrobot-pii-benchmark.json") }
                     .get()
                     .asFile.absolutePath,
                 requiredFiles[0].absolutePath,
-                layout.buildDirectory.file("reports/pii/canonical/pii-quality-report.json").get().asFile.absolutePath,
+                benchmarkOutputRoot.map { it.file("reports/pii/canonical/pii-quality-report.json") }.get().asFile.absolutePath,
                 requiredFiles[1].absolutePath,
                 piiQualificationJmhResultFile.get().asFile.absolutePath,
                 requiredFiles[2].absolutePath,

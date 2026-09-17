@@ -88,7 +88,7 @@ public final class InspectionResourceQualificationMain {
             );
             memoryMonitor.record("post-concurrency");
 
-            boolean cancellationObserved = runCancellation(gateway, processes.gatewayLog());
+            boolean cancellationObserved = runCancellation(gateway, upstreamControl, observer, processes.gatewayLog());
             ResponseObservation cleanupProbe = send(gateway, "qualification-cleanup-probe", SMALL_PROBE);
             boolean cleanupProbePassed = cleanupProbe.status() == 200
                 && InspectionQualificationUpstreamMain.RESPONSE_BODY.equals(cleanupProbe.body());
@@ -261,8 +261,11 @@ public final class InspectionResourceQualificationMain {
             new InspectionQualificationHttpOutcome(
                 measuredCapacityResponse.status(),
                 measuredCapacityResponse.body()
-            )
+            ),
+            measuredCapacityResponse.retryAfter(),
+            upstreamCount(upstreamControl, measuredCapacitySession)
         );
+        observer.awaitExact(serverQuota, Duration.ofSeconds(30));
 
         held.forEach(request -> {
             request.writer().write(HttpData.wrap(payload, payload.length - 1, 1));
@@ -281,24 +284,31 @@ public final class InspectionResourceQualificationMain {
             }
             replayVerified &= upstreamCount(upstreamControl, request.session()) == 1;
         }
+        observer.awaitExact(new InspectionQualificationQuotaObserver.QuotaState(0, 0), Duration.ofSeconds(30));
         return new PendingConcurrency(
             held.stream().map(HeldRequest::session).toList(), serverQuota, measuredCapacity,
             (long) held.size() * (payload.length - 1L), completed, replayVerified
         );
     }
 
-    /** Cancels a causally consumed partial request and waits for the exact safe cancellation audit. */
-    private static boolean runCancellation(WebClient gateway, Path gatewayLog) {
+    /** Proves server retention before cancellation and zero quota plus no upstream handoff after abort. */
+    private static boolean runCancellation(
+        WebClient gateway, WebClient upstreamControl, InspectionQualificationQuotaObserver observer, Path gatewayLog
+    ) {
+        observer.awaitExact(new InspectionQualificationQuotaObserver.QuotaState(0, 0), Duration.ofSeconds(30));
         byte[] payload = InspectionQualificationPayload.singleFragment();
         String session = "qualification-cancel";
         HttpRequestWriter writer = HttpRequest.streaming(requestHeaders(session, payload.length, payload));
         var response = gateway.execute(writer);
-        response.aggregate();
+        CompletableFuture<AggregatedHttpResponse> completion = response.aggregate();
         writer.write(HttpData.wrap(payload, 0, payload.length / 2));
-        await(writer.whenConsumed(), "partial cancellation bytes were not consumed");
+        observer.awaitExact(new InspectionQualificationQuotaObserver.QuotaState(1, payload.length / 2), Duration.ofSeconds(30));
+        boolean held = !completion.isDone();
         response.abort();
         writer.abort();
-        return awaitAuditField(gatewayLog, session, "\"error.code\":\"SOURCE_ERROR\"")
+        observer.awaitExact(new InspectionQualificationQuotaObserver.QuotaState(0, 0), Duration.ofSeconds(30));
+        return held && awaitCompletion(completion, Duration.ofSeconds(2))
+            && upstreamCount(upstreamControl, session) == 0
             && awaitAuditField(gatewayLog, session, "\"event.name\":\"request_completed\"");
     }
 
@@ -314,7 +324,14 @@ public final class InspectionResourceQualificationMain {
         HttpRequestWriter writer = HttpRequest.streaming(requestHeaders(session, payload.length, payload));
         CompletableFuture<AggregatedHttpResponse> response = client.execute(writer).aggregate();
         writer.write(HttpData.wrap(payload, 0, payload.length / 2));
-        await(writer.whenConsumed(), "shutdown request bytes were not consumed");
+        try (InspectionQualificationQuotaObserver observer = InspectionQualificationQuotaObserver.connect(
+            profile.quotaObserverPort(), Duration.ofSeconds(10)
+        )) {
+            observer.awaitExact(new InspectionQualificationQuotaObserver.QuotaState(1, payload.length / 2), Duration.ofSeconds(30));
+            if (response.isDone()) {
+                throw new IllegalStateException("Shutdown request completed before the server-retained source barrier");
+            }
+        }
         gateway.destroy();
         try {
             boolean exited = gateway.waitFor(12, TimeUnit.SECONDS);
@@ -335,13 +352,14 @@ public final class InspectionResourceQualificationMain {
                 .aggregate(),
             "qualification request did not complete: " + session
         );
-        return new ResponseObservation(response.status().code(), response.contentUtf8());
+        return new ResponseObservation(response.status().code(), response.contentUtf8(), response.headers().get("retry-after"));
     }
 
     /** Builds exact supported request headers for complete and streamed qualification bodies. */
     private static RequestHeaders requestHeaders(String session, int contentLength, byte[] completePayload) {
         return RequestHeaders.builder(HttpMethod.POST, CHAT_COMPLETIONS_PATH)
             .contentType(MediaType.JSON)
+            .add("Authorization", "Bearer inspection-qualification-token")
             .contentLength(contentLength)
             .add(SESSION_HEADER, session)
             .add(InspectionPayload.SHA256_HEADER, InspectionPayload.sha256Hex(completePayload))
@@ -425,15 +443,9 @@ public final class InspectionResourceQualificationMain {
         return sessions;
     }
 
-    /** Verifies the sole exact cancellation event after the packaged logger has flushed. */
+    /** Requires terminal HTTP evidence and no fabricated analysis pair for an interrupted upload. */
     private static boolean cancellationAuditPassed(InspectionQualificationAuditObservation audit) {
-        AuditEventPopulation events = AuditEventPopulation.read(audit, "qualification-cancel");
-        return events.size() == 1
-            && new InspectionQualificationAuditOutcome(
-                InspectionQualificationAuditOutcome.Decision.ERROR,
-                InspectionQualificationAuditOutcome.Coverage.UNINSPECTABLE,
-                InspectionQualificationAuditOutcome.ErrorCode.SOURCE_ERROR
-            ).equals(InspectionQualificationAuditOutcome.from(events.firstOrMissing()));
+        return audit.httpCompletedOnce("qualification-cancel") && audit.hasNoAnalysis("qualification-cancel");
     }
 
     /** Creates the exact fixed runtime and local-host metadata printed in the report. */
@@ -463,7 +475,7 @@ public final class InspectionResourceQualificationMain {
         );
     }
 
-    /** Writes one generated build report after verifying it contains no synthetic body marker. */
+    /** Writes text and JSON verdicts beneath the configured artifact root after the body-marker privacy check. */
     private static Path writeReport(
         InspectionQualificationProfile profile,
         InspectionQualificationSnapshot snapshot
@@ -472,11 +484,16 @@ public final class InspectionResourceQualificationMain {
         if (report.contains(InspectionQualificationPayload.BODY_SENTINEL)) {
             throw new IllegalStateException("Qualification report contains the synthetic body marker");
         }
-        Path path = profile.projectDirectory()
-            .resolve("build/reports/inspection/resource-qualification/summary.md");
+        Path path = BenchmarkReports.path(profile.projectDirectory(), "reports/inspection/resource-qualification/summary.md");
         try {
             Files.createDirectories(path.getParent());
             Files.writeString(path, report);
+            BenchmarkReports.writeJson(path.resolveSibling("summary.json"), java.util.Map.of(
+                "verdict", snapshot.passed() ? "PASS" : "DEVIATION",
+                "passed", snapshot.passed(),
+                "fullProfile", true,
+                "shapeCount", snapshot.shapes().size()
+            ));
         } catch (IOException exception) {
             throw new IllegalStateException("Failed to write inspection qualification report", exception);
         }
@@ -518,7 +535,7 @@ public final class InspectionResourceQualificationMain {
     }
 
     /** Complete client-side status and safe response body for one exchange. */
-    private record ResponseObservation(int status, String body) {
+    private record ResponseObservation(int status, String body, String retryAfter) {
     }
 
     /** Exact per-session safe audit population with one canonical missing-event sentinel. */
@@ -534,7 +551,7 @@ public final class InspectionResourceQualificationMain {
         /** Returns the first event or the canonical fail-closed sentinel when none was published. */
         InspectionQualificationAuditObservation.Event firstOrMissing() {
             return events.isEmpty()
-                ? new InspectionQualificationAuditObservation.Event("", "", -1, -1L, null)
+                ? new InspectionQualificationAuditObservation.Event("", "", -1, -1L, null, "")
                 : events.getFirst();
         }
 
@@ -578,18 +595,21 @@ public final class InspectionResourceQualificationMain {
                 actualHttp,
                 InspectionQualificationAuditOutcome.from(event),
                 events.size(),
-                transportVerified,
-                event.evaluationDurationMillis()
+                transportVerified && audit.httpCompletedOnce(session),
+                event.analysisDurationMillis(),
+                shape.requiresAnalysis() ? audit.hasOnePair(session) : audit.hasNoAnalysis(session)
             );
         }
     }
 
-    /** Pre-audit safe HTTP observation for one named capacity synchronization or measured probe. */
+    /** Pre-audit HTTP and upstream observation for one named capacity rejection probe. */
     private record PendingCapacityProbe(
         String session,
-        InspectionQualificationHttpOutcome http
+        InspectionQualificationHttpOutcome http,
+        String retryAfter,
+        int upstreamRequests
     ) {
-        /** Joins the sole exact safe audit event to this immutable HTTP observation. */
+        /** Requires one HTTP completion and no analysis events for this pre-analysis rejection. */
         InspectionQualificationCapacityEvidence.Probe complete(
             InspectionQualificationAuditObservation audit
         ) {
@@ -598,7 +618,10 @@ public final class InspectionResourceQualificationMain {
             return new InspectionQualificationCapacityEvidence.Probe(
                 http,
                 InspectionQualificationAuditOutcome.from(event),
-                events.size()
+                events.size(),
+                retryAfter,
+                upstreamRequests,
+                audit.httpCompletedOnce(session) && audit.hasNoAnalysis(session)
             );
         }
     }
@@ -628,7 +651,7 @@ public final class InspectionResourceQualificationMain {
                 AuditEventPopulation events = AuditEventPopulation.read(audit, session);
                 InspectionQualificationAuditObservation.Event event = events.firstOrMissing();
                 auditEvents += events.size();
-                auditVerified &= events.size() == 1
+                auditVerified &= events.size() == 1 && audit.hasOnePair(session) && audit.httpCompletedOnce(session)
                     && InspectionQualificationShape.MAX_SINGLE_FRAGMENT.expectedAudit().equals(
                         InspectionQualificationAuditOutcome.from(event)
                     )

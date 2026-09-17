@@ -81,7 +81,8 @@ record InspectionQualificationSnapshot(
         InspectionQualificationAuditOutcome actualAudit,
         int auditEvents,
         boolean transportOutcomeVerified,
-        long totalInspectionMillis
+        long analysisDurationMillis,
+        boolean analysisContractVerified
     ) {
         /** Returns the stable report identifier owned by the canonical shape contract. */
         String id() {
@@ -94,9 +95,10 @@ record InspectionQualificationSnapshot(
                 && shape.expectedInspectedFragments() == inspectedFragments
                 && shape.expectedHttp().equals(actualHttp)
                 && shape.expectedAudit().equals(actualAudit)
-                && auditEvents == 1
+                && auditEvents == (shape.requiresAnalysis() ? 1 : 0)
+                && analysisContractVerified
                 && transportOutcomeVerified
-                && totalInspectionMillis >= 0L;
+                && (shape.requiresAnalysis() ? analysisDurationMillis >= 0L : analysisDurationMillis == -1L);
         }
     }
 

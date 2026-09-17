@@ -39,7 +39,7 @@ final class InspectionQualificationReportTest {
             )),
             () -> assertTrue(report.contains("- Peak JVM heap used: 320.0 MiB")),
             () -> assertTrue(report.contains("- Peak gateway RSS: 640.0 MiB")),
-            () -> assertTrue(report.contains("- Max-fragment total inspection duration: 2400 ms")),
+            () -> assertTrue(report.contains("- Max-fragment request analysis duration: 2400 ms")),
             () -> assertTrue(report.contains("- Command: `./gradlew inspectionResourceQualification`."))
         );
     }
@@ -82,7 +82,8 @@ final class InspectionQualificationReportTest {
                     shape.actualAudit(),
                     shape.auditEvents(),
                     shape.transportOutcomeVerified(),
-                    shape.totalInspectionMillis()
+                    shape.analysisDurationMillis(),
+                    shape.analysisContractVerified()
                 )
                 : shape)
             .toList();
@@ -179,6 +180,24 @@ final class InspectionQualificationReportTest {
         );
     }
 
+    /** Missing Retry-After, upstream handoff or an unproved pre-analysis branch cannot satisfy capacity. */
+    @Test
+    void capacityRequiresWireAndCausalEvidence() {
+        InspectionQualificationCapacityEvidence.Probe valid = capacityProbe();
+        assertFalse(new InspectionQualificationCapacityEvidence.Probe(
+            valid.http(), valid.audit(), 0, null, 0, true
+        ).capacityRejected());
+        assertFalse(new InspectionQualificationCapacityEvidence.Probe(
+            valid.http(), valid.audit(), 0, "1", 1, true
+        ).capacityRejected());
+        assertFalse(new InspectionQualificationCapacityEvidence.Probe(
+            valid.http(), valid.audit(), 0, "1", 0, false
+        ).capacityRejected());
+        assertFalse(new InspectionQualificationCapacityEvidence.Probe(
+            valid.http(), valid.audit(), 1, "1", 0, true
+        ).capacityRejected());
+    }
+
     /** Creates one independently literal complete observation for renderer and gate tests. */
     private static InspectionQualificationSnapshot completeSnapshot() {
         InspectionQualificationSnapshot.Environment environment =
@@ -221,14 +240,14 @@ final class InspectionQualificationReportTest {
             ),
             shape(
                 InspectionQualificationShape.FRAGMENT_OVERFLOW,
-                0,
+                -1,
                 new InspectionQualificationHttpOutcome(400, "{\"error\":\"unsupported_schema\"}"),
                 new InspectionQualificationAuditOutcome(
-                    Decision.ERROR,
-                    Coverage.UNINSPECTABLE,
-                    ErrorCode.UNSUPPORTED_SCHEMA
+                    Decision.NOT_STARTED,
+                    Coverage.MISSING,
+                    ErrorCode.NONE
                 ),
-                0
+                -1
             ),
             shape(
                 InspectionQualificationShape.GAP_DENSE,
@@ -290,9 +309,10 @@ final class InspectionQualificationReportTest {
             inspectedFragments,
             actualHttp,
             actualAudit,
-            1,
+            actualAudit.decision() == Decision.NOT_STARTED ? 0 : 1,
             true,
-            durationMillis
+            durationMillis,
+            true
         );
     }
 
@@ -305,20 +325,20 @@ final class InspectionQualificationReportTest {
                 Coverage.UNINSPECTABLE,
                 ErrorCode.MALFORMED_MESSAGE
             ),
-            1
+            0, "1", 0, true
         );
     }
 
-    /** Creates one exact stable capacity rejection with its sole safe aggregate audit event. */
+    /** Creates one exact stable capacity rejection with one HTTP completion and no analysis events. */
     private static InspectionQualificationCapacityEvidence.Probe capacityProbe() {
         return new InspectionQualificationCapacityEvidence.Probe(
-            new InspectionQualificationHttpOutcome(503, "{\"error\":\"inspection_capacity_exhausted\"}"),
+            new InspectionQualificationHttpOutcome(503, "{\"error\":{\"message\":\"Request inspection unavailable.\",\"type\":\"server_error\",\"code\":\"request_inspection_unavailable\"}}"),
             new InspectionQualificationAuditOutcome(
-                Decision.ERROR,
-                Coverage.UNINSPECTABLE,
-                ErrorCode.INSPECTION_CAPACITY_EXHAUSTED
+                Decision.NOT_STARTED,
+                Coverage.MISSING,
+                ErrorCode.NONE
             ),
-            1
+            0, "1", 0, true
         );
     }
 }

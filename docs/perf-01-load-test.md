@@ -96,7 +96,13 @@ HTTP-запрос. Gatling использует общий server-to-server conn
 Streaming latency измеряется до последнего chunk, а не только до response
 headers. Запросы используют валидный Chat Completions JSON фиксированного
 размера, а upstream проверяет digest тела и формирует одинаковые ответы для
-всех маршрутов.
+всех маршрутов. Ответ non-streaming является валидным Chat Completions JSON;
+streaming содержит SSE completion events и `[DONE]` в тех же четырёх chunks
+по 1 024 bytes. Размеры означают полное число wire bytes, включая JSON/SSE envelope.
+Audit delivery считается по REQUEST `policy.analysis_completed`, связанному
+через trace ID и parent SERVER span с HTTP `request_completed` измеряемой session.
+RESPONSE events исключены из счётчика. Это новая protocol-compatible fixture;
+исторические OCTET_STREAM результаты не являются её сравнительным baseline.
 
 Slow sink работает за тем же bounded `AsyncAppender`: queue size `8192`,
 discarding threshold `2048`, `neverBlock=true`, `maxFlushTime=2000`. Его
@@ -125,10 +131,17 @@ performance-sensitive gateway path либо для отдельной прове
 
 После прогона доступны:
 
+При запуске через `./scripts/benchmark load` все перечисленные artifacts
+изолированы в директории соответствующего этапа
+[полного цикла](benchmark-cycles.md). Standalone output paths приведены ниже.
+
 - `build/reports/gatling/<run>/index.html` - официальный HTML-отчёт Gatling;
 - `build/reports/perf-01/latest-summary.md` - сводка трёх маршрутов,
   `proxy_overhead`, logging/JFR evidence, профиль, Git revision, JVM, OS, CPU и
   память;
+- `build/reports/perf-01/summary.json` - тот же gate verdict и aggregate latency
+  snapshot в машинном формате; полный cycle отклоняет `DEVIATION` даже при
+  успешном exit самой Gatling-задачи;
 - `build/reports/perf-01/perf-01-<UTC timestamp>.md` - неизменяемая копия
   сводки данного прогона;
 - `build/perf-processes/upstream.log`, `gateway.log` и `slow-sink-gateway.log`

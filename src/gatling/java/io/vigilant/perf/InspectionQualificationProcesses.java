@@ -23,7 +23,7 @@ final class InspectionQualificationProcesses implements AutoCloseable {
     /** Creates deterministic process-log paths from the fixed qualification profile. */
     InspectionQualificationProcesses(InspectionQualificationProfile profile) {
         this.profile = profile;
-        processDirectory = profile.projectDirectory().resolve("build/inspection-resource-processes");
+        processDirectory = BenchmarkReports.path(profile.projectDirectory(), "inspection-resource-processes");
         gatewayLog = processDirectory.resolve("gateway.log");
         shutdownGatewayLog = processDirectory.resolve("shutdown-gateway.log");
     }
@@ -79,7 +79,7 @@ final class InspectionQualificationProcesses implements AutoCloseable {
             throw new IllegalStateException("Shutdown qualification gateway already started");
         }
         try {
-            shutdownGateway = startGateway(profile.shutdownGatewayPort(), shutdownGatewayLog, false);
+            shutdownGateway = startGateway(profile.shutdownGatewayPort(), shutdownGatewayLog, true);
             PerformanceProcessSupport.awaitHealthy(
                 shutdownGateway,
                 profile.shutdownGatewayBaseUrl() + "/readyz",

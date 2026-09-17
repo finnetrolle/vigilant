@@ -1,8 +1,12 @@
 package io.vigilant.perf;
 
 import static org.junit.jupiter.api.Assertions.assertAll;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -12,6 +16,47 @@ import org.junit.jupiter.api.io.TempDir;
 
 /** Contract tests for the reproducible PERF-01 report. */
 final class PerfMeasurementsReportTest {
+    /** Proves that incomplete full-profile evidence has the same negative verdict in both formats. */
+    @Test
+    void machineReportRejectsMissingMeasurements(@TempDir Path projectDirectory) throws IOException {
+        Path report = new PerfMeasurements().writeSummary(profile(projectDirectory, 60));
+        JsonNode json = new ObjectMapper().readTree(report.resolveSibling("summary.json").toFile());
+
+        assertAll(
+            () -> assertFalse(json.path("passed").booleanValue()),
+            () -> assertTrue(json.path("fullProfile").booleanValue()),
+            () -> assertEquals("DEVIATION - target rate was not sustained", json.path("verdict").textValue()),
+            () -> assertTrue(Files.readString(report).contains(json.path("verdict").textValue())),
+            () -> assertTrue(json.path("proxy").path("p99Ms").isNull()),
+            () -> assertTrue(json.path("overheadP99Ms").isNull())
+        );
+    }
+
+    /** Proves independent known latency and logging observations produce a shared positive verdict. */
+    @Test
+    void machineReportPublishesMeasuredGate(@TempDir Path projectDirectory) throws IOException {
+        PerfMeasurements measurements = new PerfMeasurements();
+        for (int request = 0; request < 240_000; request++) {
+            measurements.record(PerfMeasurements.Route.DIRECT, PerfMeasurements.ResponseProfile.NON_STREAMING, 1);
+            measurements.record(PerfMeasurements.Route.PROXY, PerfMeasurements.ResponseProfile.NON_STREAMING, 2);
+            measurements.record(PerfMeasurements.Route.SLOW_SINK, PerfMeasurements.ResponseProfile.NON_STREAMING, 9);
+        }
+        Path report = measurements.writeSummary(profile(projectDirectory, 60), new PerfLoggingObservation(
+            240_000, 10,
+            new LoggingProfileObservation(120, 20, List.of()),
+            new LoggingProfileObservation(130, 30, List.of())
+        ));
+        JsonNode json = new ObjectMapper().readTree(report.resolveSibling("summary.json").toFile());
+
+        assertAll(
+            () -> assertTrue(json.path("passed").booleanValue()),
+            () -> assertEquals("PASS", json.path("verdict").textValue()),
+            () -> assertTrue(Files.readString(report).contains("- Verdict: PASS")),
+            () -> assertEquals(1, json.path("overheadP99Ms").longValue()),
+            () -> assertEquals(9, json.path("slowSink").path("p99Ms").longValue())
+        );
+    }
+
     /** Verifies that the report records both phases of JVM warm-up. */
     @Test
     void reportRecordsRampAndSteadyStateWarmup(@TempDir Path projectDirectory) throws IOException {
@@ -22,7 +67,10 @@ final class PerfMeasurementsReportTest {
 
         assertAll(
             () -> assertTrue(markdown.contains("- Ramp warm-up: 60 seconds per path")),
-            () -> assertTrue(markdown.contains("- Steady-state warm-up: 90 seconds per path"))
+            () -> assertTrue(markdown.contains("- Steady-state warm-up: 90 seconds per path")),
+            () -> assertTrue(markdown.contains("[gateway.jfr](../../perf-processes/gateway.jfr)")),
+            () -> assertTrue(markdown.contains("[Gatling reports](../gatling/)")),
+            () -> assertFalse(markdown.contains("build/perf-processes"))
         );
     }
 

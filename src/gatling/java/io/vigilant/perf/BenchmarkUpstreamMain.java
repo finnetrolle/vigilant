@@ -9,7 +9,7 @@ import com.linecorp.armeria.common.MediaType;
 import com.linecorp.armeria.common.ResponseHeaders;
 import com.linecorp.armeria.server.ServiceRequestContext;
 import com.linecorp.armeria.server.Server;
-import java.time.Duration;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.concurrent.TimeUnit;
 
@@ -68,6 +68,17 @@ public final class BenchmarkUpstreamMain {
     ) {
         byte[] nonStreamingBody = fixedBody(nonStreamingResponseBytes, (byte) 'n');
         byte[] streamChunk = fixedBody(streamChunkBytes, (byte) 's');
+        byte[] completionBody = paddedEnvelope(nonStreamingResponseBytes,
+            "{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"",
+            "\"},\"finish_reason\":\"stop\"}]}", 'n');
+        byte[][] completionChunks = new byte[streamChunks][];
+        for (int index = 0; index < streamChunks; index++) {
+            boolean terminal = index == streamChunks - 1;
+            completionChunks[index] = paddedEnvelope(streamChunkBytes,
+                "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"",
+                "\"},\"finish_reason\":" + (terminal ? "\"stop\"" : "null") + "}]}\n\n"
+                    + (terminal ? "data: [DONE]\n\n" : ""), 's');
+        }
         return Server.builder()
             .http(port)
             .service("/healthz", (ctx, request) -> HttpResponse.of(HttpStatus.OK))
@@ -90,9 +101,8 @@ public final class BenchmarkUpstreamMain {
                 (ctx, request) -> inspectionResponse(
                     ctx,
                     request,
-                    nonStreamingBody,
-                    streamChunk,
-                    streamChunks,
+                    completionBody,
+                    completionChunks,
                     streamChunkDelayMs
                 )
             )
@@ -117,8 +127,7 @@ public final class BenchmarkUpstreamMain {
         ServiceRequestContext context,
         HttpRequest request,
         byte[] responseBody,
-        byte[] streamChunk,
-        int streamChunks,
+        byte[][] streamChunks,
         long streamChunkDelayMs
     ) {
         String expectedDigest = request.headers().get(InspectionPayload.SHA256_HEADER);
@@ -130,9 +139,9 @@ public final class BenchmarkUpstreamMain {
             if (InspectionPayload.STREAMING_RESPONSE_PROFILE.equals(
                 request.headers().get(InspectionPayload.RESPONSE_PROFILE_HEADER)
             )) {
-                return writeStreamingResponse(context, streamChunk, streamChunks, streamChunkDelayMs);
+                return writeChunks(context, streamChunks, streamChunkDelayMs, MediaType.EVENT_STREAM);
             }
-            return HttpResponse.of(HttpStatus.OK, MediaType.OCTET_STREAM, responseBody);
+            return HttpResponse.of(HttpStatus.OK, MediaType.JSON_UTF_8, responseBody);
         }));
     }
 
@@ -158,18 +167,27 @@ public final class BenchmarkUpstreamMain {
         int chunkCount,
         long chunkDelayMs
     ) {
+        byte[][] chunks = new byte[chunkCount][];
+        Arrays.fill(chunks, chunk);
+        return writeChunks(context, chunks, chunkDelayMs, MediaType.OCTET_STREAM);
+    }
+
+    /** Emits exact wire-sized chunks at the fixed cadence with the declared response protocol. */
+    private static HttpResponse writeChunks(
+        ServiceRequestContext context, byte[][] chunks, long chunkDelayMs, MediaType contentType
+    ) {
         HttpResponseWriter response = HttpResponse.streaming();
         response.write(
             ResponseHeaders.builder(HttpStatus.OK)
-                .contentType(MediaType.OCTET_STREAM)
+                .contentType(contentType)
                 .build()
         );
-        for (int index = 0; index < chunkCount; index++) {
+        for (int index = 0; index < chunks.length; index++) {
             int chunkIndex = index;
             context.eventLoop().schedule(
                 () -> {
-                    response.write(HttpData.wrap(chunk.clone()));
-                    if (chunkIndex == chunkCount - 1) {
+                    response.write(HttpData.wrap(chunks[chunkIndex].clone()));
+                    if (chunkIndex == chunks.length - 1) {
                         response.close();
                     }
                 },
@@ -209,5 +227,15 @@ public final class BenchmarkUpstreamMain {
         byte[] body = new byte[size];
         Arrays.fill(body, value);
         return body;
+    }
+
+    /** Fills protocol content with safe ASCII while preserving the exact configured wire-byte budget. */
+    private static byte[] paddedEnvelope(int size, String prefix, String suffix, char value) {
+        int padding = size - prefix.getBytes(StandardCharsets.UTF_8).length
+            - suffix.getBytes(StandardCharsets.UTF_8).length;
+        if (padding < 1) {
+            throw new IllegalArgumentException("Response byte budget cannot fit a valid Chat Completions envelope");
+        }
+        return (prefix + String.valueOf(value).repeat(padding) + suffix).getBytes(StandardCharsets.UTF_8);
     }
 }
