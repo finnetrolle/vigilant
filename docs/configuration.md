@@ -158,8 +158,12 @@ syntax из примера выше.
   audience и non-empty JWK set. `EXTERNAL` требует absolute lowercase
   `http://` или `https://` URL с host; path/query сохраняются, user info и
   fragment запрещены, plain HTTP разрешён и в production.
-- Settings любого невыбранного identity mode отклоняются. Mode aliases,
-  fallback, health check и runtime switching отсутствуют.
+- Непустые settings любого невыбранного identity mode отклоняются. Два явно
+  пустых значения сейчас неотличимы от defaults после decode:
+  `identity-dummy-groups=[]` в JWT/EXTERNAL и `identity-jwt-jwks=[]` в
+  DUMMY/EXTERNAL. Они проходят startup; это известный conformance gap, а не
+  поддерживаемый compatibility path. Mode aliases, fallback, health check и
+  runtime switching отсутствуют.
 - External timeout должен быть positive duration в scheduler bound. Он один
   охватывает acquisition, connect, write, response headers и полный body.
 - Обе External cache settings необязательны и независимо используют `env > file > default`.

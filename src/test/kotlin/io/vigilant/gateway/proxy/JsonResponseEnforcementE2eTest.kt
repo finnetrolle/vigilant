@@ -496,7 +496,7 @@ internal class JsonResponseEnforcementE2eTest : GatewayE2eTestSupport() {
         assertEquals(2, completed.keyValue("findings.total"))
     }
 
-    /** BLOCK replaces every upstream surface with the exact safe VIG-29 response contract. */
+    /** BLOCK replaces every upstream surface with the exact safe HTTP response contract. */
     @Test
     @Suppress("MaxLineLength")
     fun `response BLOCK rejects whole upstream response without disclosure`() {

@@ -32,7 +32,7 @@ import org.slf4j.LoggerFactory
 internal const val VALID_CHAT_COMPLETIONS_RESPONSE_BODY =
     """{"choices":[{"message":{"role":"assistant","content":"ok"}}]}"""
 
-/** Exact VIG-29 response body for malformed or interrupted upstream protocol input. */
+/** Exact HTTP-contract response body for malformed or interrupted upstream protocol input. */
 internal const val INVALID_UPSTREAM_RESPONSE_BODY =
     """{"error":{"message":"Invalid upstream response.","type":"upstream_error",""" +
         """"code":"invalid_upstream_response"}}"""

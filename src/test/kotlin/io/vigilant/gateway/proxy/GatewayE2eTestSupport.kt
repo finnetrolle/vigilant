@@ -403,7 +403,7 @@ internal abstract class GatewayE2eTestSupport {
     protected fun isolatedGatewayClient(baseUri: URI): WebClient =
         WebClient.builder(baseUri.toString()).factory(clientFactory).build()
 
-    /** Asserts the canonical VIG-29 request inspection failure HTTP contract. */
+    /** Asserts the canonical request inspection failure HTTP contract. */
     protected fun assertRequestInspectionUnavailable(response: AggregatedHttpResponse) {
         assertEquals(HttpStatus.SERVICE_UNAVAILABLE, response.status())
         assertEquals("1", response.headers().get("retry-after"))
@@ -614,17 +614,17 @@ internal abstract class GatewayE2eTestSupport {
                 "event.id",
             )
 
-        /** Exact VIG-29 request technical-failure body shared by real HTTP cases. */
+        /** Exact request technical-failure body shared by real HTTP cases. */
         const val REQUEST_INSPECTION_UNAVAILABLE_BODY =
             """{"error":{"message":"Request inspection unavailable.","type":"server_error",""" +
                 """"code":"request_inspection_unavailable"}}"""
 
-        /** Exact VIG-29 response policy BLOCK body shared by real HTTP cases. */
+        /** Exact response policy BLOCK body shared by real HTTP cases. */
         const val RESPONSE_BLOCKED_BODY =
             """{"error":{"message":"Response blocked: PII detected.","type":"policy_violation",""" +
                 """"code":"policy_blocked"}}"""
 
-        /** Exact VIG-29 response technical-failure body shared by real HTTP cases. */
+        /** Exact response technical-failure body shared by real HTTP cases. */
         const val RESPONSE_INSPECTION_UNAVAILABLE_BODY =
             """{"error":{"message":"Response inspection unavailable.","type":"server_error",""" +
                 """"code":"response_inspection_unavailable"}}"""

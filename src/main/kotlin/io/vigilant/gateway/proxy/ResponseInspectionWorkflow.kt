@@ -43,7 +43,7 @@ internal sealed interface ResponseInspectionOutcome {
 
     /** Stable safe client rejection. */
     data class Reject(
-        /** Existing closed VIG-29 outcome. */
+        /** Closed HTTP inspection-error outcome. */
         val error: OpenAiErrorOutcome,
     ) : ResponseInspectionOutcome
 }
@@ -53,7 +53,7 @@ internal sealed interface ResponseInspectionOutcome {
  *
  * Parsing, request-derived response context, independent fragment evaluation, final reaction,
  * exact source rewriting and safe stdout lifecycle remain inside this typed workflow. The HTTP
- * adapter receives only a forward handoff or a closed VIG-29 rejection.
+ * adapter receives only a forward handoff or a closed HTTP-contract rejection.
  *
  * @param policyEngine existing policy selection, detector execution and reaction boundary.
  * @param auditLogger shared safe request/response stdout lifecycle projection.

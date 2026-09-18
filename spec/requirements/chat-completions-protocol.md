@@ -10,11 +10,10 @@ semantics для [MVP-07](../MVP_FUNCTIONS.md#mvp-07-минимальная-ин
 ## Surface
 
 Публичный MVP поддерживает только Chat Completions JSON request и ordinary
-JSON/SSE response. Responses API остаётся future scope
-[EPIC-06](../epics/epic_06_llm_message_parsing.md), вне MVP. Realtime и Batch -
-неактивированные post-MVP placeholders без field maps, terminal semantics,
-transport contracts и implementation issues. WebSocket/WebRTC, SDP, RTP/audio,
-SIP, Batch JSONL и Files/job lifecycle не являются input текущего parser.
+JSON/SSE response. Responses API, Realtime и Batch остаются вне MVP по
+[OUT-12](../OUT_OF_SCOPE_FUNCTIONS.md#out-12-другие-llm-protocol-surfaces) и
+не имеют active contract или work item. WebSocket/WebRTC, SDP, RTP/audio, SIP,
+Batch JSONL и Files/job lifecycle не являются input текущего parser.
 
 Request contract snapshot: [openai-openapi 2.3.0](https://github.com/openai/openai-openapi/blob/1665a18fe20217c989c66dd73888345c6e4eb63c/openapi.yaml), commit
 `1665a18fe20217c989c66dd73888345c6e4eb63c`, дата фиксации `2026-08-26`.
@@ -298,8 +297,10 @@ partial normalized response. Gap/coverage следуют общей таблиц
 
 `message.reasoning_content` и `delta.reasoning_content` - два явно
 поддержанных response extension paths. Непустая string создаёт отдельный
-`REASONING` fragment, direction `RESPONSE`, role `ASSISTANT`. Reasoning-only
-JSON с отсутствующим/null content и SSE без final-content event допустимы.
+`REASONING` fragment с direction `RESPONSE`. Role равна `ASSISTANT` только при
+явно присутствующем валидном `role=assistant`; текущее runtime-отклонение для
+отсутствующей role зафиксировано в coverage. Reasoning-only JSON с
+отсутствующим/null content и SSE без final-content event допустимы.
 Поле не смешивается с final content, refusal, calls или другими choices;
 равные тексты разных полей остаются независимыми fragments. Reasoning сам
 по себе не создаёт gap и не меняет coverage соседних media fields.

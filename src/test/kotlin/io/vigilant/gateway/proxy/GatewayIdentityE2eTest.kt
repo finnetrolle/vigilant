@@ -1485,7 +1485,7 @@ internal class GatewayIdentityE2eTest : GatewayE2eTestSupport() {
         /** Fixed validation instant shared by real-Armeria JWT cases. */
         val JWT_NOW: Instant = Instant.parse("2026-01-01T00:00:00Z")
 
-        /** Exact VIG-30 External identity unavailable body shared by real HTTP cases. */
+        /** Exact External identity unavailable body shared by real HTTP cases. */
         const val IDENTITY_UNAVAILABLE_BODY =
             """{"error":{"message":"Identity service unavailable.","type":"server_error",""" +
                 """"code":"identity_unavailable"}}"""
@@ -2460,7 +2460,7 @@ internal class GatewayIdentityE2eTest : GatewayE2eTestSupport() {
         )
     }
 
-    /** Executor admission loss uses the VIG-29 request failure without body demand or handoff. */
+    /** Executor admission loss uses the request inspection failure without body demand or handoff. */
     @Test
     fun `request executor rejection returns inspection unavailable without demand or handoff`() {
         val bodyDemanded = AtomicBoolean()

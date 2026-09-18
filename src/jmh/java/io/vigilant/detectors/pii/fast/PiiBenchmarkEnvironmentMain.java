@@ -37,7 +37,7 @@ public final class PiiBenchmarkEnvironmentMain {
         Files.createDirectories(configuration.outputFile().getParent());
         try (var writer =
                 Files.newBufferedWriter(configuration.outputFile(), StandardCharsets.UTF_8)) {
-            metadata.store(writer, "VIG-02-15 benchmark environment");
+            metadata.store(writer, "Fast PII benchmark environment");
         }
     }
 

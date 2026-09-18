@@ -37,7 +37,7 @@ while [[ "$#" -gt 0 ]]; do
         --help)
             printf '%s\n' 'pipeline-verify --snapshot <verification-session-id> --tool <JDK-home> --tool <Gradle-distribution> [--wave <n>]' \
                 'Declare all installed JDK/analyzer/Gradle inputs; repeat --tool as needed. One snapshot per task verification session.' \
-                'Example: pipeline-verify --snapshot VIG-40-local-1 --tool "$JAVA_HOME" --tool /path/to/gradle-9.4.1'
+                'Example: pipeline-verify --snapshot current-task-local-1 --tool "$JAVA_HOME" --tool /path/to/gradle-9.7.1'
             exit 0 ;;
         *)
             printf 'error: "unknown argument"\nhelp: "use --snapshot, --tool, --wave or --help"\n'

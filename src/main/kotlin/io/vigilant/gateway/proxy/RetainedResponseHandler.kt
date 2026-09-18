@@ -154,7 +154,7 @@ internal class RetainedResponseHandler(
             }
         }
 
-    /** Selects the existing VIG-06-03 response descriptor from retained Content-Type. */
+    /** Selects the Chat Completions response descriptor from retained Content-Type. */
     private fun responseDescriptor(headers: ResponseHeaders): OpenAiOperationDescriptor? {
         val mediaType = headers.contentType()?.toString() ?: return null
         val baseType = mediaType.substringBefore(';').trim()
@@ -185,7 +185,7 @@ internal class RetainedResponseHandler(
             .startSpan()
     }
 
-    /** Clears source ownership before returning the exact VIG-29 protocol failure. */
+    /** Clears source ownership before returning the exact HTTP-contract protocol failure. */
     private fun invalidUpstreamResponse(source: RetainedResponseSource): HttpResponse {
         source.close()
         return OpenAiErrorResponses.of(OpenAiErrorOutcome.INVALID_UPSTREAM_RESPONSE)

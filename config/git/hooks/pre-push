@@ -1,6 +1,7 @@
 #!/bin/sh
 # Pre-push gate: compile with warnings-as-errors, run tests and detekt.
-# Full verification (mutation testing, CVE scan) is available via ./gradlew verifyAll.
+# Full verification with the CVE scan is available via ./gradlew verifyAll.
+# Mutation testing remains an explicit separate ./gradlew pitest run.
 echo "Running pre-push verification (./gradlew build)..."
 ./gradlew build
 if [ $? -ne 0 ]; then

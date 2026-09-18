@@ -471,7 +471,7 @@ internal class SseResponseEnforcementE2eTest : GatewayE2eTestSupport() {
         assertRetainedResponseReleased(retained, "SSE ALLOW replay")
     }
 
-    /** SSE BLOCK hides the complete upstream surface and returns only the exact VIG-29 contract. */
+    /** SSE BLOCK hides the complete upstream surface and returns only the exact HTTP contract. */
     @Test
     fun `SSE BLOCK rejects without upstream status headers or event disclosure`() {
         val events = fixture.attachAppenderTo(PiiShadowProxyService::class.java)

@@ -151,7 +151,6 @@ context sources. Само решение хранится один раз в own
 
 | Work item | Статус | Прогресс | Оценка |
 |---|---|---:|---:|
-| [EPIC-06: OpenAI Responses protocol scope](epics/epic_06_llm_message_parsing.md) | `Draft` | 0/0 | Responses вне MVP; нет implementation-ready leaves |
 
 ## Active TODO: порядок следующей работы
 
@@ -171,58 +170,11 @@ context sources. Само решение хранится один раз в own
 4. Не начинать новый пункт, пока предыдущий hard gate не завершён и
    `./gradlew validateWorkItems` не подтверждает согласованность реестра.
 
-Готовых к реализации задач сейчас нет. Текущий implementation frontier пуст.
-Текущий следующий шаг:
-[EPIC-06](epics/epic_06_llm_message_parsing.md) - discovery, фиксация решений
-и декомпозиция future OpenAI Responses scope после отдельной post-MVP
-приоритизации; production implementation пока не разрешена.
-Role-neutral request inspection уже
-закреплена в [protocol owner](requirements/chat-completions-protocol.md#recognized-message-shapes).
-Безопасная transport-диагностика traces принадлежит
-[observability owner](requirements/observability.md#transport-failure-tracing);
-[проверки](../docs/transport-trace-evidence.md) разделяют SDK, exporter и installed stdout.
-[EPIC-06](epics/epic_06_llm_message_parsing.md) остаётся вне MVP и `Draft` без
-implementation-ready leaves.
-Проверка plaintext response reasoning опубликована в
-[protocol owner](requirements/chat-completions-protocol.md#plaintext-response-reasoning)
-и [evidence](../docs/response-reasoning-evidence.md).
-
-Текущий [baseline качества детектора](../docs/pii-quality-evaluation.md)
-зафиксирован 2026-09-16: четыре свежих корпуса на общем snapshot, полные
-агрегированные таблицы, ограничения и приоритеты последующего исследования.
-Он не меняет runtime rules или evidence опубликованной
-response reasoning capability.
-
-Full-document Bridge parsing закреплён в
-[identity owner](requirements/identity-and-context.md#external-bridge) и
-[coverage](../docs/requirements-coverage.md#identity-evidence).
-JWT protected header/claims и JWK environment full-document parsing также
-закреплены в
-[identity owner](requirements/identity-and-context.md#offline-jwt) и coverage.
-
-Стендовую приёмку production identity, external probe и telemetry chain
-владелец продукта 2026-09-10 взял на себя; отдельная агентская задача на неё
-не создаётся и в эту очередь она не входит. Это не отметка выполненной приёмки.
-Эксплуатация Docker и дальнейший production review принадлежат
-[operations contract](requirements/operations.md) и
-[operator reference](../docs/operations.md); текущие app observations находятся в
-[operations evidence](../docs/operations-evidence.md).
-[Policy engine](requirements/policy-engine.md),
-[request source](requirements/request-source.md) и
-[REQUEST enforcement](requirements/request-enforcement.md) опубликованы.
-[RESPONSE enforcement](requirements/response-enforcement.md) и
-[HTTP gateway](requirements/http-gateway.md) опубликованы.
-Применимые HTTP/process/OCI/validator/build observations находятся в
-[closure ledger](../docs/request-enforcement-evidence.md).
-[Identity/context](requirements/identity-and-context.md) и полный
-[observability contract](requirements/observability.md) опубликованы;
-[coverage](../docs/requirements-coverage.md#observability-evidence) сохраняет
-conformance/evidence gaps без нового performance claim.
-Текущая serial process lane, four-worker non-process topology и qualification
-methodology описаны в [development guide](../docs/development.md#test-timing-report)
-без переноса historical timings как current measurement.
-Ordinary JSON и SSE response используют
-[exact inspection matrix](requirements/http-gateway.md#inspection-error-matrix).
+Каталог открытой работы сейчас пуст: `Ready for implementation`, `In progress`
+и `Draft` work items отсутствуют. OpenAI Responses, Realtime и Batch остаются
+вне MVP по [OUT-12](OUT_OF_SCOPE_FUNCTIONS.md#out-12-другие-llm-protocol-surfaces),
+но не являются активными задачами. Их активация требует отдельной
+приоритизации и нового implementation-ready work item.
 
 ## Как закрывать work item
 

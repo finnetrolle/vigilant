@@ -114,9 +114,10 @@ probe и Fluentd/Collector/OpenObserve chain владелец продукта �
 Численный availability SLO отложен до production review; наличие operator
 checklist не означает выполненный production rollout или накопленные measurements.
 
-[EPIC-06](epics/epic_06_llm_message_parsing.md) остаётся `Draft` для future
-OpenAI Responses scope и не имеет implementation-ready leaves. Текущий Chat
-Completions protocol не задаёт Responses, Realtime или Batch semantics.
+Активный work-item catalog пуст. OpenAI Responses, Realtime и Batch остаются
+вне MVP по [OUT-12](OUT_OF_SCOPE_FUNCTIONS.md#out-12-другие-llm-protocol-surfaces)
+и не имеют active contract или implementation-ready scope. Текущий Chat
+Completions protocol не задаёт их semantics.
 
 ## Проверяемые seams
 

@@ -13,7 +13,7 @@ private data class QualificationGate(
     val passed: Boolean,
 )
 
-/** Returns the additive source-aligned view or the legacy VIG-10-01 report root. */
+/** Returns the additive source-aligned view or the legacy flat report root. */
 internal fun sourceAlignedView(report: JsonNode): JsonNode =
     report.path("sourceAligned").takeUnless(JsonNode::isMissingNode) ?: report
 
@@ -103,7 +103,7 @@ private fun perTypeJson(
             add(
                 mapper.createObjectNode().apply {
                     put("type", type)
-                    put("productionIssue", PRODUCTION_ISSUES[type] ?: "UNCHANGED_BASELINE_TYPE")
+                    put("requirementOwner", FAST_PII_QUALITY_OWNER)
                     set<JsonNode>("baselineExact", safeMetricJson(mapper, baselineExact))
                     set<JsonNode>("currentExact", safeMetricJson(mapper, currentExact))
                     put(
@@ -138,7 +138,7 @@ private fun evidenceJson(
                 mapper.createObjectNode().apply {
                     val type = contribution.path("type").textValue()
                     put("type", type)
-                    put("productionIssue", PRODUCTION_ISSUES[type] ?: "UNCHANGED_BASELINE_TYPE")
+                    put("requirementOwner", FAST_PII_QUALITY_OWNER)
                     put("evidenceStrength", contribution.path("evidenceStrength").textValue())
                     put("predictions", contribution.requiredInt("predictions"))
                     put("exactMatches", contribution.requiredInt("exactMatches"))
@@ -257,11 +257,4 @@ private fun JsonNode.requiredInt(field: String): Int {
 }
 
 private const val EVALUATION_PRECISION_FLOOR = 0.75
-private val PRODUCTION_ISSUES =
-    mapOf(
-        "IP_ADDRESS" to "VIG-10-02",
-        "EMAIL_ADDRESS" to "VIG-10-04",
-        "PHONE_NUMBER" to "VIG-10-05",
-        "RU_SNILS" to "VIG-10-06",
-        "RU_OMS" to "VIG-10-07",
-    )
+private const val FAST_PII_QUALITY_OWNER = "spec/requirements/fast-pii.md#quality"

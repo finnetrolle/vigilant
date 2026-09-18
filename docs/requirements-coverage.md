@@ -284,7 +284,7 @@ Product non-goals не имеют implementation gap внутри Vigilant. Ка
 | `OUT-09` | Вне продукта | Email/messenger delivery принадлежит external alerting system или adapters. |
 | `OUT-10` | Вне MVP | Gateway может инспектировать model-visible tool fields, но не запускает tools и не владеет result middleware. |
 | `OUT-11` | Вне MVP | Единственный detector MVP - `fast-pii`; prompt injection, secrets и rule detectors не включены. |
-| `OUT-12` | Вне MVP | Поддержан только Chat Completions; Responses остаётся Draft, Anthropic/MCP/Realtime/Batch contracts отсутствуют. |
+| `OUT-12` | Вне MVP | Поддержан только Chat Completions; Responses, Anthropic, MCP, Realtime и Batch не имеют active contracts или work items. Условия возможной активации Responses сохранены у product non-goal owner. |
 | `OUT-13` | Вне MVP | Policy snapshot immutable и startup-only; hot reload, control plane, plugin workers/API и marketplace отсутствуют. |
 
 ## Правило обновления

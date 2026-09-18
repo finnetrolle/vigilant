@@ -1855,7 +1855,7 @@ internal class RequestInspectionE2eTest : GatewayE2eTestSupport() {
             text -> if (mode.get() == "ERROR") error("controlled detector failure") else actual.detect(text)
         }
         val blockingSink = BlockingAuditSink()
-        attachAsyncAuditAppender("VIG-34-slow-full", blockingSink)
+        attachAsyncAuditAppender("request-audit-slow-full", blockingSink)
         val readiness = io.vigilant.gateway.health.ReadinessService()
         val gateway = startShadowGateway(fixture.serverUri(upstream), detector = detector,
             policyProvider = PolicyProvider {
@@ -1897,7 +1897,7 @@ internal class RequestInspectionE2eTest : GatewayE2eTestSupport() {
         repeat(5) { listOf("ALLOW", "MASK", "BLOCK", "ERROR").forEach(::assertOutcome) }
         blockingSink.release()
         val throwingSink = ThrowingAuditSink()
-        attachAsyncAuditAppender("VIG-34-throwing", throwingSink)
+        attachAsyncAuditAppender("request-audit-throwing", throwingSink)
         listOf("ALLOW", "MASK", "BLOCK", "ERROR").forEach(::assertOutcome)
         assertTrue(throwingSink.awaitAttempt(), "async worker did not exercise the throwing sink")
         val logger = LoggerFactory.getLogger(PiiShadowProxyService::class.java) as Logger
@@ -2404,7 +2404,7 @@ internal class RequestInspectionE2eTest : GatewayE2eTestSupport() {
         assertTrue(events.analysisEventNames().isEmpty(), "streamed source failure started analysis")
     }
 
-    /** Process-wide retained-byte rejection uses VIG-29 without upstream handoff. */
+    /** Process-wide retained-byte rejection uses the stable HTTP contract without upstream handoff. */
     @Test
     fun `global retained byte exhaustion returns stable 503 without upstream disclosure`() {
         val upstreamRequests = AtomicInteger()
@@ -2446,7 +2446,7 @@ internal class RequestInspectionE2eTest : GatewayE2eTestSupport() {
         assertTrue(events.analysisEventNames().isEmpty(), "global source admission failure started analysis")
     }
 
-    /** Request-body infrastructure failure uses VIG-29 without leaking its cause or handing off. */
+    /** Request-body infrastructure failure uses the stable HTTP contract without cause leakage or handoff. */
     @Test
     fun `request body failure returns inspection unavailable without upstream handoff`() {
         val sentinel = "private-request-body-failure-6D2A"
@@ -2724,7 +2724,7 @@ internal class RequestInspectionE2eTest : GatewayE2eTestSupport() {
         )
     }
 
-    /** Policy-provider failure uses VIG-29 before handoff and emits no analysis pair. */
+    /** Policy-provider failure uses the stable HTTP contract before handoff and emits no analysis pair. */
     @Test
     fun `unexpected policy failure returns safe inspection error before analysis`() {
         val sentinel = "policy provider sentinel"

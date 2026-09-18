@@ -16,7 +16,7 @@ STATUSES = {'Draft', 'Ready for implementation', 'In progress', 'Blocked', 'Done
 STATUS_FIELD = 'Статус'
 REGISTRY_PATH = 'spec/WORK_ITEMS.md'
 JOURNAL_PATH = '.papercuts.jsonl'
-HELP = 'Usage: ./scripts/task-context VIG-NN\nRead one exact active issue; no flags except --help.\nExample: ./scripts/task-context VIG-33'
+HELP = 'Usage: ./scripts/task-context VIG-NN\nRead one exact active issue; no flags except --help.'
 
 
 class ContextError(Exception):

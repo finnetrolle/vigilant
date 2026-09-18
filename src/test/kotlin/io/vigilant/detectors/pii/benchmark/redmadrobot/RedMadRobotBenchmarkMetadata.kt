@@ -2,7 +2,7 @@ package io.vigilant.detectors.pii.benchmark.redmadrobot
 
 import java.util.Properties
 
-/** Immutable provenance pinned by VIG-02-14. */
+/** Immutable provenance pinned by the RedMadRobot benchmark contract. */
 object RedMadRobotBenchmarkMetadata {
     private val properties =
         Properties().apply {

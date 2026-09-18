@@ -11,7 +11,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
-/** Contract tests for the fail-closed EPIC-10 qualification artifact. */
+/** Contract tests for the fail-closed Fast PII qualification artifact. */
 class PiiQualityQualificationMainTest {
     /** Publishes every required quality, provenance, contribution, and paired-performance section. */
     @Test
@@ -38,10 +38,17 @@ class PiiQualityQualificationMainTest {
         assertTrue(json.at("/performance/environmentMatched").booleanValue())
         assertTrue(json.at("/quality/perType").isArray)
         assertTrue(json.at("/quality/evidenceContributions").isArray)
+        assertEquals(
+            "spec/requirements/fast-pii.md#quality",
+            json.at("/quality/perType/0/requirementOwner").textValue(),
+        )
         assertTrue(json.at("/productAligned/adjustments").isArray)
+        assertTrue(markdown.startsWith("# Fast PII quality qualification\n"))
+        assertTrue(markdown.contains("| Type | Requirement owner |"))
         assertTrue(markdown.contains("## Reproduction"))
         assertTrue(markdown.contains("NO_MATCH_FULL_SCAN"))
         assertFalse((jsonText + markdown).contains("PRIVATE_SOURCE_VALUE"))
+        assertFalse(Regex("(?:VIG|EPIC)-[0-9]").containsMatchIn(jsonText + markdown))
     }
 
     /** Rejects a median p99 regression above ten percent after still writing reviewable evidence. */
@@ -266,7 +273,7 @@ class PiiQualityQualificationMainTest {
         }
         """.trimIndent()
 
-    /** Builds the VIG-10-01-shaped source baseline without product extensions. */
+    /** Builds the legacy flat source baseline without product extensions. */
     private fun baselineExternalJson(): String =
         """
         {

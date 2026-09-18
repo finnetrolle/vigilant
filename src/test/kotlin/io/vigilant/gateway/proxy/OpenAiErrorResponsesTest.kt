@@ -29,7 +29,7 @@ class OpenAiErrorResponsesTest {
         fixture.close()
     }
 
-    /** Every VIG-29 outcome returns its exact status, headers, body, and closed JSON shape. */
+    /** Every inspection outcome returns its exact status, headers, body, and closed JSON shape. */
     @Test
     fun `all enforcement error outcomes expose the exact safe HTTP matrix`() {
         val cases =
@@ -155,7 +155,7 @@ class OpenAiErrorResponsesTest {
         assertTrue(response.contentUtf8().contains("Response blocked: PII detected."))
     }
 
-    /** Asserts the exact top-level and nested field sets required by VIG-29. */
+    /** Asserts the exact top-level and nested field sets required by the HTTP contract. */
     private fun assertClosedErrorShape(body: String, case: ErrorContractCase) {
         val root = JSON.readTree(body)
         assertEquals(setOf("error"), root.fieldNames().asSequence().toSet(), case.path)
@@ -173,7 +173,7 @@ class OpenAiErrorResponsesTest {
         }
     }
 
-    /** One exact row of the accepted VIG-29 status/body/header matrix. */
+    /** One exact row of the accepted HTTP status/body/header matrix. */
     private data class ErrorContractCase(
         /** HTTP request path selecting the contract outcome in the test service. */
         val path: String,

@@ -28,7 +28,7 @@ class PolicyConfigParserTest {
         }
     }
 
-    /** Verifies decoding of every field in the normative EPIC-04 example. */
+    /** Verifies decoding of every field in the normative policy-engine example. */
     @Test
     fun `parses the complete politics config contract`() {
         val policies = PolicyConfigParser().parse(COMPLETE_CONFIG)
@@ -277,7 +277,7 @@ class PolicyConfigParserTest {
         sensitiveValues.forEach { sensitiveValue -> assertFalse(message.contains(sensitiveValue)) }
     }
 
-    /** Canonical HOCON fixtures derived from the normative EPIC-04 example. */
+    /** Canonical HOCON fixtures derived from the normative policy-engine example. */
     private companion object {
         /** Complete policy configuration in the documented field order. */
         val COMPLETE_CONFIG = completePolicyConfig()

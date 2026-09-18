@@ -7,7 +7,7 @@ import com.linecorp.armeria.common.HttpStatus
 import com.linecorp.armeria.common.MediaType
 import com.linecorp.armeria.common.ResponseHeaders
 
-/** Closed client-facing outcomes owned by the VIG-29 OpenAI error contract. */
+/** Closed client-facing outcomes owned by the HTTP inspection-error contract. */
 internal enum class OpenAiErrorOutcome {
     /** Request policy decision blocked detected PII. */
     REQUEST_BLOCKED,

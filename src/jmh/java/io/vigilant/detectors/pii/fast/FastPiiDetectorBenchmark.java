@@ -36,7 +36,7 @@ public class FastPiiDetectorBenchmark {
                 state.detector.detect(state.payload, state.stopOnFirst, state.enabledTypes).size());
     }
 
-    /** Dataset families required by the EPIC-02 performance methodology. */
+    /** Dataset families required by the Fast PII performance methodology. */
     public enum Dataset {
         ASCII(" synthetic near matches ", List.of("q")),
         RUSSIAN(" синтетические похожие значения ", List.of("я", "ю", " ")),
@@ -52,7 +52,7 @@ public class FastPiiDetectorBenchmark {
         }
     }
 
-    /** Stop-on-first and full-scan scenarios required by the EPIC-02 performance methodology. */
+    /** Stop-on-first and full-scan scenarios required by the Fast PII performance methodology. */
     public enum Scenario {
         NO_MATCH_STOP_ON_FIRST(true, true, null, ""),
         EARLY_EMAIL(true, false, PiiType.EMAIL_ADDRESS, " early.person@example.com "),

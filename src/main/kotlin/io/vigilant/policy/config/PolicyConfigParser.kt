@@ -15,7 +15,7 @@ import java.io.File
 import java.net.URL
 import java.time.Duration
 
-/** Millisecond value of the default policy deadline defined by EPIC-04. */
+/** Millisecond value of the default deadline defined by the policy-engine contract. */
 private const val DEFAULT_POLICY_DEADLINE_MILLIS = 50L
 
 /** Default policy deadline used when `deadline` is absent from HOCON. */

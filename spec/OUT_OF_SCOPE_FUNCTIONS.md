@@ -90,8 +90,19 @@ filtering не входят в MVP. Единственный detector MVP: `fast
 
 MVP не поддерживает OpenAI Responses API, Anthropic API, MCP и прочие protocol
 surfaces. Поддерживается только [OpenAI Chat Completions](requirements/chat-completions-protocol.md#surface).
-Responses остаётся Draft scope EPIC-06 вне MVP; Realtime и Batch -
-неактивированные post-MVP placeholders без новых contracts или implementation issues.
+Responses, Realtime и Batch не имеют активных contracts или work items.
+
+Будущая активация Responses требует отдельной приоритизации, закреплённого
+versioned schema snapshot, точных request/response field maps и payload bounds,
+ordinary JSON/SSE terminal rules, canonical source и правил для повторных final
+snapshots. Schema-recognized ссылка на внешний textual context должна оставаться
+`UNRESOLVED_CONTEXT`, пока внешний resolver не представит этот context обычными
+normalized fragments; protocol parser сам не выполняет network lookup.
+Если выбранная future schema поддерживает structured tool arguments, object и
+array сохраняют types, отдельными fragments становятся только string leaves,
+а keys и non-string values не stringified. Textual arguments остаются одним
+decoded fragment без обязательного inner JSON parsing. Эти условия не расширяют
+текущий Chat Completions adapter и не объявляют future capability реализованной.
 
 ### OUT-13. Dynamic control plane и plugins
 

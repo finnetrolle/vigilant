@@ -24,18 +24,13 @@ final class RoadmapFrontierContractTest {
         }
     }
 
-    /** The next step names executable work, or an existing draft issue/epic when no issue is ready. */
+    /** The frontier names executable/draft work, or explicitly declares an empty catalog. */
     @Test
     void frontierResolvesToCurrentOpenWork() throws IOException {
         String roadmap = Files.readString(Path.of("spec/ROADMAP.md"));
         String frontier = section(roadmap, "## Текущий roadmap frontier");
         assertTrue(frontier.contains("](WORK_ITEMS.md#active-todo-порядок-следующей-работы)"));
         String registry = Files.readString(Path.of("spec/WORK_ITEMS.md"));
-        int next = registry.indexOf("Текущий следующий шаг:");
-        assertTrue(next >= 0, "Registry must name its current next step");
-        Matcher link = Pattern.compile("\\[(?:VIG|EPIC)-[^]]+]\\(([^)]+)\\)").matcher(registry.substring(next));
-        assertTrue(link.find(), "Next step must link directly to a work item");
-        Path issue = Path.of("spec").resolve(link.group(1)).normalize();
         WorkItemGraph graph = WorkItemGraph.discover(Path.of(".").toAbsolutePath().normalize());
         assertEquals(List.of(), graph.sortedDiagnostics());
         List<WorkItem> executable = graph.workItems().stream()
@@ -43,6 +38,18 @@ final class RoadmapFrontierContractTest {
                 .filter(item -> List.of("Ready for implementation", "In progress")
                         .contains(item.status().value()))
                 .toList();
+        int next = registry.indexOf("Текущий следующий шаг:");
+        if (graph.workItems().isEmpty()) {
+            assertTrue(next < 0, "An empty catalog must not invent a next work item");
+            assertTrue(executable.isEmpty());
+            assertTrue(registry.contains("Каталог открытой работы сейчас пуст:"));
+            assertTrue(frontier.contains("Активный work-item catalog пуст."));
+            return;
+        }
+        assertTrue(next >= 0, "Registry must name its current next step");
+        Matcher link = Pattern.compile("\\[(?:VIG|EPIC)-[^]]+]\\(([^)]+)\\)").matcher(registry.substring(next));
+        assertTrue(link.find(), "Next step must link directly to a work item");
+        Path issue = Path.of("spec").resolve(link.group(1)).normalize();
         Path nextPath = issue.toAbsolutePath().normalize();
         if (executable.isEmpty()) {
             assertTrue(registry.contains("Готовых к реализации задач сейчас нет."));

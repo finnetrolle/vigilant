@@ -7,7 +7,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode
 import java.nio.file.Files
 import java.nio.file.Path
 
-/** Evaluates and renders the fail-closed EPIC-10 quality and paired-performance qualification. */
+/** Evaluates and renders the fail-closed Fast PII quality and paired-performance qualification. */
 object PiiQualityQualificationMain {
     /** Reads reviewed artifacts, writes payload-free JSON/Markdown evidence, and fails any unmet gate. */
     @JvmStatic

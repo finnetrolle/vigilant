@@ -11,7 +11,7 @@ internal data class RequestEnforcementFieldCase(
     val findingText: String = "a@b.co",
 )
 
-/** Complete literal field vocabulary required by VIG-34; no production field table is consulted. */
+/** Complete literal field vocabulary required by request enforcement; no production field table is consulted. */
 internal object RequestEnforcementFieldCases {
     const val PII = "a@b.co"
     private const val MESSAGE = "\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]"

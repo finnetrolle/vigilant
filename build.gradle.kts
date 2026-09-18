@@ -466,7 +466,7 @@ tasks.register<JavaExec>("piiQualityReport") {
 val runPiiQualificationJmh = tasks.register<JavaExec>("runPiiQualificationJmh") {
     dependsOn(tasks.named("jmhJar"))
     group = "verification"
-    description = "Runs the mandatory paired EPIC-10 no-match and full-scan JMH scenarios."
+    description = "Runs the mandatory paired Fast PII no-match and full-scan JMH scenarios."
     classpath(files(tasks.named("jmhJar")), jmhSourceSet.get().runtimeClasspath)
     mainClass.set("org.openjdk.jmh.Main")
     javaLauncher.set(piiJmhJavaLauncher)
@@ -497,7 +497,7 @@ val writePiiQualificationJmhEnvironment =
     tasks.register<JavaExec>("writePiiQualificationJmhEnvironment") {
         dependsOn(runPiiQualificationJmh)
         group = "verification"
-        description = "Writes environment metadata for the current EPIC-10 paired JMH run."
+        description = "Writes environment metadata for the current Fast PII paired JMH run."
         classpath = sourceSets.named("jmh").get().runtimeClasspath
         mainClass.set("io.vigilant.detectors.pii.fast.PiiBenchmarkEnvironmentMain")
         javaLauncher.set(piiJmhJavaLauncher)
@@ -524,7 +524,7 @@ tasks.register<JavaExec>("piiQualityQualification") {
         writePiiQualificationJmhEnvironment,
     )
     group = "verification"
-    description = "Evaluates EPIC-10 quality floors and paired JMH regression evidence."
+    description = "Evaluates Fast PII quality floors and paired JMH regression evidence."
     classpath = sourceSets.test.get().runtimeClasspath
     mainClass.set("io.vigilant.detectors.pii.quality.PiiQualityQualificationMain")
     outputs.files(

@@ -112,6 +112,10 @@ standalone `data: [DONE]` и валидный остаток source. Затем 
 function arguments и `audio.transcript`. SSE собирает independent
 `delta.content`, `delta.refusal`, `delta.reasoning_content`, modern tool arguments и deprecated function
 arguments, не смешивая choices, semantic fields и tool calls.
+Текущий parser записывает provenance role `ASSISTANT` для всех response
+fragments, даже если response не содержит явного `role=assistant`; нормативный
+target требует role только при явно присутствующем поле, и это отличие остаётся
+в [coverage](requirements-coverage.md#protocol-evidence).
 
 Response policy выбирает exact byte-for-byte `ALLOW`, source-patched `MASK` или
 whole-response `BLOCK` до первого client byte. SSE `MASK` может

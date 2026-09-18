@@ -6,7 +6,7 @@ import java.util.Locale
 /** Renders a reviewable Markdown view from the already privacy-filtered report model. */
 internal fun qualificationMarkdown(report: JsonNode): String =
     buildString {
-        appendLine("# EPIC-10 PII quality qualification")
+        appendLine("# Fast PII quality qualification")
         appendLine()
         appendLine("Overall result: `${if (report.path("passed").booleanValue()) "PASS" else "FAIL"}`.")
         appendLine()
@@ -67,11 +67,11 @@ private fun StringBuilder.appendQuality(quality: JsonNode, heading: String) {
 private fun StringBuilder.appendPerTypeTable(perType: JsonNode) {
     appendLine("### Per-type exact contribution")
     appendLine()
-    appendLine("| Type | Issue | ΔTP | ΔFP | ΔFN | ΔPrecision | Current precision |")
+    appendLine("| Type | Requirement owner | ΔTP | ΔFP | ΔFN | ΔPrecision | Current precision |")
     appendLine("|---|---|---:|---:|---:|---:|---:|")
     perType.forEach { row ->
         appendLine(
-            "| ${row.path("type").textValue()} | ${row.path("productionIssue").textValue()} | " +
+            "| ${row.path("type").textValue()} | ${row.path("requirementOwner").textValue()} | " +
                 "${row.path("truePositiveDelta").intValue()} | ${row.path("falsePositiveDelta").intValue()} | " +
                 "${row.path("falseNegativeDelta").intValue()} | " +
                 "${format(row.path("precisionDelta").doubleValue())} | " +
@@ -85,11 +85,11 @@ private fun StringBuilder.appendPerTypeTable(perType: JsonNode) {
 private fun StringBuilder.appendEvidenceTable(contributions: JsonNode) {
     appendLine("### Per-evidence contribution")
     appendLine()
-    appendLine("| Type | Issue | Evidence | Predictions | Exact TP | Exact FP |")
+    appendLine("| Type | Requirement owner | Evidence | Predictions | Exact TP | Exact FP |")
     appendLine("|---|---|---|---:|---:|---:|")
     contributions.forEach { row ->
         appendLine(
-            "| ${row.path("type").textValue()} | ${row.path("productionIssue").textValue()} | " +
+            "| ${row.path("type").textValue()} | ${row.path("requirementOwner").textValue()} | " +
                 "${row.path("evidenceStrength").textValue()} | ${row.path("predictions").intValue()} | " +
                 "${row.path("exactMatches").intValue()} | ${row.path("exactFalsePositives").intValue()} |",
         )

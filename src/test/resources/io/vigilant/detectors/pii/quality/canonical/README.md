@@ -17,7 +17,7 @@ release-102 registry.
 `mixed.tsv` is separate scoring evidence with multiple types,
 punctuation, Cyrillic, emoji, hard negatives, and a real cross-type span overlap.
 
-All TSV files use the `# pii-corpus-v1` format fixed by EPIC-02. Regenerate them
+All TSV files use the `# pii-corpus-v1` format fixed by the Fast PII contract. Regenerate them
 with:
 
 ```bash
